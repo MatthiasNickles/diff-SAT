@@ -70,6 +70,7 @@ Example for ASP:
            
 To generate aspif format (the lines above before "pats") from an Answer Set program, use, e.g., Clingo (https://potassco.org/clingo/).
 Example: clingo myLogicProgram.lp --trans-ext=all --pre=aspif
+(Note that DelSAT itself doesn't require Clingo or any other external ASP or SAT solver.)
  
 DelSAT is configured using command line arguments (call with --help to see the most important ones,
 e.g., desired accuracy). 
