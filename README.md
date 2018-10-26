@@ -69,7 +69,7 @@ Example for ASP:
         cost ((0.4-f(a))^2+(0.3-f(b))^2)/2
            
 To generate aspif format (the lines above before "pats") from an Answer Set program, use, e.g., Clingo (https://potassco.org/clingo/).
-Example: clingo myLogicProgam.lp --trans-ext=all --pre=aspif
+Example: clingo myLogicProgram.lp --trans-ext=all --pre=aspif
  
 DelSAT is configured using command line arguments (call with --help to see the most important ones,
 e.g., desired accuracy). 
