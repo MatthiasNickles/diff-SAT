@@ -4,6 +4,7 @@
   * A tool for differentiable satisfiability and differentiable answer set programming
   *
   * Copyright (c) 2018 Matthias Nickles
+  * eMail: matthias.nickles@gmx.net
   *
   */
 
@@ -35,7 +36,6 @@ import scala.collection.mutable.ArrayBuffer
 
 /**
   * @author Matthias Nickles
-  *
   */
 class SolverMulti(prep: Preparation) {
 
