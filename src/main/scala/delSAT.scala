@@ -4,7 +4,7 @@
   * A tool for differentiable satisfiability and differentiable answer set programming
   *
   * Copyright (c) 2018 Matthias Nickles
-  *
+  * eMail: matthias.nickles@gmx.net
   */
 
 package commandline
