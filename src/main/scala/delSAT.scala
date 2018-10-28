@@ -5,8 +5,6 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
-  * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
-  *
   */
 
 package commandline
@@ -15,37 +13,48 @@ package commandline
 import java.io._
 import java.util
 
-import ASPIOutils.Pred
+import aspIOutils._
+
 import com.accelad.math.nilgiri.{DoubleReal, autodiff}
 import com.accelad.math.nilgiri.autodiff.{Constant, DifferentialFunction}
 import diff.UncertainAtomsSeprt
 import org.scijava.parse.ExpressionParser
 import parsing.{AspifPlainParser, DIMACPlainSparser}
+
 import sharedDefs._
 import solving.{Preparation, SolverMulti}
+
 import sun.misc.Unsafe
 import utils.{IntArrayUnsafe, LongArrayUnsafe}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+/**
+  * @author Matthias Nickles
+  *
+  */
 object delSAT {
 
   val debug = false // before using with, e.g., prasp2, build artifact delSAT.jar and check settings in StochasticCDCL_ASP_SAT.CDCLConfig etc.
 
   val showProgressStats = false
 
+  val printAnswers = true
+
   val noOfBenchmarkTrials = 1
 
   val enforceChecks = false && noOfBenchmarkTrials == 1
 
+  assert(!(printAnswers && enforceChecks))
+
   val version = "0.1"
 
-  val name = "delSAT"
+  val name = "DelSAT"
 
   val nameAndVersion = name + " " + version
 
-  val copyrightAndversionText = nameAndVersion + "\nCopyright (c) 2017-2018 Matthias Nickles\n\n"
+  val copyrightAndversionText = nameAndVersion + "\nCopyright (c) 2018 Matthias Nickles\n\n"
 
   val defaultNoOfModelsStr = "-1"
 
@@ -128,7 +137,7 @@ object delSAT {
 
     -102 -> ("Unsuppored line in aspif input", ERROR),
 
-    -103 -> ("Weighted atoms not supported with delSAT", ERROR),
+    -103 -> ("Weighted atoms only supported via cost functions", ERROR),
 
     -5000 -> ("Specified local greedy decision policy won't work as expected since some measured atoms are not parameter atoms", WARNING),
 
@@ -192,7 +201,7 @@ object delSAT {
   def convertToDfNEW(tokensQueue: util.LinkedList[Object], measuredAtomsSeqSorted: Array[String], measuredAtomsSet: mutable.HashSet[Pred]):
   DifferentialFunction[DoubleReal] = {
 
-    // TODO: the expression parser allows for lots more stuff we could utilize in the future, see https://github.com/scijava/parsington/blob/master/src/test/java/org/scijava/parse/ExpressionParserTest.java
+    // TODO: see https://github.com/scijava/parsington/blob/master/src/test/java/org/scijava/parse/ExpressionParserTest.java
 
     val tokenStack = scala.collection.mutable.Stack[Object]() // can contain both autodiff. and org.scijava.parse. objects
 
@@ -516,23 +525,29 @@ object delSAT {
     import java.nio.file.Files
     import java.nio.file.Paths
 
-    val inputStr: String = (if (fileNameOpt.isDefined) {
+    val inputStr: String = fileNameOpt match {
 
-      val timer = System.nanoTime()
+      case Some(fileName) => {
 
-      val r: String = new String(Files.readAllBytes(Paths.get(fileNameOpt.get)), StandardCharsets.UTF_8)
+        val timer = System.nanoTime()
 
-      log("Time file slurp: " + (System.nanoTime() - timer) / 1000000 + "ms")
+        val r: String = new String(Files.readAllBytes(Paths.get(fileName)), StandardCharsets.UTF_8)
 
-      r
+        log("Time file slurp: " + (System.nanoTime() - timer) / 1000000 + "ms")
 
-    } else {
+        r
 
-      val inStream: BufferedInputStream = new BufferedInputStream(System.in, 32768)
+      }
 
-      ASPIOutils.slurpFromInputStream(inStream)
+      case None => {
 
-    })
+        val inStream: BufferedInputStream = new BufferedInputStream(System.in, 32768)
+
+        slurpFromInputStream(inStream)
+
+      }
+
+    }
 
     if (inputStr.startsWith("asp ") || inputStr.startsWith("p cnf ") || inputStr.startsWith("c ")) { // we allow "c " as first line in DIMACS too, but not, e.g., "cx"
 
@@ -645,7 +660,7 @@ object delSAT {
                     showaux: Boolean, satMode: Boolean, additionalSolverArgs: mutable.HashMap[String, String]):
   (mutable.Seq[Array[Pred]], AspifOrDIMACSPlainParserResult) = {
 
-    println("delSAT " + commandline.delSAT.version + ", initialization...\n")
+    println("DelSAT " + commandline.delSAT.version + "\n")
 
     val timerInitNs = System.nanoTime()
 
@@ -669,7 +684,7 @@ object delSAT {
 
     val trialDurations = (1 to noOfBenchmarkTrials).map(trial => {
 
-      println("\nSolving... (trial " + trial + ")\n")
+      println("Solving... (trial " + trial + ")")
 
       val startTrialTimeNs = System.nanoTime()
 
@@ -684,7 +699,8 @@ object delSAT {
 
     val avgDuration = ((trialDurations.sum.toDouble / noOfBenchmarkTrials.toDouble) / 1000000).toInt
 
-    if (noOfBenchmarkTrials == 1) println("\n@@@@@@@@ Overall duration solver.sampleMulti: " + avgDuration + " ms\n") else println("\n@@@@@@@@ Average overall duration solver.sampleMulti: " + avgDuration + " ms\n")
+    if (noOfBenchmarkTrials > 1) /*println("\nOverall duration solving and sampling: " + avgDuration + " ms\n") else*/
+      println("\n@@@@@@@@ Average overall duration solver.sampleMulti: " + avgDuration + " ms\n")
 
     (res, aspifOrDIMACSParserResult)
 
@@ -695,10 +711,6 @@ object delSAT {
     //scala.io.StdIn.readLine()
 
     val timerOverallNs = System.nanoTime()
-
-    var omitSysExit0 = false // If this .jar is dynamically included in prasp2 using classloader, we must not sys.exit(0) in case of successful termination (except -v/-h), as this
-    // would quit the overall program. We could prevent this issue using some additional wrapper method, but we want to keep prasp2 compatible with Java tools other than this.
-    // If on the other hand the tool is invoked as an external process, sys.exit(0) is required.
 
     val unsafeRefl = classOf[Unsafe].getDeclaredField("theUnsafe")
 
@@ -878,38 +890,42 @@ object delSAT {
       invokeSampler(inputData, noOfModels, thresholdOpt, showaux = showaux,
         satMode = satMode, additionalSolverArgs = additionalSolverArgs)
 
-    val hideAuxPreds: Int = 4 // TODO
+    if(!sampledModelsWithSymbols.isEmpty) {
 
-    val sampledModelsWithSymbolsCleanedR: mutable.Seq[Array[Pred]] = if (hideAuxPreds == 4)
-      sampledModelsWithSymbols.map(_.filterNot(ASPIOutils.isLatentSymbolAuxAtom(_)))
-    else if (hideAuxPreds == 1) sampledModelsWithSymbols.map(_.filterNot(a => ASPIOutils.isAuxAtom(a) && !ASPIOutils.isSpanAuxAtom(a)))
-    else if (hideAuxPreds == 2) sampledModelsWithSymbols.map(_.filterNot(ASPIOutils.isAuxAtom(_)))
-    else if (hideAuxPreds == 3) sampledModelsWithSymbols.map(_.filterNot(ASPIOutils.isSpanAuxAtom(_)))
-    else
-      sampledModelsWithSymbols
+      val hideAuxPreds: Int = 4 // TODO
 
-    val symbolsSeq = parserResult.symbols.toSeq
+      val sampledModelsWithSymbolsCleanedR: mutable.Seq[Array[Pred]] = if (hideAuxPreds == 4)
+        sampledModelsWithSymbols.map(_.filterNot(isLatentSymbolAuxAtom(_)))
+      else if (hideAuxPreds == 1) sampledModelsWithSymbols.map(_.filterNot(a => isAuxAtom(a) && !isSpanAuxAtom(a)))
+      else if (hideAuxPreds == 2) sampledModelsWithSymbols.map(_.filterNot(isAuxAtom(_)))
+      else if (hideAuxPreds == 3) sampledModelsWithSymbols.map(_.filterNot(isSpanAuxAtom(_)))
+      else
+        sampledModelsWithSymbols
 
-    val sampledModelsWithSymbolsCleaned: mutable.Seq[Array[Pred]] = if (!satMode) sampledModelsWithSymbolsCleanedR else
-      sampledModelsWithSymbolsCleanedR.map((model: Array[Pred]) => {
+      val symbolsSeq = parserResult.symbols.toSeq
 
-        symbolsSeq.map(symbol => if (model.contains(symbol)) symbol else "-" + symbol).toArray
+      val sampledModelsWithSymbolsCleaned: mutable.Seq[Array[Pred]] = if (!satMode) sampledModelsWithSymbolsCleanedR else
+        sampledModelsWithSymbolsCleanedR.map((model: Array[Pred]) => {
 
-      })
+          symbolsSeq.map(symbol => if (model.contains(symbol)) symbol else "-" + symbol).toArray
 
-    sampledModelsWithSymbolsCleaned.zipWithIndex.foreach { case (model, index) =>
-      System.out.println("Answer: " + (index + 1) + "\n" + model.mkString(" ") /*+ (if(satMode) " 0" else "")*/)
+        })
+
+      if (printAnswers)
+        sampledModelsWithSymbolsCleaned.zipWithIndex.foreach { case (model, index) =>
+          System.out.println("Answer: " + (index + 1) + "\n" + model.mkString(" ") /*+ (if(satMode) " 0" else "")*/)
+        }
+
+      System.out.println("\nSATISFIABLE")  // this MUST be printed directly after the list of answers!
+
     }
 
-    if (sampledModelsWithSymbolsCleanedR.length > 0)
-      System.out.println("\nSATISFIABLE")
+    println("\nOverall time incl parsing/pre-/post-processing: " + (System.nanoTime() - timerOverallNs) / 1000000 + " ms")
 
-    // return
-
-    log("\nOverall time: " + (System.nanoTime() - timerOverallNs) / 1000000 + " ms")
-
-    // if (!omitSysExit0)  // TODO: we need exit if jar isn't loaded dynamically into the current JVM. Otherwise, we need return (see above)
-    // sys.exit(0)
+    if (!omitSysExit0)  // we need exit if jar isn't loaded dynamically into the current JVM. Otherwise, we need return
+      sys.exit(0)
+    else
+      return
 
   }
 

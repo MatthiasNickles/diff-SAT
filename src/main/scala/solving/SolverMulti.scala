@@ -5,8 +5,6 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
-  * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
-  *
   */
 
 package solving
@@ -15,7 +13,7 @@ import java.util
 import java.util.Comparator
 import java.util.concurrent._
 
-import ASPIOutils._
+import aspIOutils._
 
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.DifferentialFunction
@@ -35,7 +33,10 @@ import utils.{IntArrayUnsafe, LongArrayUnsafe, Tarjan, XORShift32}
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-
+/**
+  * @author Matthias Nickles
+  *
+  */
 class SolverMulti(prep: Preparation) {
 
   import prep._
@@ -302,6 +303,10 @@ class SolverMulti(prep: Preparation) {
 
   }
 
+  /**
+    * @author Matthias Nickles
+    *
+    */
   def sampleMulti(costsOpt: Option[UncertainAtomsSeprt],
                   requestedNoOfModelsBelowThresholdOrAuto: Int, satMode: Boolean, prep: Preparation,
                   requestedNumberOfModels: Int /*-1: stop at minimum number of models required to reach threshold*/ ,
@@ -318,11 +323,14 @@ class SolverMulti(prep: Preparation) {
 
     do {
 
-      val newModel: (Array[Eli], IntOpenHashSet) = sampleSingleRacing(costsOpt, satMode, prep)
+      val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(costsOpt, satMode, prep)
 
-      sampledModels.append(newModel._1)
+      if(newModelOpt.isEmpty)
+        return mutable.Seq[Array[Pred]]()
 
-      totalCost = if (ignoreParamVariables) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(newModel._2,
+      sampledModels.append(newModelOpt.get._1)
+
+      totalCost = if (ignoreParamVariables) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(newModelOpt.get._2,
         measuredAtomElis = measuredAtomsElis,
         measuredAtomEliToStatisticalFreq,
         sampledModels,
@@ -334,7 +342,7 @@ class SolverMulti(prep: Preparation) {
 
       if (!ignoreParamVariables) {
 
-        java.util.Arrays.sort(deficitOrderedUncertainLiterals, deficitOrdering2)
+        java.util.Arrays.sort(deficitOrderedUncertainLiterals, deficitOrdering)
 
         if (arrangeParamElisInEliPool) {
 
@@ -342,13 +350,7 @@ class SolverMulti(prep: Preparation) {
 
             if (parameterAtomsElisSet.contains(eli)) {
 
-              val deficit =
-                if (isPosAtomEli(eli))
-                  nablasInner(eli).getReal
-                else
-                  -nablasInner(negateNegEli(eli)).getReal
-
-              deficit * 10000
+              deficitByDeriv(eli) * 10000
 
             } else Int.MaxValue
 
@@ -358,7 +360,7 @@ class SolverMulti(prep: Preparation) {
 
       }
 
-      log("\n\"\"\"\"\"\"\"\"\" Sampling iteration " + it + " (of max " + maxIt + ") done. " +
+      log("\nSampling iteration " + it + " (of max " + maxIt + ") complete. " +
         "Current cost: " + totalCost + " (threshold: " + threshold + ")")
 
       it += 1
@@ -367,11 +369,11 @@ class SolverMulti(prep: Preparation) {
       requestedNumberOfModels >= 0 && sampledModels.length < requestedNumberOfModels))
 
     if (totalCost < threshold)
-      println("\nSampling complete; threshold reached. " + sampledModels.length + " models sampled (with replacement)\n")
+      println("\nSampling complete; specified threshold reached. " + sampledModels.length + " models sampled (with replacement)\n")
     else
-      println("\nWarning: Sampling ended but threshold not reached!\n")
+      println("\nWARNING: Sampling ended but specified threshold not reached!\n")
 
-    println("Time required for sampling: " + (System.nanoTime() - samplingTimer) / 1000000 + " ms")
+    println("Overall time solving and sampling: " + (System.nanoTime() - samplingTimer) / 1000000 + " ms\n")
 
     val sampledModelsSymbolic = sampledModels.map(model => model.map(eli => symbols(eli)))
 
@@ -387,7 +389,7 @@ class SolverMulti(prep: Preparation) {
 
   var stop = false
 
-  def sampleSingleRacing(costsOpt: Option[UncertainAtomsSeprt], satMode: Boolean, prep: Preparation): (Array[Eli], IntOpenHashSet) = {
+  def sampleSingleRacing(costsOpt: Option[UncertainAtomsSeprt], satMode: Boolean, prep: Preparation): Option[(Array[Eli], IntOpenHashSet)] = {
 
     assert(dimacsClauseNogoodsOpt.isDefined || rulesOpt.isDefined)
 
@@ -431,7 +433,7 @@ class SolverMulti(prep: Preparation) {
 
       val freeEliSearchApproach = freeEliSearchApproachesR(0)
 
-      val model: (Array[Eli], IntOpenHashSet) = sampleSingle(threadNo = 1, costsOpt, satMode, dependencyGraph, progIsTight,
+      val modelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingle(threadNo = 1, costsOpt, satMode, dependencyGraph, progIsTight,
         freeEliSearchApproach = if (freeEliSearchApproach == 5) 4 else freeEliSearchApproach,
         restartTriggerConfR = restartTriggerConf,
         //noOfConflictsBeforeRestartFactor = noOfConflictsBeforeRestartFactor,
@@ -442,7 +444,7 @@ class SolverMulti(prep: Preparation) {
 
       log("\n^^^^^^^ Solver task complete\n")
 
-      model
+      modelOpt
 
     } else {
 
@@ -455,8 +457,8 @@ class SolverMulti(prep: Preparation) {
 
       import scala.collection.JavaConverters._
 
-      val callables = (1 to maxNumberOfCompetingModelSearchThreads).map(ci => new Callable[(Array[Eli], IntOpenHashSet)] {
-        override def call(): (Array[Eli], IntOpenHashSet) = {
+      val callables = (1 to maxNumberOfCompetingModelSearchThreads).map(ci => new Callable[Option[(Array[Eli], IntOpenHashSet)]] {
+        override def call(): Option[(Array[Eli], IntOpenHashSet)] = {
 
           val freeEliSearchApproach = if (maxNumberOfCompetingModelSearchThreads == 1) freeEliSearchApproachesR.head else
             freeEliSearchApproachesR((ci - 1) % (maxNumberOfCompetingModelSearchThreads + 1) - 1)
@@ -467,7 +469,7 @@ class SolverMulti(prep: Preparation) {
 
           log("beliTh in thread " + ci + ": " + beliTh)
 
-          val model: (Array[Eli], IntOpenHashSet) = sampleSingle(threadNo = ci, costsOpt, satMode, dependencyGraph, progIsTight,
+          val modelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingle(threadNo = ci, costsOpt, satMode, dependencyGraph, progIsTight,
             freeEliSearchApproach = if (freeEliSearchApproach == 5) 4 else freeEliSearchApproach,
             restartTriggerConfR = restartTriggerConf,
             beliTh = beliTh,
@@ -479,7 +481,7 @@ class SolverMulti(prep: Preparation) {
 
           println("\n^^^^^^^ callable $" + ci + " complete\n")
 
-          model
+          modelOpt
 
         }
       }).asJava
@@ -490,6 +492,9 @@ class SolverMulti(prep: Preparation) {
 
   }
 
+  /**
+    * @author Matthias Nickles
+    */
   def sampleSingle(threadNo: Int /*>=1*/ ,
                    costsOpt: Option[UncertainAtomsSeprt], satMode: Boolean,
                    dependencyGraph: IntObjectHashMap[List[Eli]], progIsTight: Boolean,
@@ -498,7 +503,7 @@ class SolverMulti(prep: Preparation) {
                    beliTh: Float,
                    prep: Preparation /*<-for debugging/crosschecks only*/ ,
                    candEliCheckCapFac: Double,
-                   prearrangeEliPool: Boolean): (Array[Eli], IntOpenHashSet) = {
+                   prearrangeEliPool: Boolean): Option[(Array[Eli], IntOpenHashSet)] = {
 
     val timerBatchSamplingStartPreciseNs = System.nanoTime()
 
@@ -1495,7 +1500,7 @@ class SolverMulti(prep: Preparation) {
 
             var i = 0
 
-            val il = deficitOrderedUncertainLiterals.length / 2 // each variable appears twice, we only need their lowest sorted literals
+            val il = deficitOrderedUncertainLiterals.length / 2 // each variable appears twice, we only need their lowest ranked literals
 
             while (i < il) {
 
@@ -1842,9 +1847,9 @@ class SolverMulti(prep: Preparation) {
 
           if (dl == 0) {
 
-            println("UNSAT. Conflicting nogood: " + nogiToNogood.get(conflictNogi).toArray().mkString(","))
+            println("UNSAT") // Conflicting nogood: " + nogiToNogood.get(conflictNogi).toArray().mkString(","))
 
-            sys.exit(-1)
+            return None
 
           }
 
@@ -2401,7 +2406,7 @@ class SolverMulti(prep: Preparation) {
 
     println("\nSingle model solving time: " + (System.nanoTime() - timerBatchSamplingStartPreciseNs) / 1000000 + " ms")
 
-    modelOpt.get
+    modelOpt
 
   }
 

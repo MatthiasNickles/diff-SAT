@@ -5,8 +5,6 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
-  * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
-  *
   */
 
 import utils.{IntArrayUnsafe, XORShift32}
@@ -50,13 +48,15 @@ package object sharedDefs {
 
   val maxNumberOfCompetingModelSearchThreads = 1 // for portfolio solving with competing solver instances (number of threads not guaranteed)
 
-  var candEliCheckCapFacR: Double = 1d // caps number of checks at x% with freeEliSearchApproaches 0, 1, 4. 1d = no capping
-
-  val sortRemainderPoolProb = 0f
+  var diversify: Boolean = false // if true, solver aims at generating diverse models (might slow down solver)
 
   var recAssg = false // true (experimental) omits the intermediate heap data structure for unit props and makes assignments directly and recursively. You
   // might have to increase stack size for that when calling java, e.g., -Xss5m ...
-  // true is often faster for small problems, whereas false scales better for larger problems.
+  // true is often much faster for small or medium problems, whereas false scales better for larger problems.
+
+  var candEliCheckCapFacR: Double = 1d // caps number of checks at x% with freeEliSearchApproaches 0, 1, 4. 1d = no capping
+
+  val sortRemainderPoolProb = 0f
 
   val initialActivUpdateValue: Int = 1
 
@@ -74,13 +74,12 @@ package object sharedDefs {
 
   val nogoodExchangeSizeThresh = 4 // only nogoods with size below that threshold are copied to other threads
 
-  var diversify: Boolean = false // if true, solver aims at generating diverse models (might slow down solver)
-
   val beliThR: Float = -1f //-1: auto
 
   val parallelThresh = 400 // used as number of items threshold for loop parallelization in various places (TODO: auto)
 
-  var partDerivComplete = false // false: variant of ILP'18 approach, true: variant of PLP'18 approach (use with non-MSE cost functions)
+  var partDerivComplete = false // false: variant of ILP'18 approach (less general, use with MSE-style inner cost expressions),
+  // true: variant of PLP'18 approach (more general)
 
   val ignoreParamVariables = false // true ignores cost function and parameter/measured atoms. Cost is always assumed to be
   // negative infinity. Not required as such for non-probabilistic problems (you could simply set threshold = Double.MaxValue
@@ -90,6 +89,10 @@ package object sharedDefs {
   // (^ restriction planned to be dropped in a future version)
 
   // ------------------------------------------------------------------------------------------------------------------------
+
+  var omitSysExit0 = false // If this .jar is dynamically included in prasp2 using classloader, we must not sys.exit in case of successful termination (except -v/-h), as this
+  // would quit the overall program. We could prevent this issue using some additional wrapper method, but we want to keep prasp2 compatible with Java tools other than this.
+  // If on the other hand the tool is invoked as an external process, sys.exit(0) is required.
 
   def overrideSolverArgs(additionalSolverArgsR: mutable.HashMap[String, String]) = { // preliminary, TODO
 

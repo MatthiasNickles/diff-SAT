@@ -5,11 +5,11 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
-  * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
-  *
   */
 
 package solving
+
+import aspIOutils._
 
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.{AbstractBinaryFunction, AbstractUnaryFunction, DifferentialFunction, Variable}
@@ -31,6 +31,10 @@ import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
 
+/**
+  * @author Matthias Nickles
+  *
+  */
 class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainParserResult, costsOpt: Option[UncertainAtomsSeprt],
                   satMode: Boolean, omitAtomNogoods: Boolean) {
 
@@ -756,21 +760,22 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   val parameterLiteralElis: Array[Eli] = parameterAtomsElis ++ parameterAtomsElis.map(negatePosEli(_))
 
-  val deficitOrdering2: Ordering[Integer /*actually a parameter eli*/ ] =
+  @inline def deficitByDeriv(parameterLiteralEli : Eli): Double = {
+
+    // Assumes that in a step directly preceding the re-sorting, the variables in the nablaInner have been
+    // updated to measuredAtomEliToStatisticalFreq!
+
+    (if (isPosAtomEli(parameterLiteralEli))
+      nablasInner(parameterLiteralEli).getReal
+    else
+      -nablasInner(negateNegEli(parameterLiteralEli)).getReal) //+ 1d
+
+  }
+
+  val deficitOrdering: Ordering[Integer /*actually a parameter eli*/ ] =
     Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
 
-      // Assumes that in a step directly preceding the re-sorting, the variables in the nablaInner have been
-      // updated to measuredAtomEliToStatisticalFreq!
-
-      val deficit =
-        (if (isPosAtomEli(parameterLiteralEli))
-          nablasInner(parameterLiteralEli).getReal
-        else
-          -nablasInner(negateNegEli(parameterLiteralEli)).getReal) + 1d
-
-      deficit
-
-      //Math.signum(deficit)  // without prioritization of most "needy" parameter literals
+      deficitByDeriv(parameterLiteralEli)
 
     })
 
@@ -815,7 +820,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
     val createFalsNgs: Boolean = false // deprecated
 
     val rulesWoConstr = if (!sharedDefs.specialConstrRuleNogoods) rules else /*we create special nogoods later for the omitted ones: */
-      rules.filterNot(rule => isPosEli(rule.headAtomsElis.head) && ASPIOutils.isFalsAuxAtom(symbols(rule.headAtomsElis.head)))
+      rules.filterNot(rule => isPosEli(rule.headAtomsElis.head) && isFalsAuxAtom(symbols(rule.headAtomsElis.head)))
 
     val noOfThreadsNg = if (rulesWoConstr.length < thresholdForRulesPar) 1 else noOfThreads
 
@@ -827,7 +832,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
     val posHeadAtomToNegBlits: java.util.HashMap[Eli, Array[Eli]] = new java.util.HashMap[Eli, Array[Eli]]()
     // ^ we need this only for loop nogood generation in ASP; could be omitted for SAT or tight problems
 
-    println("\npreptimer0: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+    log("\npreptimer0: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
 
     def deltaBetaPartComp(rulesPart: ArrayBuffer[Rule]) = { // generate body nogoods
 
@@ -927,7 +932,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
           if (!satMode || !bodiesOfp.isEmpty) {
 
-            if (bodiesOfp.isEmpty && isPosEli(atomEli_p) && !symbols(atomEli_p).startsWith(ASPIOutils.auxPredPrefixBase))
+            if (bodiesOfp.isEmpty && isPosEli(atomEli_p) && !symbols(atomEli_p).startsWith(auxPredPrefixBase))
               stomp(-5005, symbols(atomEli_p))
 
 
@@ -1019,12 +1024,12 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
     }
 
     val falsNogoods: ArrayBuffer[Array[Eli]] = if (createFalsNgs)
-      symbolsWithIndex.filter(si => ASPIOutils.isFalsAuxAtom(si._1)).map(x => Array(x._2)).to[ArrayBuffer]
+      symbolsWithIndex.filter(si => isFalsAuxAtom(si._1)).map(x => Array(x._2)).to[ArrayBuffer]
     else if (!sharedDefs.specialConstrRuleNogoods) ArrayBuffer[Array[Eli]]() else {
 
       // we add special nogoods for rules which have been (elsewhere) resulted from constraints :- b1, b2, ...
 
-      val contraintRules = rules.filter(rule => isPosAtomEli(rule.headAtomsElis.head) && ASPIOutils.isFalsAuxAtom(symbols(rule.headAtomsElis.head)))
+      val contraintRules = rules.filter(rule => isPosAtomEli(rule.headAtomsElis.head) && isFalsAuxAtom(symbols(rule.headAtomsElis.head)))
 
       contraintRules.map(rule => rule.bodyPosAtomsElis ++ rule.bodyNegAtomsElis.filterNot(_ == negateEli(rule.headAtomsElis.head)))
 

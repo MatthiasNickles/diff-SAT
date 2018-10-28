@@ -5,7 +5,7 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
-  * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+  * THIS CODE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
   *
   *
   * Plain aspif file format: See "A Tutorial on Hybrid Answer Set Solving with clingo", https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6
@@ -23,6 +23,8 @@ package parsing
 
 import commandline.delSAT.{debug, log}
 import sharedDefs._
+
+import aspIOutils._
 
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Map, Set, mutable}
@@ -55,9 +57,9 @@ object AspifPlainParser {
     // NB: There are two sorts of elis used in this method: 1) aspif elis (the literal indices as found in the aspif file) and 2) delSAT elis. The main difference is
     // that the former can be negative numbers whereas delSAT elis are always positive.
 
-    ASPIOutils.parserInstanceCount.incrementAndGet()
+    parserInstanceCount.incrementAndGet()
 
-    val aspifLines = ASPIOutils.splitByRepChar(aspifStr, '\n') //aspifStr.lines.toArray
+    val aspifLines = splitByRepChar(aspifStr, '\n') //aspifStr.lines.toArray
 
     log("parsetimer 0: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
 
@@ -115,7 +117,7 @@ object AspifPlainParser {
 
     while (si < ansll) {
 
-      val aspifNamedSymbolsLineTokens = ASPIOutils.splitByRepChar(aspifNamedSymbolsLines(si).trim) //(st.nextToken(), st.nextToken(), st.nextToken(), st.nextToken())
+      val aspifNamedSymbolsLineTokens = splitByRepChar(aspifNamedSymbolsLines(si).trim) //(st.nextToken(), st.nextToken(), st.nextToken(), st.nextToken())
 
       val v3 = Integer.parseInt(aspifNamedSymbolsLineTokens(3))
 
@@ -166,7 +168,7 @@ object AspifPlainParser {
 
     while (ri < arsll) {
 
-      val aspifRuleTokens = ASPIOutils.splitByRepChar(aspifRulesStrLines(ri).trim)
+      val aspifRuleTokens = splitByRepChar(aspifRulesStrLines(ri).trim)
 
       val aspifRuleTokens2 = Integer.parseInt(aspifRuleTokens(2))
 
@@ -216,9 +218,9 @@ object AspifPlainParser {
           if (!aspifEliToSymbol.contains(aspifEli)) {
 
             val r = if (isNewFalsePosAspifEli(aspifEli))
-              ASPIOutils.auxAtomSymbol(ASPIOutils.newFalsePredsPrefix, aspifEli - newFalseAspifElisBoundary)
+              auxAtomSymbol(newFalsePredsPrefix, aspifEli - newFalseAspifElisBoundary)
             else {
-              ASPIOutils.auxAtomSymbol(ASPIOutils.newLatentSymbolAuxAtomPrefix, aspifEli)
+              auxAtomSymbol(newLatentSymbolAuxAtomPrefix, aspifEli)
               // ^ this way, all newly introduced symbols (posEli.e., those which weren't already present in the input program) get either an "L" or an "F" auxiliary atom name.
 
             }

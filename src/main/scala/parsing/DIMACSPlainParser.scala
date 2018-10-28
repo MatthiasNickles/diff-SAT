@@ -5,7 +5,7 @@
  *
  * Copyright (c) 2018 Matthias Nickles
  *
- * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+ * THIS CODE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
  *
  */
 
@@ -13,6 +13,9 @@ package parsing
 
 import commandline.delSAT
 import parsing.AspifPlainParser.{AspifRule, aspifRulesToEliRules}
+
+import aspIOutils._
+
 import sharedDefs._
 
 import scala.collection.mutable.ArrayBuffer
@@ -43,49 +46,63 @@ object DIMACPlainSparser {
 
     val generatedAspifRules = ArrayBuffer[AspifRule]()
 
-    val clauseTokens: Array[Array[Int]] = dimacsLinesStripped.tail.map(line => {
+    val clauseTokensStr = ArrayBuffer[ArrayBuffer[String]](ArrayBuffer[String]())
 
-      val tokens = ASPIOutils.splitByRepChar(line)
+    dimacsLinesStripped.tail.foreach(line => {
 
-      if (line.startsWith(".")) // in contrast to NablaSAT, weighted atoms are only supported via the cost function
+      val tokensLocal: Array[String] = splitByRepChar(line)
+
+      if (line.startsWith("."))
         delSAT.stomp(-103)
 
-      assert(tokens.last == "0", "Error: invalid line in DIMACS input: " + line)
+      clauseTokensStr.last.appendAll(tokensLocal)  // we use this iterative foldLeft-emulation because clauses can range over multiple lines
 
-      val clauseNumTokens: Array[Eli] = {
+      if (tokensLocal.last == "0") {
+
+        clauseTokensStr.append(ArrayBuffer[String]())
+
+      }
+
+    })
+
+    val clauseTokens = clauseTokensStr.dropRight(1).map(ct => {
+
+      assert(ct.last == "0", "Error: unsupported syntax in DIMACS input: " + ct.mkString(" "))
+
+      val clauseNumTokens: Array[Int] = {
 
         try {
-          tokens.map(_.toInt)
+          ct.map(_.toInt)
         } catch {
 
           case e => {
 
-            println("Error: " + e + "\n" + tokens.map(t => "\"" + t + "\"").mkString(","))
+            println("Error: " + e + "\n" + ct.map(t => "\"" + t + "\"").mkString(","))
 
             sys.exit(-1)
 
           }
 
-            Array[Int]()
+            ArrayBuffer[Int]()
 
         }
 
-      }.dropRight(1)
+      }.dropRight(1).toArray
 
-      if(generatePseudoRulesForNogoods && clauseNumTokens.length > 1) {
+      if (generatePseudoRulesForNogoods && clauseNumTokens.length > 1) {
 
         // we "fake2 aspif rules, so that we can later generate body nogoods from it.
 
-        val headAspifElis = clauseNumTokens//.filter(_ > 0)
+        val headAspifElis = clauseNumTokens //.filter(_ > 0)
 
         headAspifElis.foreach(headAspifEli => {
 
-          if(rngGlobal.nextFloat() <= 1f) {  // NB: if < 1f, we'd need to disable generation of { head, Fblit1, Fblit2, ...} nogoods
+          if (rngGlobal.nextFloat() <= 1f) { // NB: if < 1f, we'd need to disable generation of { head, Fblit1, Fblit2, ...} nogoods
 
             val (bodyPosAspifElis, bodyNegAspifElis) = clauseNumTokens.filterNot(_ == headAspifEli).map(-_).partition(_ >= 0)
 
-            val aspifRule = AspifRule(headPosAtomsAspifElis = if(headAspifEli > 0) Set(headAspifEli) else Set(),
-              headNegAtomsAspifElis = if(headAspifEli < 0) Set(headAspifEli) else Set(),
+            val aspifRule = AspifRule(headPosAtomsAspifElis = if (headAspifEli > 0) Set(headAspifEli) else Set(),
+              headNegAtomsAspifElis = if (headAspifEli < 0) Set(headAspifEli) else Set(),
               bodyPosAtomsAspifElis = bodyPosAspifElis.toSet,
               bodyNegAtomsAspifElis = bodyNegAspifElis.toSet)
 
@@ -101,9 +118,9 @@ object DIMACPlainSparser {
 
       clauseNumTokens
 
-    })
+    }).toArray
 
-    assert(clauseTokens.length == noOfClauses)
+    assert(clauseTokens.length == noOfClauses, "Error: Invalid input (number of clauses does not match declared number of clauses)")
 
     val noOfBlits = generatedAspifRules.groupBy(rule => (rule.bodyPosAtomsAspifElis, rule.bodyNegAtomsAspifElis)).keys.size // only different bodies get their own blit
 
@@ -126,7 +143,7 @@ object DIMACPlainSparser {
 
       // We translate clauses directly into nogoods...
 
-      val nogoodPosAtomsElis: Array[Eli] = clauseNumTokens.filter(_ < 0).map(negVariable => (-negVariable) - 1 )
+      val nogoodPosAtomsElis: Array[Eli] = clauseNumTokens.filter(_ < 0).map(negVariable => (-negVariable) - 1)
 
       val nogoodNegAtomsElis: Array[Eli] = clauseNumTokens.filter(_ > 0).map(posVariable => negateEli(posVariable - 1))
 
@@ -136,19 +153,19 @@ object DIMACPlainSparser {
 
     assert(noOfClauses == directClauseNogoods.length)
 
-    if(!generatePseudoRulesForNogoods)
+    if (!generatePseudoRulesForNogoods)
       AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
-       rulesOrClauseNogoods = Right(/*if (generatePseudoRulesForNogoodsForSATMode)bodyNogoods ++ directClauseNogoods else*/ directClauseNogoods),
-        noOfPosBlits = 0/*noOfPosBlits*/, externalAtomElis = Seq(), directClauseNogoodsOpt = Some(directClauseNogoods.clone()/*otherwise this would get modified in-place*/),
-        clauseTokensOpt = Some(clauseTokens)/*we retain these just for debugging (cross-check) purposes*/)
+        rulesOrClauseNogoods = Right(/*if (generatePseudoRulesForNogoodsForSATMode)bodyNogoods ++ directClauseNogoods else*/ directClauseNogoods),
+        noOfPosBlits = 0 /*noOfPosBlits*/ , externalAtomElis = Seq(), directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
+        clauseTokensOpt = Some(clauseTokens) /*we retain these just for debugging (cross-check) purposes*/)
     else {
 
       val (rules, noOfPosBlits, emptyBodyBlit) = aspifRulesToEliRules(symbols.toArray, generatedAspifRules, aspifEliToSymbolOpt = None)
 
       AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
         rulesOrClauseNogoods = Left(rules),
-        noOfPosBlits = noOfPosBlits, externalAtomElis = Seq(), directClauseNogoodsOpt = Some(directClauseNogoods.clone()/*otherwise this would get modified in-place*/),
-        clauseTokensOpt = Some(clauseTokens)/*we retain these just for debugging (cross-check) purposes*/)
+        noOfPosBlits = noOfPosBlits, externalAtomElis = Seq(), directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
+        clauseTokensOpt = Some(clauseTokens) /*we retain these just for debugging (cross-check) purposes*/)
 
     }
 
