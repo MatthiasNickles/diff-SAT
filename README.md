@@ -6,7 +6,7 @@ used for plain Answer Set or SAT solving too).
 DelSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE 8 or higher is required.
 
 Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Format (aspif),
-with an optional list of user-defined _cost functions_.
+with an optional list of user-defined differentiable _cost functions_.
 
 DelSAT generates samples (multisets of sampled answer sets or sampled satisfying assignments) which
 minimize the cost functions (up to a user-specified accuracy). Such a sample is called a _solution_. 
