@@ -8,10 +8,11 @@ DelSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE 8 o
 Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Format (aspif),
 with an optional list of user-defined differentiable _cost functions_.
 
-DelSAT generates samples (multisets of sampled answer sets or sampled satisfying assignments) which
-minimize the cost functions (up to a user-specified accuracy). Such a sample is called a _solution_. 
+DelSAT generates a sample (a multiset of sampled answer sets or sampled satisfying assignments) which
+minimizes the given cost functions (up to a user-specified accuracy). Such a sample is called a _solution_. 
 
-DelSAT makes use of an approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_.
+DelSAT makes use of an approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_ where
+a form of Gradient Descent is embedded in CDCL/CDNL-style solving to iteratively generate models until the cost functions' minima are reached.
 Details on this approach can be found in the following publications:
 
 - Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th Workshop on Probabilistic Logic Programming (PLP'18). CEUR proceedings, 2018.
