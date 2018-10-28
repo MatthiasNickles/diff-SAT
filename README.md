@@ -34,7 +34,7 @@ a solution).
 A terms of form f(p) in a cost function, where p is a parameter atom, evaluates during sampling to 
 the frequency of p in the sample (count of p in all models in the sample, normalized with the total number of models in the sample). 
 
-Example for SAT (use without initial whitespace in lines):
+Example input for SAT (use without initial whitespace in lines):
 
        p cnf 2 3
        1 -1 0
@@ -46,7 +46,7 @@ Example for SAT (use without initial whitespace in lines):
        cost (0.2-f(v1))^2
        cost (0.5-f(v2))^2
            
-Example for ASP:
+Example input for ASP:
 
         asp 1 0 0
         1 0 1 1 0 0
