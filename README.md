@@ -1,34 +1,29 @@
 **DelSAT**
 
-DelSAT is an Answer Set and SAT solver for sampling-based multimodel optimization (but it can be
-used for plain SAT or ASP solving too). 
+DelSAT is an Answer Set Programming (ASP) and SAT solver for sampling-based multimodel optimization (but it can be
+used for plain Answer Set or SAT solving too). 
 
-DelSAT is written in Scala and runs on the JVM. A JRE 8 or higher is required.
+DelSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE 8 or higher is required.
 
-Input is currently accepted in DIMACS-CNF or a subset of the ASP Intermediate Format (aspif),
-with an optional list of user-defined _cost functions_. Each cost function ranges over a multiset of models (satisfying
-assignments or answer sets).
+Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Format (aspif),
+with an optional list of user-defined _cost functions_.
 
-DelSAT generates samples (multisets of sampled models) which minimize the cost functions (up to a user-specified accuracy). 
-Such a sample is called a _solution_. 
-
-For optimization, DelSAT makes use of an approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_.
+DelSAT generates samples (multisets of sampled answer sets or sampled satisfying assignments) which
+minimize the cost functions (up to a user-specified accuracy). Such a sample is called a _solution_. 
+DelSAT makes use of an approach called Differentiable Satisfiability / Differentiable Answer Set Programming.
 Details on this approach can be found in the following publications:
 
-- Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th International Workshop on Probabilistic Logic 
-  Programming (PLP'18). CEUR proceedings, 2018.
+- Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th Workshop on Probabilistic Logic Programming (PLP'18). CEUR proceedings, 2018.
 - Matthias Nickles: Sampling-Based SAT/ASP Multi-Model Optimization as a Framework for Probabilistic Inference. 
-  Proceedings of the 28th International Conference on Inductive Logic Programming (ILP'18). Lecture Notes 
-  in Artificial Intelligence (LNAI), Springer, 2018.
+  Proceedings of the 28th International Conference on Inductive Logic Programming (ILP'18). LNAI, Springer, 2018.
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. Proceedings of the 12th International Conference on 
-  Scalable Uncertainty Management (SUM'18). Lecture Notes in Artificial Intelligence (LNAI), Springer, 2018.
+  Scalable Uncertainty Management (SUM'18). LNAI, Springer 2018 (to appear).
 
 In the input, cost functions are defined in lines starting with "cost ". Cost functions need to be 
 differentiable with respect to their respective parameter atom terms (see below).
 
-In addition to the cost functions, DelSAT input requires a list of _parameter atoms_ (parameter variables); these are 
-the random variables which can occur in cost functions. They need to be listed in a single line starting with "pats " 
-(before the cost function declarations). 
+In addition to the cost functions, DelSAT input requires a list of _parameter atoms_ (parameter variables); these are the random variables which 
+can occur in cost functions. They need to be listed in a single line starting with "pats " (before the cost function declarations). 
 In SAT-mode only, parameter atoms within cost function expressions need to be prefixed by character 'v'. 
 
 The DelSAT input can state any number of arbitrary such cost functions and can specify arbitrary 
@@ -68,8 +63,9 @@ Example for ASP:
         
         cost ((0.4-f(a))^2+(0.3-f(b))^2)/2
            
-To generate aspif format (the lines above before "pats") from an Answer Set program, use, e.g., Clingo (https://potassco.org/clingo/).
-Example: clingo myLogicProgram.lp --trans-ext=all --pre=aspif
+To generate aspif format (the lines above before "pats") from a non-ground Answer Set program, use, 
+e.g., Clingo (https://potassco.org/clingo/). Example: clingo myProg.lp --trans-ext=all --pre=aspif
+
 (Note that DelSAT itself doesn't require Clingo or any other external ASP or SAT solver.)
  
 DelSAT is configured using command line arguments (call with --help to see the most important ones,
@@ -79,3 +75,4 @@ the ASP example above requires argument --solverarg "partDerivComplete" "true"
 
 The list of internal solver parameters accessible via meta-argument --solverarg can currently be
 found in source code file sharedDefs.scala
+
