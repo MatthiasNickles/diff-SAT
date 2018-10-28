@@ -10,7 +10,8 @@ with an optional list of user-defined _cost functions_.
 
 DelSAT generates samples (multisets of sampled answer sets or sampled satisfying assignments) which
 minimize the cost functions (up to a user-specified accuracy). Such a sample is called a _solution_. 
-DelSAT makes use of an approach called Differentiable Satisfiability / Differentiable Answer Set Programming.
+
+DelSAT makes use of an approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_.
 Details on this approach can be found in the following publications:
 
 - Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th Workshop on Probabilistic Logic Programming (PLP'18). CEUR proceedings, 2018.
