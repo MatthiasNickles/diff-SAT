@@ -19,8 +19,8 @@ package object sharedDefs {
   // Solver settings ------------------------------------------------------------------------------------------------------
 
   // Important: given the primary use case of DelSAT (sampling and multi-model optimisation), the following settings are
-  // geared towards fast solving of small or medium satisfiable problems. UNSAT and many larger problems can also be solved but
-  // might require different settings (e.g., recAssg = false, higher amount of removed nogoods, other freeEliSearchApproachesR, ...).
+  // geared towards fast solving of small or medium satisfiable problems. Many larger problems can also be solved but
+  // may require different settings (e.g., larger amount of removed nogoods, other freeEliSearchApproachesR, ...).
 
   val specialConstrRuleNogoods: Boolean = false // TODO: must be false (true doesn't work yet); if true, we create an alternative form of nogoods for :- constraints (see code)
 
