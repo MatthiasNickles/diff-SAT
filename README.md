@@ -76,3 +76,5 @@ the ASP example above requires argument --solverarg "partDerivComplete" "true"
 The list of internal solver parameters accessible via meta-argument --solverarg can currently be
 found in source code file sharedDefs.scala
 
+Author contact: Matthias Nickles, eMail: matthias.nickles@gmx.net
+Web: https://www.researchgate.net/profile/Matthias_Nickles
