@@ -1,10 +1,9 @@
 /**
   * DelSAT
   *
-  * A tool for differentiable satisfiability and differentiable answer set programming
-  *
   * Copyright (c) 2018 Matthias Nickles
   * eMail: matthias.nickles@gmx.net
+  *
   */
 
 package commandline
@@ -50,31 +49,23 @@ object delSAT {
 
   val version = "0.1"
 
-  val name = "DelSAT"
-
-  val nameAndVersion = name + " " + version
-
-  val copyrightAndversionText = nameAndVersion + "\nCopyright (c) 2018 Matthias Nickles\n\n"
+  val copyrightAndVersionText = "DelSAT " + version + "\nCopyright (c) 2018 Matthias Nickles\n\n"
 
   val defaultNoOfModelsStr = "-1"
 
-  val helpText = copyrightAndversionText +
+  val helpText = copyrightAndVersionText +
     """
      A SAT and ASP solver for sampling-based multi-model optimization.
 
      Usage:
 
-     delSAT [--version|-v] [--help|-h] [-n <n>] [-t <t>] [-ci] [<filename>]
+     delSAT [--version|-v] [--help|-h] [-n <n>] [-t <t>] [-ci] [--solverarg]* [<filename>]
 
-     Reads from a file or STDIN input programs or clauses in simplified aspif or
-     DIMACS-CNF format or extended aspif or DIMACS-CNF with list of parameter
-     atoms and cost function(s).
+     Reads from a file or STDIN input programs or clauses in aspif or DIMACS-CNF format or
+     extended aspif or DIMACS-CNF with list of parameter atoms and cost function(s). To
+     obtain aspif from a non-ground plain Answer Set Program, preprocess using, e.g.,
+     clingo myProg.lp --trans-ext=all --pre=aspif
      Input is obtained from STDIN if no file name is provided or if flag -ci is specified.
-
-     Example calls:
-
-     delSAT sat1.dimacs
-     delSAT myprog.aspif_cost
 
      Optional arguments:
 
@@ -90,12 +81,14 @@ object delSAT {
      threshold means higher accuracy but slower sampling)
 
      --solverarg "argname" "value" specifies additional solver arguments (see
-     sharedDefs.scala).
+     sharedDefs.scala). Multiple --solverarg can be specified.
      Examples:
        --solverarg "partDerivComplete" "true" (activates support for certain
        non-MSE-style costs)
        --solverarg "recAssg" "true" (activates recursive unit propagation which is
        often faster for small problems)
+       --solverarg "maxCompetingSolverThreads" "6" --solverarg "freeEliSearchApproachesR" "0 3 3 4 2 6"
+       activates parallel portfolio solving using max. 6 threads and approaches 0,3,3,4,2,6
        --solverarg "diversify" "true" (aims at generating more diverse models, might
        decrease speed.
        Note that while this might achieve some degree of uniformity, DelSAT does
@@ -669,7 +662,7 @@ object delSAT {
     overrideSolverArgs(additionalSolverArgs)
 
     val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult = if (!satMode)
-      AspifPlainParser.parseAspif(inputData.spanningProgramAspifOrDIMACSOpt.get, shiftAndUnfoldForDisjunctions = true, noOfUnfolds = 0)
+      AspifPlainParser.parseAspif(inputData.spanningProgramAspifOrDIMACSOpt.get, shiftAndUnfoldForDisjunctions = true, noOfUnfolds = noOfUnfolds)
     else
       DIMACPlainSparser.parseDIMACS(inputData.spanningProgramAspifOrDIMACSOpt.get, generatePseudoRulesForNogoods = generatePseudoRulesForNogoodsForSATMode)
 
@@ -758,7 +751,7 @@ object delSAT {
 
         case ("--version" | "-v") :: tail => {
 
-          println(copyrightAndversionText)
+          println(copyrightAndVersionText)
 
           sys.exit(0)
 
@@ -766,7 +759,7 @@ object delSAT {
 
         case ("--help" | "-h") :: tail => {
 
-          println(copyrightAndversionText + "\n\n" + helpText)
+          println(copyrightAndVersionText + "\n\n" + helpText)
 
           sys.exit(0)
 

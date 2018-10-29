@@ -1,6 +1,5 @@
 /**
-  * Parser for a subset of the ASP Intermediate Format (aspif).
-  *
+  * Parser for a subset of the ASP Intermediate Format (aspif).  *
   * Not a general-purpose aspif parser - for internal use in the DelSAT project only.
   *
   * Copyright (c) 2018 Matthias Nickles
@@ -10,12 +9,9 @@
   *
   * Plain aspif file format: See "A Tutorial on Hybrid Answer Set Solving with clingo", https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6
   *
-  * Currently supported: Normal rules, #show entries, disjunctive heads via unfold/shift.
-  * Use a preprocessor such as Clingo 5.2.2 (options --trans-ext=all --pre=aspif) or lp2normal to translate extended rules
+  * Currently supported: Normal rules, #show entries (partially), disjunctive heads via unfold/shift.
+  * Use a preprocessor such as Clingo 5 (options --trans-ext=all --pre=aspif) or lp2normal to translate extended rules
   * (choice, weight rules...) to normal rules.
-  *
-  * NB: In contrast to the older delSAT aspif parser, this parser doesn't support weighted facts or rules; we need to encode these
-  * using a cost function instead (see delSATscala).
   *
   */
 
@@ -30,7 +26,6 @@ import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Map, Set, mutable}
 
 object AspifPlainParser {
-
 
   type AspifEli = Int
 
@@ -51,7 +46,7 @@ object AspifPlainParser {
   val timerParserNs = System.nanoTime()
 
   def parseAspif(aspifStr: String,
-                 shiftAndUnfoldForDisjunctions: Boolean /* <- translate away disjunctions in the head; sound, but only completeModuloConflict for large
+                 shiftAndUnfoldForDisjunctions: Boolean /* <- translate away disjunctions in the head; sound, but only complete for large
      enough noOfUnfolds ->*/ , noOfUnfolds: Int): AspifOrDIMACSPlainParserResult = {
 
     // NB: There are two sorts of elis used in this method: 1) aspif elis (the literal indices as found in the aspif file) and 2) delSAT elis. The main difference is
@@ -59,7 +54,7 @@ object AspifPlainParser {
 
     parserInstanceCount.incrementAndGet()
 
-    val aspifLines = splitByRepChar(aspifStr, '\n') //aspifStr.lines.toArray
+    val aspifLines = splitByRepChar(aspifStr, '\n')
 
     log("parsetimer 0: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
 
@@ -117,7 +112,7 @@ object AspifPlainParser {
 
     while (si < ansll) {
 
-      val aspifNamedSymbolsLineTokens = splitByRepChar(aspifNamedSymbolsLines(si).trim) //(st.nextToken(), st.nextToken(), st.nextToken(), st.nextToken())
+      val aspifNamedSymbolsLineTokens = splitByRepChar(aspifNamedSymbolsLines(si).trim)
 
       val v3 = Integer.parseInt(aspifNamedSymbolsLineTokens(3))
 
@@ -179,7 +174,7 @@ object AspifPlainParser {
 
       if (!disjWarningShow && aspifRuleTokens2 > 1) {
 
-        System.out.println("Warning: Disjunction found. Translation of disjunctions using shift/unfold doesn't guarantee a completeModuloConflict set of answers set.\n Consider increasing the number of unfolds in case of non-convergence.")
+        System.out.println("Warning: Disjunction found. Translation of disjunctions using shift/unfold doesn't guarantee a complete set of answers set.\n Consider increasing the number of unfolds in case of non-convergence.")
 
         disjWarningShow = true
 
@@ -249,14 +244,14 @@ object AspifPlainParser {
     if (shiftAndUnfoldForDisjunctions) {
 
       // We shift disjunctions into the bodies of the aspif-rules. Since this alone might not result in the full set of answer sets,
-      // we also apply the specified number of unfolds (ideally until the program becomes closed under unfolding, which makes the transformation completeModuloConflict):
+      // we also apply the specified number of unfolds (ideally until the program becomes closed under unfolding, which makes the transformation complete):
 
       // Reference: Yi Zhou. From disjunctive to normal logic programs via unfolding and shifting. In Proceedings of ECAI'14, 2014.
       //  https://pdfs.semanticscholar.org/ae2c/27f76c260b0d6de056cf260688f929381b09.pdf
       // TODO: We could consider restricting unfolding to unfolding over atoms in certain cycles (e.g., elementary cycles), see
       //  https://www.ijcai.org/Proceedings/16/Papers/164.pdf
       //  However, for disjunctive programs, finding the elementary cycles is intractable (unless the program is already
-      //  head-cycle free), and unfolding might introduce new cycles.      //
+      //  head-cycle free), and unfolding might introduce new cycles.
       // TODO: An anytime algorithm which incrementally adds unfolds in case of non-convergence. https://www.ijcai.org/Proceedings/16/Papers/164.pdf
       //  But might be difficult to find a good non-convergence criterion besides the current heuristics.
 
@@ -267,7 +262,7 @@ object AspifPlainParser {
 
       log("---------------------------------\n") */
 
-      for (i <- 1 to noOfUnfolds) { // TODO: optionally repeat until closure under unfold? But might take a very long time, as number of unfolds grows exponentially
+      for (i <- 1 to noOfUnfolds) { // TODO: optionally repeat until closed under unfold? But might take a very long time, as number of unfolds grows exponentially
 
         log("Unfold iteration " + i)
 
@@ -329,7 +324,7 @@ object AspifPlainParser {
 
     }
 
-    val symbols: Array[String] = aspifEliToSymbol.values.toArray // needs to be the completeModuloConflict set of all symbols (before we can assign blits to rule bodies below)
+    val symbols: Array[String] = aspifEliToSymbol.values.toArray // needs to be the complete set of all symbols (before we can assign blits to rule bodies below)
 
     val (rules, noOfPosBlits, emptyBodyBlit) = aspifRulesToEliRules(symbols, aspifRules, Some(aspifEliToSymbol))
 

@@ -1,7 +1,5 @@
 /*
- * Parser for a subset of the DIMACS-CNF format.
- *
- * Not a general-purpose DIMACS-CNF parser - for internal use in the DelSAT project only.
+ * Parser for DIMACS-CNF. Not a general-purpose DIMACS-CNF parser - for internal use in the DelSAT project only.
  *
  * Copyright (c) 2018 Matthias Nickles
  *
@@ -21,8 +19,6 @@ import sharedDefs._
 import scala.collection.mutable.ArrayBuffer
 
 object DIMACPlainSparser {
-
-  // Remark: sometimes, "DIMACS-CNF" includes extra \n's with 0 in separate lines. Preprocess by replacing regex "(?<!\ )\n" with "" (empty string).
 
   def parseDIMACS(dimacs_CNF_Pr: String, generatePseudoRulesForNogoods: Boolean): AspifOrDIMACSPlainParserResult = {
 
@@ -89,9 +85,9 @@ object DIMACPlainSparser {
 
       }.dropRight(1).toArray
 
-      if (generatePseudoRulesForNogoods && clauseNumTokens.length > 1) {
+      if (generatePseudoRulesForNogoods && clauseNumTokens.length > 1) { // experimental, optional
 
-        // we "fake2 aspif rules, so that we can later generate body nogoods from it.
+        // we "fake" aspif rules, so that we can later generate body nogoods from it.
 
         val headAspifElis = clauseNumTokens //.filter(_ > 0)
 

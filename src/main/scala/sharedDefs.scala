@@ -1,8 +1,6 @@
 /**
   * DelSAT
   *
-  * A tool for differentiable satisfiability and differentiable answer set programming
-  *
   * Copyright (c) 2018 Matthias Nickles
   *
   */
@@ -16,7 +14,7 @@ import scala.reflect.ClassTag
 
 package object sharedDefs {
 
-  // Solver settings ------------------------------------------------------------------------------------------------------
+  // Solver settings. From the commandline, most of these can be set using --solverarg "paramName" "paramValue"  ------------------------------------------------------------------------------------------------------
 
   // Important: given the primary use case of DelSAT (sampling and multi-model optimisation), the following settings are
   // geared towards fast solving of small or medium satisfiable problems. Many larger problems can also be solved but
@@ -26,27 +24,30 @@ package object sharedDefs {
 
   val generatePseudoRulesForNogoodsForSATMode = false // Experimental. Generates blits in SAT mode
 
-  val initShuffleCleanUpClarkNogoods: Boolean = false
+  var initShuffleCleanUpClarkNogoods: Boolean = false
 
-  val variableElimConfig = (false /*on/off*/ , 0d /*amount #resolvents can be larger than original nogood set for candidate variable, in % of nogis */ ,
+  var variableElimConfig = (false /*on/off*/ , 0d /*amount #resolvents can be larger than original nogood set for candidate variable, in % of nogis */ ,
     0d /*#literals in original nogood set can be larger than literals in resolvents, in % of literals */ ,
     0.05f /*maximum product of literals with positive or negative occurrence of variable candidate, in % of all literals*/ ,
     false /*true actually removes eliminated variables (instead of just ignoring them). Only for SAT mode, not fully working yet*/ )
+  // On the commandline, use like this: --solverarg "variableElimConfig" "true 0.5 0.5 0.001 false"
 
   assert(!generatePseudoRulesForNogoodsForSATMode || !variableElimConfig._5 || !variableElimConfig._1)
 
-  val prearrangeEliPoolR: Boolean = false // true arranges branching eli pool initially by number of nogoods with eli. For freeEliSearchApproachesR = 0, 2, 4, 5
+  var prearrangeEliPoolR: Boolean = false // true arranges branching eli pool initially by number of nogoods with eli. For freeEliSearchApproachesR = 0, 2, 4, 5
 
-  val restartTriggerConf = (true /*Geometric seq on/off*/ , -1 /*initial cutoff. -1: auto, -2: no restarts*/ ,
+  var restartTriggerConf = (true /*Geometric seq on/off*/ , -1 /*initial cutoff. -1: auto, -2: no restarts*/ ,
     -1.5d /*base (if geometric) or cutoff as #conflicts since prev restart as % of learned nogoods. Negative: normally distributed closely around -x*/ )
+  // On the commandline, use like this: --solverarg "restartTriggerConf" "true 5 1.4"
 
-  val removeLearnedNogoods: Double = 0.1d // factor, per restart. 0d: no removal of learned nogoods
+  var removeLearnedNogoods: Double = 0.1d // factor, per restart. 0d: no removal of learned nogoods
 
-  val freeEliSearchApproachesR = Seq(3) //Seq(4,0,3,6,4,2,4,5) // 0<= item <=6, except 1(not implemented); parallel approaches if maxNumberOfCompetingModelSearchThreads>0. If there is
+  var freeEliSearchApproachesR = Seq(0,3,6,4,1,5,2) //Seq(4,0,3,6,4,2,4,5) // 0<= item <=6, except 1(not implemented); parallel approaches if maxCompetingSolverThreads>0. If there is
   // just one portfolio solver thread (see below), head is used. Duplicates allowed.
-  // Recommendations: For larger problems, try with approaches 4, 3 and 2 first. For small problems, try with 0, 5 and 6 first.
+  // Recommendations: For larger problems, try with approaches 3, 4 and 2 first. For small problems, try with 0, 5 and 6 first.
+  // On the commandline, use like this: --solverarg "freeEliSearchApproachesR" "0 3 3 4 2 6" (typically together with setting maxCompetingSolverThreads)
 
-  val maxNumberOfCompetingModelSearchThreads = 1 // for portfolio solving with competing solver instances (number of threads not guaranteed)
+  var maxCompetingSolverThreads = 1 // for portfolio solving with competing solver instances (number of threads not guaranteed)
 
   var diversify: Boolean = false // if true, solver aims at generating diverse models (might slow down solver)
 
@@ -58,35 +59,35 @@ package object sharedDefs {
 
   val sortRemainderPoolProb = 0f
 
-  val initialActivUpdateValue: Int = 1
+  var initialActivUpdateValue: Int = 1
 
-  val incActivUpdateValueOnNewNogoodFactor: Int = 2 // 1 = no activUpdateVal increases (activUpdateVal remains always initialActivUpdateValue).
+  var incActivUpdateValueOnNewNogoodFactor: Int = 2 // 1 = no activUpdateVal increases (activUpdateVal remains always initialActivUpdateValue).
 
-  val reviseActivFreq = 1 // every x conflicts
+  var reviseActivFreq = 1 // every x conflicts
 
-  val reviseActivDiv = 4 // 1 = no updates
+  var reviseActivDiv = 4 // 1 = no updates
 
-  val arrangeParamElisInEliPool = false
+  var arrangeParamElisInEliPool = false
 
-  val shuffleNogoodsOnRestart = false
+  var shuffleNogoodsOnRestart = false
 
-  val nogoodExchangeProbability = 0f // exchange of nogoods between solver threads. 0f = no exchange
+  var nogoodExchangeProbability = 0f // exchange of nogoods between solver threads. 0f = no exchange
 
-  val nogoodExchangeSizeThresh = 4 // only nogoods with size below that threshold are copied to other threads
+  var nogoodExchangeSizeThresh = 4 // only nogoods with size below that threshold are copied to other threads
 
-  val beliThR: Float = -1f //-1: auto
+  var beliThR: Float = -1f //-1: auto
 
-  val parallelThresh = 400 // used as number of items threshold for loop parallelization in various places (TODO: auto)
+  var parallelThresh = 400000000 // used as number of items threshold for loop parallelization in various places (TODO: auto)
 
   var partDerivComplete = false // false: variant of ILP'18 approach (less general, use with MSE-style inner cost expressions),
   // true: variant of PLP'18 approach (more general)
 
-  val ignoreParamVariables = false // true ignores cost function and parameter/measured atoms. Cost is always assumed to be
+  var ignoreParamVariables = false // true ignores cost function and parameter/measured atoms. Cost is always assumed to be
   // negative infinity. Not required as such for non-probabilistic problems (you could simply set threshold = Double.MaxValue
   // and use -1 as number of models), but useful for debugging.
 
-  assert(maxNumberOfCompetingModelSearchThreads == 1 || ignoreParamVariables, "Error: competing solving currently not usable in uncertainty sampling mode")
-  // (^ restriction planned to be dropped in a future version)
+  var noOfUnfolds = 0 // for translating away disjunctions in rule heads (an extension over normal ASP), increase the number of unfold operations
+  // if necessary (try with 0 first)
 
   // ------------------------------------------------------------------------------------------------------------------------
 
@@ -98,25 +99,63 @@ package object sharedDefs {
 
     val additionalSolverArgs = additionalSolverArgsR.map((tuple: (String, String)) => (tuple._1.replaceAllLiterally("\"", "").trim, tuple._2.replaceAllLiterally("\"", "").trim))
 
-    additionalSolverArgs.foreach {
+    additionalSolverArgs.foreach { case (paramName, paramValueStr) => { // see above for meaning of these parameters
 
-      case ("partDerivComplete", value: String) => partDerivComplete = value.toBoolean
+      (paramName, paramValueStr.split("\\s+")) match {
 
-      case ("recAssg", value: String) => recAssg = value.toBoolean
+        case ("variableElimConfig", Array(v1, v2, v3, v4, v5)) => variableElimConfig = (v1.toBoolean, v2.toDouble, v3.toDouble, v4.toFloat, v5.toBoolean)
 
-      case ("diversify", value: String) => {
+        case ("restartTriggerConf", Array(v1, v2, v3)) => restartTriggerConf = (v1.toBoolean, v2.toInt, v3.toDouble)
 
-        diversify = value.toBoolean
+        case ("freeEliSearchApproachesR", Array(v@_*)) => freeEliSearchApproachesR = v.map(_.toInt)
+
+        case ("maxCompetingSolverThreads", Array(v1)) => maxCompetingSolverThreads = v1.toInt
+
+        case ("parallelThresh", Array(v1)) => parallelThresh = v1.toInt
+
+        case ("partDerivComplete", Array(v1)) => partDerivComplete = v1.toBoolean
+
+        case ("recAssg", Array(v1)) => recAssg = v1.toBoolean
+
+        case ("diversify", Array(v1)) => diversify = v1.toBoolean
+
+        case ("prearrangeEliPoolR", Array(v1)) => prearrangeEliPoolR = v1.toBoolean
+
+        case ("arrangeParamElisInEliPool", Array(v1)) => arrangeParamElisInEliPool = v1.toBoolean
+
+        case ("shuffleNogoodsOnRestart", Array(v1)) => shuffleNogoodsOnRestart = v1.toBoolean
+
+        case ("ignoreParamVariables", Array(v1)) => ignoreParamVariables = v1.toBoolean
+
+        case ("noOfUnfolds", Array(v1)) => noOfUnfolds = v1.toInt
+
+        case ("parallelThresh", Array(v1)) => parallelThresh = v1.toInt
+
+        case ("beliThR", Array(v1)) => beliThR = v1.toFloat
+
+        case ("initialActivUpdateValue", Array(v1)) => initialActivUpdateValue = v1.toInt
+
+        case ("reviseActivFreq", Array(v1)) => reviseActivFreq = v1.toInt
+
+        case ("reviseActivDiv", Array(v1)) => reviseActivDiv = v1.toInt
+
+        case ("incActivUpdateValueOnNewNogoodFactor", Array(v1)) => incActivUpdateValueOnNewNogoodFactor = v1.toInt
+
+        case ("removeLearnedNogoods", Array(v1)) => removeLearnedNogoods = v1.toDouble
+
+        case ("initShuffleCleanUpClarkNogoods", Array(v1)) => initShuffleCleanUpClarkNogoods = v1.toBoolean
+
+        case ("nogoodExchangeProbability", Array(v1)) => nogoodExchangeProbability = v1.toFloat
+
+        case (arg: String, Array(v1)) => System.err.println("Invalid --solverarg " + arg + " " + v1)
+
       }
 
-      // ...
-
-      case (arg: String, value: String) => System.err.println("Invalid --solverarg " + arg + " " + value)
+    }
 
     }
 
   }
-
 
   // --------------------------------------------------------------
 

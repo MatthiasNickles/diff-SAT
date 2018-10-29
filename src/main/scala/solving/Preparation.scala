@@ -1,8 +1,6 @@
 /**
   * DelSAT
   *
-  * A tool for differentiable satisfiability and differentiable answer set programming
-  *
   * Copyright (c) 2018 Matthias Nickles
   *
   */
