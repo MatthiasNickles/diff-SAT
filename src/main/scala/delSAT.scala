@@ -59,7 +59,7 @@ object delSAT {
 
      Usage:
 
-     delSAT [--version|-v] [--help|-h] [-n <n>] [-t <t>] [-ci] [--solverarg]* [<filename>]
+     delSAT [--version|-v] [--help|-h] [-n <n>] [-t <t>] [-ci] [--solverarg "name" "value"]* [<filename>]
 
      Reads from a file or STDIN input programs or clauses in aspif or DIMACS-CNF format or
      extended aspif or DIMACS-CNF with list of parameter atoms and cost function(s). To
