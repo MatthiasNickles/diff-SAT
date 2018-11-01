@@ -17,7 +17,7 @@ DelSAT makes use of an approach called _Differentiable Satisfiability_ / _Differ
 a form of Gradient Descent is embedded in CDCL/CDNL-style solving to iteratively generate models until the cost functions' minima are reached.
 Details on this approach can be found in the following publications:
 
-- Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th Workshop on Probabilistic Logic Programming (PLP'18). CEUR proceedings, 2018.
+- Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th Workshop on Probabilistic Logic Programming (PLP'18). CEUR Vol. 2219, 2018.
 - Matthias Nickles: Sampling-Based SAT/ASP Multi-Model Optimization as a Framework for Probabilistic Inference. 
   Proceedings of the 28th International Conference on Inductive Logic Programming (ILP'18). LNAI, Springer, 2018.
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. Proceedings of the 12th International Conference on 
