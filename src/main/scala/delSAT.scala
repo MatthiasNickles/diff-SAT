@@ -103,6 +103,30 @@ object delSAT {
 
      --help|-h prints this information and exits.
 """
+ 
+ val thirdParty = """
+DelSAT uses the following third-party software:
+
+JAutoDiff (https://github.com/accelad-com/nilgiri-math)
+  Copyright (c) 2017 AccelaD
+  License: https://github.com/accelad-com/nilgiri-math/blob/master/src/main/java/com/accelad/math/nilgiri/LICENSE
+
+Parsington (https://github.com/scijava/parsington)
+  Copyright (c) 2015 - 2016, Board of Regents of the University of Wisconsin-Madison
+  License: https://github.com/scijava/parsington/blob/master/LICENSE.txt
+
+fastutil (http://fastutil.di.unimi.it/)
+  Copyright (C) 2002-2017 Sebastiano Vigna
+  License: https://github.com/vigna/fastutil/blob/master/LICENSE-2.0
+
+HPPC: High Performance Primitive Collections (https://github.com/carrotsearch/hppc)
+  Copyright 2010-2013, Carrot Search s.c., Boznicza 11/56, Poznan, Poland
+  License: https://github.com/carrotsearch/hppc/blob/master/LICENSE.txt
+
+Guava: Google Core Libraries for Java (https://github.com/google/guava)
+  Copyright (C) 2011 The Guava Authors
+  License: https://github.com/google/guava/blob/master/COPYING
+  """
 
   object MessageTypes extends Enumeration {
 
@@ -752,6 +776,7 @@ object delSAT {
         case ("--version" | "-v") :: tail => {
 
           println(copyrightAndVersionText)
+          println(thirdParty)
 
           sys.exit(0)
 
