@@ -1,6 +1,6 @@
 **DelSAT**
 
-**Current version:** 0.2 
+**Current version:** 0.2
 
 **Purpose**
 
@@ -94,7 +94,7 @@ Harder SAT or ASP problems might also require a specific solver configuration to
 The list of solver parameters (accessible via argument --solverarg) can currently be
 found in source code file sharedDefs.scala (more accessible documentation is planned for a forthcoming version).
 
-**Tips & Tricks & Miscellanea **
+**Tips & Tricks & Miscellanea**
 
 - DelSAT can be used with most types of logic programs supported by modern answer set solvers (including Disjunctive Logic Programs) but such programs might require preprocessing and grounding as explained above
 
@@ -124,10 +124,8 @@ Web: https://www.researchgate.net/profile/Matthias_Nickles
 
 Feedback and bug reports on this software are welcome!
 
-**Copyright & License**
+**DelSAT Copyright & License**
 
-DelSAT 
-
-Copyright (c) 2018 by Matthias Nickles
+ Copyright (c) 2018 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE)
