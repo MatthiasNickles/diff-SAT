@@ -1,36 +1,56 @@
+//  THIS CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+
 package utils;
 
 import sun.misc.Unsafe;
 
 public class LongArrayUnsafe {
 
-    private long size;  // number of primitive long (8 byte) items
+    private long size;  // number of primitive longs (8 byte)
 
-    private long address;
+    private long addr;
 
-    public static Unsafe UNSAFE = null;
+    public static Unsafe unsafe = null;  // see ByteArrayUnsafe for how to initialize
 
-    private static long LONG_ARRAY_OFFSET = -1l;
+    private static long longArrayOffset = -1l;
 
-    public static void init() {
+    private static long alignment = -1l;
 
-        LONG_ARRAY_OFFSET = UNSAFE.arrayBaseOffset(long[].class);
+    private static long internalPadding = 1;  // multiple of alignment
+
+    public static void init(Unsafe us) {
+
+        unsafe = us;
+
+        longArrayOffset = unsafe.arrayBaseOffset(long[].class);
+
+        alignment = unsafe.pageSize(); // for cache line size, use typically 64l
+
 
     }
 
-    public LongArrayUnsafe(long size) {
+    public LongArrayUnsafe(long size, boolean aligned) {
 
         this.size = size;
 
-        address = UNSAFE.allocateMemory(size << 3);
+        if(!aligned)
+            addr = unsafe.allocateMemory(size << 3);
+        else {
+
+            addr = unsafe.allocateMemory((size << 3) + alignment + alignment * internalPadding);
+
+            if (alignment > 0l && (addr & (alignment - 1l)) != 0)
+                addr += (alignment - (addr & (alignment - 1)));
+
+            addr += alignment * internalPadding;
+
+        }
 
     }
 
-    public LongArrayUnsafe(long size, long init) {
+    public LongArrayUnsafe(long size, long init, boolean aligned) {
 
-        this.size = size;
-
-        address = UNSAFE.allocateMemory(size << 3);
+        this(size, aligned);
 
         long i = size - 1;
 
@@ -41,7 +61,7 @@ public class LongArrayUnsafe {
 
     public void free() {
 
-        UNSAFE.freeMemory(address);
+        unsafe.freeMemory(addr);
 
     }
 
@@ -55,31 +75,30 @@ public class LongArrayUnsafe {
 
         long bytesToCopy = values.length << 3;
 
-        UNSAFE.copyMemory(values, LONG_ARRAY_OFFSET,
-                null, address,
-                bytesToCopy);
+        unsafe.copyMemory(values, longArrayOffset,
+                null, addr, bytesToCopy);
 
     }
 
-    public void update(int i, long value) {
+    public void update(int index, long value) {
 
-        UNSAFE.putLong(address + (i << 3), value);
-
-    }
-
-    public void update(long i, long value) {
-
-        UNSAFE.putLong(address + (i << 3), value);
+        unsafe.putLong(addr + (index << 3), value);
 
     }
 
-    public long get(long i) {
+    public void update(long index, long value) {
 
-        return UNSAFE.getLong(address + (i << 3));
+        unsafe.putLong(addr + (index << 3), value);
 
     }
 
-    public boolean contains(long item) {
+    public long get(long index) {
+
+        return unsafe.getLong(addr + (index << 3));
+
+    }
+
+    /*public boolean contains(long item) {
 
         long i = size - 1;
 
@@ -89,19 +108,16 @@ public class LongArrayUnsafe {
 
         return false;
 
-    }
+    }*/
 
     public long[] toArray() {  // TODO
 
-        //byte[] array = new byte[(int) size];  // note that an UNSAFE array can exceed Int.MaxValue size, in which case this would fail
+        //byte[] array = new byte[(int) size];  // note that an unsafe array can exceed Int.MaxValue size, in which case this would fail
 
         long[] array = new long[(int) size];
 
-        UNSAFE.copyMemory(null, address,
-                array, LONG_ARRAY_OFFSET,
-                size << 3);
-
-        //UNSAFE.copyMemory(address, 0, array, BYTE_ARRAY_OFFSET, size); nope
+        unsafe.copyMemory(null, addr,
+                array, longArrayOffset, size << 3);
 
         return array;
 
@@ -118,11 +134,11 @@ public class LongArrayUnsafe {
 
     }
 
-    public LongArrayUnsafe clone(long padding) {
+    public LongArrayUnsafe clone(long padding, boolean aligned) {
 
-        LongArrayUnsafe bau = new LongArrayUnsafe(size + padding);
+        LongArrayUnsafe bau = new LongArrayUnsafe(size + padding, aligned);
 
-        UNSAFE.copyMemory(address, bau.address, size << 3);
+        unsafe.copyMemory(addr, bau.addr, size << 3);
 
         return bau;
 

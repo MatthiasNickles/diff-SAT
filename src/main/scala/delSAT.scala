@@ -2,12 +2,14 @@
   * DelSAT
   *
   * Copyright (c) 2018 Matthias Nickles
-  * eMail: matthias.nickles@gmx.net
+  *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
   *
   */
 
 package commandline
-
 
 import java.io._
 import java.util
@@ -15,97 +17,56 @@ import java.util
 import aspIOutils._
 
 import com.accelad.math.nilgiri.{DoubleReal, autodiff}
-import com.accelad.math.nilgiri.autodiff.{Constant, DifferentialFunction}
+import com.accelad.math.nilgiri.autodiff.DifferentialFunction
+
 import diff.UncertainAtomsSeprt
+
 import org.scijava.parse.ExpressionParser
+
 import parsing.{AspifPlainParser, DIMACPlainSparser}
 
 import sharedDefs._
+
 import solving.{Preparation, SolverMulti}
 
 import sun.misc.Unsafe
-import utils.{IntArrayUnsafe, LongArrayUnsafe}
+
+import utils.{FloatArrayUnsafe, IntArrayUnsafe, LongArrayUnsafe}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-/**
+/*
+  * See sharedDefs.scala for solver settings available
+  * (most of these can also be specified on the command line using --solverarg, see --help below)
+  *
   * @author Matthias Nickles
   *
   */
 object delSAT {
 
-  val debug = false // before using with, e.g., prasp2, build artifact delSAT.jar and check settings in StochasticCDCL_ASP_SAT.CDCLConfig etc.
+  val debug = false
 
-  val showProgressStats = false
+  // For flight control, use e.g. -XX:+UnlockCommercialFeatures -XX:+FlightRecorder -XX:StartFlightRecording=duration=60s,filename=delsatRecording.jfr
 
-  val printAnswers = true
+  var verbose = false
 
-  val noOfBenchmarkTrials = 1
 
-  val enforceChecks = false && noOfBenchmarkTrials == 1
+  val noOfMinibenchmarkTrials = 1 // this is just for a quick local mini-benchmark to get a (very) rough idea of performance
 
-  assert(!(printAnswers && enforceChecks))
+  val enforceSanityChecks = false && noOfMinibenchmarkTrials == 1 // NB: for ASP, invalid models are first bounced back to the solver before this check could occur
 
-  val version = "0.1"
+  val printAnswers = true && noOfMinibenchmarkTrials == 1 && !enforceSanityChecks // false only for debugging purposes
 
-  val copyrightAndVersionText = "DelSAT " + version + "\nCopyright (c) 2018 Matthias Nickles\n\n"
+  assert(!(printAnswers && enforceSanityChecks))
+
+  val version = "0.2"
+
+  val copyrightAndVersionText = "DelSAT " + version + "\nCopyright (c) 2018 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE"
 
   val defaultNoOfModelsStr = "-1"
 
-  val helpText = copyrightAndVersionText +
-    """
-     A SAT and ASP solver for sampling-based multi-model optimization.
-
-     Usage:
-
-     delSAT [--version|-v] [--help|-h] [-n <n>] [-t <t>] [-ci] [--solverarg "name" "value"]* [<filename>]
-
-     Reads from a file or STDIN input programs or clauses in aspif or DIMACS-CNF format or
-     extended aspif or DIMACS-CNF with list of parameter atoms and cost function(s). To
-     obtain aspif from a non-ground plain Answer Set Program, preprocess using, e.g.,
-     clingo myProg.lp --trans-ext=all --pre=aspif
-     Input is obtained from STDIN if no file name is provided or if flag -ci is specified.
-
-     Optional arguments:
-
-     -n <n> lets the sampler invokeSampler <n> (not necessarily different) models such
-     that the specified or default threshold is reached. If -n is missing, sampling
-     continues until the minimum multiset of models has been generated st. the specified
-     or default threshold (or timeout) is reached. Models are either stable models
-     (answer sets) or satisfying Boolean assignments (in case the input is in (extended
-     or plain) DIMACS format). Use case of -n is primarly increase of entropy with
-     larger number of models.
-
-     -t <threshold> specifies the error threshold for the total cost function (small
-     threshold means higher accuracy but slower sampling)
-
-     --solverarg "argname" "value" specifies additional solver arguments (see
-     sharedDefs.scala). Multiple --solverarg can be specified.
-     Examples:
-       --solverarg "partDerivComplete" "true" (activates support for certain
-       non-MSE-style costs)
-       --solverarg "recAssg" "true" (activates recursive unit propagation which is
-       often faster for small problems)
-       --solverarg "maxCompetingSolverThreads" "6" --solverarg "freeEliSearchApproachesR" "0 3 3 4 2 6"
-       activates parallel portfolio solving using max. 6 threads and approaches 0,3,3,4,2,6
-       --solverarg "diversify" "true" (aims at generating more diverse models, might
-       decrease speed.
-       Note that while this might achieve some degree of uniformity, DelSAT does
-       not aim to be a uniform sampling tool.)
-
-     --showaux shows auxiliary atoms introduced for spanning formulas (omitted by
-     default).
-
-     -ci enforces reading from STDIN.
-
-     --version|-v prints version and license information, then exits.
-
-     --help|-h prints this information and exits.
-"""
- 
- val thirdParty = """
-DelSAT uses the following third-party software:
+  val thirdPartyLibs = "DelSAT " + version + """ uses the following third-party software:
 
 JAutoDiff (https://github.com/accelad-com/nilgiri-math)
   Copyright (c) 2017 AccelaD
@@ -115,24 +76,74 @@ Parsington (https://github.com/scijava/parsington)
   Copyright (c) 2015 - 2016, Board of Regents of the University of Wisconsin-Madison
   License: https://github.com/scijava/parsington/blob/master/LICENSE.txt
 
-fastutil (http://fastutil.di.unimi.it/)
-  Copyright (C) 2002-2017 Sebastiano Vigna
+fastutil (http://fastutil.di.unimi.it)
+  Copyright (c) 2002-2017 Sebastiano Vigna
   License: https://github.com/vigna/fastutil/blob/master/LICENSE-2.0
+"""
 
-HPPC: High Performance Primitive Collections (https://github.com/carrotsearch/hppc)
-  Copyright 2010-2013, Carrot Search s.c., Boznicza 11/56, Poznan, Poland
-  License: https://github.com/carrotsearch/hppc/blob/master/LICENSE.txt
+  val helpText =
+    """
+     A SAT and ASP solver for sampling-based multi-model optimization.
 
-Guava: Google Core Libraries for Java (https://github.com/google/guava)
-  Copyright (C) 2011 The Guava Authors
-  License: https://github.com/google/guava/blob/master/COPYING
-  """
+     Usage:
+
+     delSAT [--version|-v|--about] [--help|-h]
+            [-n <n>] [-t <t>] [-ci] [-mse]
+            [--solverarg "name" "value"]* [<filename>]
+
+     Reads from a file or STDIN input programs or clauses in aspif or DIMACS-CNF format or
+     extended aspif or DIMACS-CNF with list of parameter atoms and cost function(s). To
+     obtain aspif from a non-ground plain Answer Set Program, preprocess using, e.g.,
+     clingo myProg.lp --trans-ext=all --pre=aspif
+     Input is obtained from STDIN if no file name is provided or if flag -ci is specified.
+
+     Arguments:
+
+     -n <n> lets the sampler sample <n> (not necessarily different) models such
+     that the specified or default threshold is reached. If -n is missing, sampling
+     continues until the minimum multiset of models has been generated st. the specified
+     or default threshold (or timeout) is reached. Models are either stable models
+     (answer sets) or satisfying Boolean assignments (in case the input is in extended
+     or plain DIMACS format). Use case of -n is primarly increase of entropy with
+     larger number of models.
+
+     -t <threshold> specifies the error threshold for the total cost function (small
+     threshold means higher accuracy but more time required for sampling)
+
+     -mse promises that the costs are provided entirely as part costs with inner MSE terms
+     of the form (p-f(v))^2 where p is a probability and v is a parameter atom symbol
+     (random variable). -mse is optional even for MSE-type costs but allows for faster
+     parsing of large lists of such functions.
+
+     --solverarg "argname" "value" specifies additional solver arguments (see
+     sharedDefs.scala for the full list). Multiple --solverarg can be specified.
+     Examples:
+       --solverarg "partDerivComplete" "true" (activates support for certain
+       non-MSE-style costs)
+       --solverarg "maxCompetingSolverThreads" "6" --solverarg "freeEliSearchConfigsP" "2 3 3 4 5 7"
+       activates parallel portfolio solving using max. 6 threads and approaches 0,3,3,4,2,6
+       --solverarg "diversify" "true" (aims at generating more diverse models, might
+       decrease speed. Note that while this might achieve some degree of uniformity, DelSAT
+       does not aim to be a uniform sampling tool.)
+
+     --showaux shows auxiliary atoms introduced for spanning formulas (omitted by
+     default).
+
+     -ci enforces reading from STDIN.
+
+     --verbose shows additional information
+
+     --version|-v|--about prints information about version and third-party software
+     used by DelSAT (including copyrights and license information), then exits.
+
+     --help|-h prints this information and exits.
+"""
 
   object MessageTypes extends Enumeration {
 
     type MessageType = Value
 
-    val INFO, WARNING, ERROR = Value
+    val /*INFO,*/ WARNING, ERROR = Value
 
   }
 
@@ -152,9 +163,17 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
     -101 -> ("Timeout or maximum number of trials exceeded. Sampling aborted", WARNING),
 
-    -102 -> ("Unsuppored line in aspif input", ERROR),
+    -102 -> ("Unsupported line in aspif input", ERROR),
 
     -103 -> ("Weighted atoms only supported via cost functions", ERROR),
+
+    -104 -> ("Disjunction found in ASP input. Translation of disjunctions using shift/unfold doesn't guarantee a complete set of answers set.\n Consider increasing the number of unfolds in case of non-convergence.", ERROR),
+
+    -200 -> ("Unknown operator in expression", ERROR),
+
+    -201 -> ("Call of unknown function in expression", ERROR),
+
+    -202 -> ("Syntax error in cost function", ERROR),
 
     -5000 -> ("Specified local greedy decision policy won't work as expected since some measured atoms are not parameter atoms", WARNING),
 
@@ -162,12 +181,21 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
     -5002 -> ("assureIsTight=true; This will lead to non-termination or wrong results if the ASP program isn't tight.", WARNING),
 
-    -5003 -> ("partDerivComplete=true ignored because numDiffActive=true", WARNING),
+    -5003 -> ("Inner cost function(s) invalid for selected type of differentiation. Try with command line argument\n --solverarg \"partDerivComplete\" \"true\"", ERROR),
 
-    -5004 -> ("useCostBacktracking and localGreedyWithBacktracking are both disabled with numDiffActive\n => no cost minimization", WARNING),
+    -5004 -> ("Unsupported type of rule", ERROR),
 
-    -5005 -> ("Undefined predicate", WARNING)
+    -5005 -> ("Undefined predicate", WARNING),
 
+    -5006 -> ("Incompatible settings, see def checkSettings in sharedDefs.scala for details", ERROR),
+
+    -5007 -> ("Experimental feature, might give wrong results", WARNING),
+
+    -5008 -> ("Sampling ended but specified threshold not reached!", WARNING),
+
+    -5009 -> ("Invalid setting, see sharedDefs.scala for details", ERROR),
+
+    -10000 -> ("Internal error", ERROR)
 
   )
 
@@ -184,7 +212,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
     } else if (message._2 == WARNING)
       System.out.println("Warning: " + message._1 + " " + additionalInfo)
     else
-      System.out.println("Info: " + message._1 + " " + additionalInfo)
+      assert(false) //System.out.println("Info: " + message._1 + " " + additionalInfo)
 
   }
 
@@ -197,7 +225,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
   @inline def parseDouble(s: String): Option[Double] = {
 
-    val r = try {
+    try {
 
       Some(s.toDouble)
 
@@ -207,12 +235,21 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
     }
 
-    r
-
   }
 
   final case class InputData(spanningProgramAspifOrDIMACSOpt: Option[String],
                              costsOpt: Option[UncertainAtomsSeprt]) {}
+
+  @inline def measuredAtomIndex(atom: Pred, measuredAtomsSeqSorted: Array[String]): Int = {
+
+    val measuredAtomNameInExpr = atom
+
+    val m: String = measuredAtomNameInExpr.replaceAllLiterally("ä", "_").replaceAllLiterally(".0" /*because we get a real number here*/ , "")
+
+    util.Arrays.binarySearch(measuredAtomsSeqSorted.asInstanceOf[Array[Object]] /*Scala arrays aren't covariant*/ , m)
+    // TODO: ^^ check again, find cleaner solution
+
+  }
 
   /** Converts a postfix queue of arithmetic expression tokens (e.g. from org.scijava.parse) into a com.accelad.math.nilgiri.diff-expression, using a stack */
   def convertToDfNEW(tokensQueue: util.LinkedList[Object], measuredAtomsSeqSorted: Array[String], measuredAtomsSet: mutable.HashSet[Pred]):
@@ -222,9 +259,9 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
     val tokenStack = scala.collection.mutable.Stack[Object]() // can contain both autodiff. and org.scijava.parse. objects
 
-    val dFFactory = new diff.DifferentialFunctionFactoryStasp() //null/*missing until we deserialize in nablaSAT*/)
+    val dFFactory = new diff.DifferentialFunctionFactoryStasp()
 
-    def popArgOpt: Option[DifferentialFunction[DoubleReal]] = {
+    @inline def popArgOpt: Option[DifferentialFunction[DoubleReal]] = {
 
       val arg = tokenStack.pop()
 
@@ -247,37 +284,19 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
         }
 
-        case dConst: autodiff.Variable[DoubleReal] => Some(dConst)
+        //case dConst: autodiff.Variable[DoubleReal] => Some(dConst)
 
-        case dVar: autodiff.Constant[DoubleReal] => Some(dVar)
+        //case dVar: autodiff.Constant[DoubleReal] => Some(dVar)
 
         case x => {
 
-          assert(false, "Error: Invalid type of argument in inner cost expression: " + x)
+          stomp(-202, "Invalid type of argument in inner cost expression: " + x)
 
           None
 
         }
 
       }
-
-    }
-
-    def dConstFromMeasuredAtomIndex(atom: Pred) = {
-
-      val measuredAtomIndex: Int = {
-
-        val measuredAtomNameInExpr = atom
-
-        val m: String = measuredAtomNameInExpr.replaceAllLiterally("ä", "_").replaceAllLiterally(".0" /*because we get a real number here*/ , "")
-
-        util.Arrays.binarySearch(measuredAtomsSeqSorted.asInstanceOf[Array[Object]] /*Scala arrays aren't covariant*/ , m)
-
-        // TODO: ^^ hack; check again, find cleaner solution
-
-      }
-
-      dFFactory.`val`(new DoubleReal(measuredAtomIndex))
 
     }
 
@@ -297,10 +316,11 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
           if (measuredAtomsSet.contains(name)) {
 
-            val dConst: Constant[DoubleReal] = dConstFromMeasuredAtomIndex(name) // a pseudo-real constant which is an index into measures atoms; these indices later need to be
-            // translated into (positive atom) elis in NablaSAT.
+            val dConstFromMeasuredAtomIndex = dFFactory.`val`(new DoubleReal(measuredAtomIndex(name, measuredAtomsSeqSorted)))
+            // ^a pseudo-real constant which is an index into measures atoms; these indices later need to be
+            // translated into (positive atom) elis.
 
-            tokenStack.push(dConst)
+            tokenStack.push(dConstFromMeasuredAtomIndex)
 
           } else
             tokenStack.push(symbol) // the symbol is either an actual function name or a part of a nested predicate
@@ -348,7 +368,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
             (argLOpt, argROpt) match {
 
-              case (None, None) => assert(false, "Error: Insufficient arguments for operator " + operator + " in inner cost expression")
+              case (None, None) => stomp(-202, "Insufficient arguments for operator " + operator + " in inner cost expression")
 
               case (Some(argL), Some(argR)) => {
 
@@ -367,6 +387,8 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
               }
 
+              case _ => stomp(-200, ": " + operator)
+
             }
 
           }
@@ -383,13 +405,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
               val arity = groupTag.getArity
 
-              val dArgs: Seq[DifferentialFunction[DoubleReal]] = (1 to arity).flatMap { case _ => {
-
-                popArgOpt
-
-              }
-
-              }
+              val dArgs: Seq[DifferentialFunction[DoubleReal]] = (1 to arity).flatMap { case _ => popArgOpt }
 
               val eFnSymbol = tokenStack.pop()
 
@@ -438,7 +454,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
                   // TODO: support further functions?
                   else {
 
-                    // at this point, we know that the "function" with its arguments is likely an atom (in form of a predicate with arguments) instead
+                    // At this point, we know that the "function" with its arguments is likely an atom (in form of a predicate with arguments) instead
                     // (since there are no other actual functions than f(...), w(...) and the built-in functions like sqrt(...)).
 
                     // Also, we know that the atom must be a measured atom, as these are the only ones allowed in
@@ -459,27 +475,21 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
                     }).mkString(",") + ")"
 
-                    val dConst = dConstFromMeasuredAtomIndex(measuredAtom /*dArgs(0).toString.takeWhile(_ != ':')*/)
+                    val dConst = dFFactory.`val`(new DoubleReal(measuredAtomIndex(measuredAtom, measuredAtomsSeqSorted)))
 
                     tokenStack.push(dConst)
-
-                    //assert(false, "Error: Unknown function in inner cost expression: " + eFnSymbol)
 
                   }
 
                 }
 
-                case _ => {
-
-                  assert(false, "Error: Invalid inner cost expression, parsing error (1)")
-
-                }
+                case _ => stomp(-202)
 
               }
 
             }
 
-            case _ => assert(false, "Error: Invalid inner cost expression, parsing error (2)")
+            case _ => stomp(-202)
 
           }
 
@@ -490,7 +500,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
           if (tokens(index + 1).toString == "<Fn>")
             tokenStack.push(groupTag)
           else if (groupTag.getArity != 1)
-            assert(false, "Error: Syntax error in inner cost expression")
+            stomp(-202)
 
           // we just ignore (1) tags, unless they refer to the (arguments) of a function
 
@@ -511,7 +521,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
       case _ => {
 
-        assert(false, "Error: Invalid inner cost expression")
+        stomp(-202)
 
         null
 
@@ -524,7 +534,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
   /**
     * Reads input from file (if file name is given) or STDIN (in various alternative formats, with input typically generated by prasp2)
     */
-  def readInputData(fileNameOpt: Option[String]): Option[InputData] = {
+  def readInputData(fileNameOpt: Option[String], mse: Boolean = false): Option[InputData] = {
 
     /* In contrast to nablaSAT, we receive the inner cost functions as plain text formulas which we need to convert
        to DifferentialFunction[DoubleReal] here.
@@ -548,11 +558,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
         val timer = System.nanoTime()
 
-        val r: String = new String(Files.readAllBytes(Paths.get(fileName)), StandardCharsets.UTF_8)
-
-        log("Time file slurp: " + (System.nanoTime() - timer) / 1000000 + "ms")
-
-        r
+        new String(Files.readAllBytes(Paths.get(fileName)), StandardCharsets.UTF_8)
 
       }
 
@@ -578,21 +584,17 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
         val paramAtomsAndInnerCostsStr = if (posExtras == -1) "" else inputStr.substring(posExtras).trim
 
-        val paramAtomsAndInnerCostsLines: Iterator[String] = paramAtomsAndInnerCostsStr.lines
+        val paramAtomsAndInnerCostsLines: Array[String] = paramAtomsAndInnerCostsStr.lines.toArray
 
         val parameterAtomsSeq: Array[Pred] = paramAtomsAndInnerCostsLines.take(1).mkString.trim.split("\\s+").drop(1).distinct
 
-        val costLines = paramAtomsAndInnerCostsLines.filter(_.startsWith("cost ")).map(_.stripPrefix("cost ").trim).toList
+        val costLines: Array[String] = paramAtomsAndInnerCostsLines.filter(_.startsWith("cost ")).map(_.stripPrefix("cost ").trim)
 
         // we obtain the measured atoms from the cost function expressions (whereas "pats ..." is the list of parameter atoms):
-
-        // val measuredAtomPattern = """(?<!\w)f\(([^()]*)\)""".r
 
         val measuredAtomsSet: mutable.HashSet[Pred] = mutable.HashSet[Pred]() ++ costLines.foldLeft(ArrayBuffer[Pred]()) {
 
           case (ms: ArrayBuffer[Pred], costLine: String) => {
-
-            //ms ++ measuredAtomPattern.findAllIn(costLine).matchData.map(_.group(1))
 
             val mil = ArrayBuffer[String]()
 
@@ -617,7 +619,8 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
                   i += 1
 
-                  assert(i < costLine.length, "Error: invalid cost function expression: " + costLine)
+                  if (i >= costLine.length)
+                    stomp(-202, costLine)
 
                 }
 
@@ -645,16 +648,40 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
             val innerCostFunStr = costLine.stripPrefix("cost ").trim
 
-            val underscoreReplInner = innerCostFunStr.replaceAllLiterally("_", "ä") // ExpressionParser only recognizes Java-style identifiers
-            // with unicode characters but without leading underscores
+            if (!mse) {
 
-            val postfixTokens = new ExpressionParser().parsePostfix(underscoreReplInner)
+              val underscoreReplInner = innerCostFunStr.replaceAllLiterally("_", "ä") // ExpressionParser only recognizes Java-style identifiers
+              // with unicode characters but without leading underscores
 
-            val dfInnerCostExpression = convertToDfNEW(postfixTokens, measuredAtomsSeqSorted, measuredAtomsSet)
+              val postfixTokens = new ExpressionParser().parsePostfix(underscoreReplInner)
 
-            dfInnerCostExpression
+              val dfInnerCostExpression = convertToDfNEW(postfixTokens, measuredAtomsSeqSorted, measuredAtomsSet)
 
-          }).toArray
+              dfInnerCostExpression
+
+            } else {
+
+              val dFFactory = new diff.DifferentialFunctionFactoryStasp() //null /*missing until we deserialize in nablaSAT*/)
+
+              val dNumStr = innerCostFunStr.drop(1).takeWhile(c => c.isDigit || c == '.')
+
+              val weightDNum = dFFactory.`val`(new DoubleReal(java.lang.Double.parseDouble(dNumStr).doubleValue()))
+
+              // (if you get a numerical format exception here, check first whether flag -mse is set and appropriate)
+
+              val weightedAtom = innerCostFunStr.drop(1).dropWhile(_ != '(').drop(1).dropRight(4)
+
+              val weightedAtomIndexDConst = dFFactory.`val`(new DoubleReal(measuredAtomIndex(weightedAtom, measuredAtomsSeqSorted)))
+
+              val phi = dFFactory.phi(weightedAtomIndexDConst)
+
+              val innerMSEDTerm = weightDNum.minus(phi).pow(2)
+
+              innerMSEDTerm
+
+            }
+
+          })
 
         }
 
@@ -677,6 +704,9 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
                     showaux: Boolean, satMode: Boolean, additionalSolverArgs: mutable.HashMap[String, String]):
   (mutable.Seq[Array[Pred]], AspifOrDIMACSPlainParserResult) = {
 
+    if (noOfMinibenchmarkTrials > 1)
+      Thread.sleep(3000)
+
     println("DelSAT " + commandline.delSAT.version + "\n")
 
     val timerInitNs = System.nanoTime()
@@ -688,36 +718,47 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
     val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult = if (!satMode)
       AspifPlainParser.parseAspif(inputData.spanningProgramAspifOrDIMACSOpt.get, shiftAndUnfoldForDisjunctions = true, noOfUnfolds = noOfUnfolds)
     else
-      DIMACPlainSparser.parseDIMACS(inputData.spanningProgramAspifOrDIMACSOpt.get, generatePseudoRulesForNogoods = generatePseudoRulesForNogoodsForSATMode)
+      DIMACPlainSparser.parseDIMACS(inputData.spanningProgramAspifOrDIMACSOpt.get)
 
-    log("inittimer after Parse: " + (System.nanoTime() - timerInitNs) / 1000000 + " ms")
+    log("inittimer after Parse: " + timerToElapsedMs(timerInitNs) + " ms")
 
-    val prep: Preparation = new solving.Preparation(aspifOrDIMACSParserResult, inputData.costsOpt, satMode = satMode,
-      omitAtomNogoods = false /*aspifOrDIMACSParserResult.directClauseNogoodsOpt.isDefined*/)
+    val prep: Preparation = new solving.Preparation(aspifOrDIMACSParserResult, inputData.costsOpt, satModeR = satMode,
+      omitAtomNogoods = false)
 
-    log("inittimer after Preparation: " + (System.nanoTime() - timerInitNs) / 1000000 + " ms")
+    log("inittimer after Preparation: " + timerToElapsedMs(timerInitNs) + " ms")
 
     var res = mutable.Seq[Array[Pred]]()
 
-    val trialDurations = (1 to noOfBenchmarkTrials).map(trial => {
+    val warmupTrialNo = if (noOfMinibenchmarkTrials > 1) 10 else 0
 
-      println("Solving... (trial " + trial + ")")
+    val trialDurations = (1 to warmupTrialNo + noOfMinibenchmarkTrials).map(trial => {
+
+      if (verbose)
+        println("Solving... " + (if (noOfMinibenchmarkTrials > 1) "(trial " + trial + ")" else ""))
 
       val startTrialTimeNs = System.nanoTime()
 
       val solver = new SolverMulti(prep)
 
-      res = solver.sampleMulti(inputData.costsOpt, requestedNoOfModelsBelowThresholdOrAuto = noOfModels, satMode = satMode, prep = prep,
-        requestedNumberOfModels = noOfModels, threshold = thresholdOpt.getOrElse(0.001d), maxIt = 100000)
+      val sampleMultiConf = solver.SampleMultiConf(inputData.costsOpt,
+        requestedNoOfModelsBelowThresholdOrAuto = noOfModels,
+        prep = prep,
+        requestedNumberOfModels = noOfModels,
+        threshold = thresholdOpt.getOrElse(0.001d),
+        maxIt = 100000)
 
-      System.nanoTime() - startTrialTimeNs
+      res = solver.sampleMulti(sampleMultiConf)
+
+      if (trial <= warmupTrialNo) 0l else System.nanoTime() - startTrialTimeNs
 
     })
 
-    val avgDuration = ((trialDurations.sum.toDouble / noOfBenchmarkTrials.toDouble) / 1000000).toInt
+    log("inittimer after solving & sampling: " + timerToElapsedMs(timerInitNs) + " ms")
 
-    if (noOfBenchmarkTrials > 1) /*println("\nOverall duration solving and sampling: " + avgDuration + " ms\n") else*/
-      println("\n@@@@@@@@ Average overall duration solver.sampleMulti: " + avgDuration + " ms\n")
+    val avgDuration = ((trialDurations.sum.toDouble / noOfMinibenchmarkTrials.toDouble) / 1000000).toInt
+
+    if (noOfMinibenchmarkTrials > 1) /*println("\nOverall duration solving and sampling: " + avgDuration + " ms\n") else*/
+      println("\n@@@@@@ Average overall duration solver.sampleMulti: " + avgDuration + " ms\n")
 
     (res, aspifOrDIMACSParserResult)
 
@@ -733,13 +774,13 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
     unsafeRefl.setAccessible(true)
 
-    IntArrayUnsafe.UNSAFE = unsafeRefl.get(null).asInstanceOf[Unsafe]
+    val unsafe = unsafeRefl.get(null).asInstanceOf[Unsafe]
 
-    LongArrayUnsafe.UNSAFE = IntArrayUnsafe.UNSAFE
+    IntArrayUnsafe.init(unsafe)
 
-    IntArrayUnsafe.init()
+    LongArrayUnsafe.init(unsafe)
 
-    LongArrayUnsafe.init()
+    FloatArrayUnsafe.init(unsafe)
 
     if (debug) {
 
@@ -773,10 +814,11 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
         case Nil => argsList
 
-        case ("--version" | "-v") :: tail => {
+        case ("--version" | "-v" | "--about") :: tail => {
 
           println(copyrightAndVersionText)
-          println(thirdParty)
+
+          println(thirdPartyLibs)
 
           sys.exit(0)
 
@@ -787,6 +829,14 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
           println(copyrightAndVersionText + "\n\n" + helpText)
 
           sys.exit(0)
+
+        }
+
+        case ("--verbose") :: tail => {
+
+          verbose = true
+
+          nextArg(argsList, tail)
 
         }
 
@@ -854,6 +904,12 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
         }
 
+        case "-mse" :: tail => {
+
+          nextArg(argsList ++ List('mse -> List()), tail)
+
+        }
+
         case "--showaux" :: tail => {
 
           nextArg(argsList ++ List('showaux -> List()), tail)
@@ -878,29 +934,29 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
 
     val parsedArgsMap: mutable.HashMap[Symbol, List[String]] = mutable.HashMap[Symbol, List[String]]().++(parsedArgs.toMap)
 
-    log("\notime args: " + (System.nanoTime() - timerOverallNs) / 1000000 + " ms")
+    log("\notime args: " + timerToElapsedMs(timerOverallNs) + " ms")
 
     val noOfModels = parsedArgsMap.getOrElse('n, List(defaultNoOfModelsStr)).head.toInt
 
     val thresholdOpt: Option[Double] = parsedArgsMap.get('t).map(_.head.toDouble)
 
-    //val sampleConfOverrideJsonStrOpt: Option[String] = parsedArgsMap.get('samplconf).map(_.head)
+    val showaux = parsedArgsMap.contains('showaux)
 
-    val showaux = parsedArgsMap.get('showaux).isDefined
+    val mse = parsedArgsMap.contains('mse)
 
     val inputData = if (parsedArgs.exists(_._1 == 'enforceReadingFromSTDIN) || !parsedArgs.exists(_._1 == 'inputFile))
-      readInputData(None).get // we read from STDIN
+      readInputData(None, mse = mse).get // we read from STDIN
     else {
 
       val fileName = parsedArgsMap.get('inputFile).get.head
 
-      val inputDataOpt: Option[InputData] = readInputData(Some(fileName))
+      val inputDataOpt: Option[InputData] = readInputData(Some(fileName), mse = mse)
 
       inputDataOpt.get
 
     }
 
-    log("\notimer inputData: " + (System.nanoTime() - timerOverallNs) / 1000000 + " ms")
+    log("\notimer inputData: " + timerToElapsedMs(timerOverallNs) + " ms")
 
     val satMode = !inputData.spanningProgramAspifOrDIMACSOpt.get.startsWith("asp")
 
@@ -908,7 +964,7 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
       invokeSampler(inputData, noOfModels, thresholdOpt, showaux = showaux,
         satMode = satMode, additionalSolverArgs = additionalSolverArgs)
 
-    if(!sampledModelsWithSymbols.isEmpty) {
+    if (!sampledModelsWithSymbols.isEmpty) {
 
       val hideAuxPreds: Int = 4 // TODO
 
@@ -920,27 +976,29 @@ Guava: Google Core Libraries for Java (https://github.com/google/guava)
       else
         sampledModelsWithSymbols
 
-      val symbolsSeq = parserResult.symbols.toSeq
+      val symbolsSeq = parserResult.symbols //.toSeq
 
       val sampledModelsWithSymbolsCleaned: mutable.Seq[Array[Pred]] = if (!satMode) sampledModelsWithSymbolsCleanedR else
         sampledModelsWithSymbolsCleanedR.map((model: Array[Pred]) => {
 
-          symbolsSeq.map(symbol => if (model.contains(symbol)) symbol else "-" + symbol).toArray
+          symbolsSeq.map(symbol => if (model.contains(symbol)) symbol else "-" + symbol)
 
         })
 
       if (printAnswers)
         sampledModelsWithSymbolsCleaned.zipWithIndex.foreach { case (model, index) =>
-          System.out.println("Answer: " + (index + 1) + "\n" + model.mkString(" ") /*+ (if(satMode) " 0" else "")*/)
+          System.out.println("Answer: " + (index + 1) + "\n" + model.mkString(" "))
         }
 
-      System.out.println("\nSATISFIABLE")  // this MUST be printed directly after the list of answers!
+      System.out.println("SATISFIABLE") // this must be printed _directly_ after the list of answers (no empty line allowed in between)
 
     }
 
-    println("\nOverall time incl parsing/pre-/post-processing: " + (System.nanoTime() - timerOverallNs) / 1000000 + " ms")
+    val overallTimeMs = timerToElapsedMs(timerOverallNs) // doesn't include JVM startup time
 
-    if (!omitSysExit0)  // we need exit if jar isn't loaded dynamically into the current JVM. Otherwise, we need return
+    println("\nOverall time spent in DelSAT (incl parsing/pre-/post-processing): " + overallTimeMs + " ms (" + (overallTimeMs / 1000f) + " sec)")
+
+    if (!omitSysExit0) // we need exit if jar isn't loaded dynamically into the current JVM. Otherwise, we need return
       sys.exit(0)
     else
       return

@@ -3,7 +3,9 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
-  * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
   *
   */
 
@@ -29,7 +31,7 @@ class DifferentialFunctionFactoryStasp extends DifferentialFunctionFactory[Doubl
 
     }
 
-    @deprecated override def diff(i_v: Variable[DoubleReal]): DifferentialFunction[DoubleReal] = {
+    @deprecated override def diff(i_v: Variable[DoubleReal]): DifferentialFunction[DoubleReal] = {  // subject to removal in one of the next versions of DelSAT
 
       //prt("Diff phi wrt " + i_v + "...")
 

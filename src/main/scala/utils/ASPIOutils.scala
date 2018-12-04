@@ -1,7 +1,11 @@
 /**
-  * ASPIOutils
+  * DelSAT
   *
-  * Copyright (c) 2017-2018 Matthias Nickles
+  * Copyright (c) 2018 Matthias Nickles
+  *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
   *
   */
 
@@ -13,13 +17,14 @@ import java.text.MessageFormat
 import java.util.UUID
 import java.util.jar.JarFile
 
+import it.unimi.dsi.fastutil.ints.IntArrayList
+
 import scala.collection.{Set, mutable}
 import scala.collection.mutable.ArrayBuffer
 import scala.io.BufferedSource
 import scala.sys.process._
 import scala.language.postfixOps
 import scala.util.matching.Regex
-
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 
@@ -34,9 +39,9 @@ package object aspIOutils {
 
   val auxPredPrefixBase = "__aux_" // prefixes for newly introduced atom symbols
 
-  def isAuxAtom(pred: String) = pred.contains/*startsWith*/(auxPredPrefixBase)   // "contains" as pred could also be param(__aux...)
+  def isAuxAtom(pred: String) = pred.contains /*startsWith*/ (auxPredPrefixBase) // "contains" as pred could also be param(__aux...)
 
-  /* The following kinds of auxiliary symbols are currently used in DelSAT, prasp2 and staspquery:
+  /* The following kinds of auxiliary symbols are currently reserved:
 
       - auxiliary atoms used to desugar :- constraints (symbol contains _F_)
       - helper atoms in automatically generated spanning formulas (symbol contains _R_)
@@ -48,7 +53,7 @@ package object aspIOutils {
 
   def auxPredPrefix(kind: String) = auxPredPrefixBase + kind + "_" + parserInstanceCount.get() + "_"
 
-  def newFalsePredsPrefix = auxPredPrefix("F")  // prefixes for newly introduced auxiliary atoms for desugaring :- constraints (see aspif parser).
+  def newFalsePredsPrefix = auxPredPrefix("F") // prefixes for newly introduced auxiliary atoms for desugaring :- constraints (see aspif parser).
 
   def isFalsAuxAtom(pred: String) = pred.startsWith(auxPredPrefixBase) && pred.contains("F")
 
@@ -62,7 +67,7 @@ package object aspIOutils {
 
   def newOtherAuxAtomPrefix = auxPredPrefix("O") // for all other newly introduced auxiliary atoms
 
-  @inline def auxAtomSymbol(prefix: String, index: Int, encloseUncertainAuxWithParam: Boolean = false) = if(encloseUncertainAuxWithParam)
+  @inline def auxAtomSymbol(prefix: String, index: Int, encloseUncertainAuxWithParam: Boolean = false) = if (encloseUncertainAuxWithParam)
     "param_" + prefix + index else prefix + index
 
   def externalCmdWithInput(cmd: String,
@@ -72,7 +77,7 @@ package object aspIOutils {
 
     val errLines = ArrayBuffer[String]()
 
-    def pipe2external(cmd: String): Object = if(sendToStdinOpt.isEmpty && redirectOutputToFileOpt.isEmpty)
+    def pipe2external(cmd: String): Object = if (sendToStdinOpt.isEmpty && redirectOutputToFileOpt.isEmpty)
       cmd lineStream_! ProcessLogger(line => errLines.append(line))
     else if (sendToStdinOpt.isEmpty)
       (cmd lineStream_! ProcessLogger(line => errLines.append(line))) #> redirectOutputToFileOpt.get
@@ -178,7 +183,7 @@ package object aspIOutils {
 
           ite.getCause match {
 
-            case c: java.util.concurrent.ExecutionException => c.getCause  //...
+            case c: java.util.concurrent.ExecutionException => c.getCause //...
 
             case x => x
 
@@ -440,7 +445,7 @@ package object aspIOutils {
     * Parses lines with answer sets or propositional assignments.
     *
     * @param lines the lines emitted by the solver
-    * @return      an indexed sequence of models (either answer sets or propositional assignments (SAT-mode))
+    * @return an indexed sequence of models (either answer sets or propositional assignments (SAT-mode))
     */
   def extractModels(lines: IndexedSeq[String]): IndexedSeq[Model] = {
 
@@ -464,8 +469,9 @@ package object aspIOutils {
     }
     }.unzip._2
 
-    val modelsStrs1 = modelsStrs0.zipWithIndex.map{ case (filteredLineNo: Int, i: Int) =>
-      ((filteredLineNo + 1) until (if(i < modelsStrs0.length - 1) modelsStrs0(i+1) else filteredLineNo + 1)) }
+    val modelsStrs1 = modelsStrs0.zipWithIndex.map { case (filteredLineNo: Int, i: Int) =>
+      ((filteredLineNo + 1) until (if (i < modelsStrs0.length - 1) modelsStrs0(i + 1) else filteredLineNo + 1))
+    }
 
     modelsStrs1.flatMap(rangeOfAnswer => {
 
@@ -476,14 +482,14 @@ package object aspIOutils {
         val z = if (!claspSATmode)
           y
         else
-          y.drop(1).takeWhile(_ != "0")  // with clasp in SAT-mode, the output lines have form v a1 -a2 a3 ... or (last line) v ... 0
+          y.drop(1).takeWhile(_ != "0") // with clasp in SAT-mode, the output lines have form v a1 -a2 a3 ... or (last line) v ... 0
         // (whereas with DelSAT in SAT-mode, output lines have form a1 -a2 a3 ..., so we parse them just like answer sets)
 
         z
 
       })
 
-      if(x.isEmpty)
+      if (x.isEmpty)
         None
       else
         Some(x.reduce(_ ++ _))
@@ -538,8 +544,8 @@ package object aspIOutils {
 
   case class DisjRule(headPosAtoms: Set[Pred] = Set[Pred](), headNegAtoms: Set[Pred] = Set[Pred](),
                       bodyPosAtoms: Set[Pred] = Set[Pred](), bodyNegAtoms: Set[Pred] = Set[Pred](),
-                      // ^ Not all possible combinations allowed by all sampling and querying approaches (most accept normal rules only!).
-                      // If multiple head atoms, there semantics is disjunction.
+                      // ^ Which rule types are actually supported depends of course on solver and its preprocessor.
+                      // If multiple distinct head atoms are given, their semantics is disjunction.
                       weight: (Double, Double) = (1d, 1d),
                       var blit: Int = -1) {
 
@@ -717,7 +723,7 @@ package object aspIOutils {
 
   @inline def linesTrimmed(s: String): List[String] = {
 
-    s.linesWithSeparators.map(_.trim).toList  // because of name clash of Scala's lines with JDK 11 lines method
+    s.linesWithSeparators.map(_.trim).toList // because of name clash of Scala's lines with JDK 11 lines method
 
   }
 
@@ -727,11 +733,11 @@ package object aspIOutils {
 
     var i = 0
 
-    while(i < a.length) {
+    while (i < a.length) {
 
       val e = a(i)
 
-      if(pred(e))
+      if (pred(e))
         b += e
 
       i += 1
@@ -750,11 +756,11 @@ package object aspIOutils {
 
     var i = 0
 
-    while(i < a.length) {
+    while (i < a.length) {
 
-      val b = by(a(i)) - (if(shuffle && rdg.nextBoolean) Double.MinPositiveValue else 0d)
+      val b = by(a(i)) - (if (shuffle && rdg.nextBoolean) Double.MinPositiveValue else 0d)
 
-      if(b > max) {
+      if (b > max) {
 
         max = b
 
@@ -770,7 +776,7 @@ package object aspIOutils {
 
   }
 
-  @inline def splitByRepChar(s: String, delim1: Char = ' ', delim2: Char = '\t') = {
+  @inline def splitByRepChar(s: String, delim1: Char = ' ', delim2: Char = '\t'): Array[String] = {
 
     val ll = new mutable.ArrayBuilder.ofRef[String]
 
@@ -788,7 +794,7 @@ package object aspIOutils {
 
         i = i + 1
 
-        while(s.charAt(i) == delim1 || s.charAt(i) == delim2) { // e.g., "token1  token2" gives ["token1", "token2"], not ["token1", " ", "token2"]
+        while (s.charAt(i) == delim1 || s.charAt(i) == delim2) { // e.g., "token1  token2" gives ["token1", "token2"], not ["token1", " ", "token2"]
 
           i += 1
 
@@ -802,10 +808,60 @@ package object aspIOutils {
 
     }
 
-    if(s.last != delim1 && s.last != delim2)
+    if (s.last != delim1 && s.last != delim2)
       ll.+=(s.substring(index))
 
     ll.result()
+
+  }
+
+  @inline def splitByRepCharToInts(s: Array[Char]): IntArrayList = {
+
+    // s must be trimmed
+
+    //val s = "123   65 3 -1  -987 7 0"
+
+    val ll = new IntArrayList(10)
+
+    var index = 0
+
+    var i = 0
+
+    val sl = s.length
+
+    while (i < sl) {
+
+      while (i < sl && s(i) > ' ') // e.g., "token1  token2" gives [token1, token2], not [token1", " ", token2]
+        i += 1
+
+      var intVal = 0
+
+      var mult = if (s(index) == '-') {
+        index += 1; -1
+      } else 1
+
+      var il = i
+
+      do {
+
+        il -= 1
+
+        intVal += (s(il) - '0') * mult
+
+        mult *= 10
+
+      } while (il > index)
+
+      ll.add(/*if(mult < 0) -intVal else*/ intVal)
+
+      while (i < sl && (s(i) <= ' '))
+        i += 1
+
+      index = i
+
+    }
+
+    ll
 
   }
 

@@ -1,169 +1,302 @@
 /*
- * Parser for DIMACS-CNF. Not a general-purpose DIMACS-CNF parser - for internal use in the DelSAT project only.
+ * Parser for DIMACS-CNF in DelSAT. NOT a general-purpose DIMACS-CNF parser - for use in the DelSAT project only.
  *
  * Copyright (c) 2018 Matthias Nickles
  *
- * THIS CODE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+ * THIS CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
  *
  */
 
 package parsing
 
 import commandline.delSAT
-import parsing.AspifPlainParser.{AspifRule, aspifRulesToEliRules}
 
-import aspIOutils._
+import parsing.AspifPlainParser.AspifRule
+
+import it.unimi.dsi.fastutil.ints.IntArrayList
 
 import sharedDefs._
 
+import sun.misc.Contended
+
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+/**
+  * @author Matthias Nickles
+  */
 object DIMACPlainSparser {
 
-  def parseDIMACS(dimacs_CNF_Pr: String, generatePseudoRulesForNogoods: Boolean): AspifOrDIMACSPlainParserResult = {
+  def parseDIMACS(dimacs_CNF_Pr: String): AspifOrDIMACSPlainParserResult = {
 
-    val dimacsLinesStripped: Array[String] = dimacs_CNF_Pr.split("\\r?\\n").filterNot(_.startsWith("c")) /*.distinct*/ .map(_.trim)
+    val dimacsParseTimerNs = System.nanoTime()
 
-    val hStr = dimacsLinesStripped(0).stripPrefix("p cnf ").trim
+    val headerStartIt: Option[Eli] = "(\\A|\\n)\\s*p\\s+cnf\\s+".r.findFirstMatchIn(dimacs_CNF_Pr).map(_.start)
+
+    if (headerStartIt.isEmpty)
+      delSAT.stomp(-100)
+
+    val headerStart: Int = headerStartIt.get
+
+    val hStr0 = dimacs_CNF_Pr.substring(headerStart)
+
+    val hStr = hStr0.dropWhile(!_.isDigit).trim
 
     val noOfVars = hStr.takeWhile(_.isDigit).toInt
 
-    val noOfClauses = hStr.reverse.takeWhile(_.isDigit).reverse.toInt
+    val noOfClauses = hStr.dropWhile(_.isDigit).trim.takeWhile(_.isDigit).toInt
+
+    val headerEnd = dimacs_CNF_Pr.indexOf("\n", headerStart + 1)
+
+    val s = /*Example: """
+12 345 -5  -76 0
+  -40  33 -2  1   0
+8 0
+ 1 2 77
+-234 9  0
+0
+    """*/ if (headerEnd == -1) "" else dimacs_CNF_Pr.substring(headerEnd)
 
     val symbols = (1 to noOfVars).map(_.toString).to[ArrayBuffer]
 
     val noOfPosAtomElis = symbols.length
 
-    val noOfBodyExtraNogoods = Int.MaxValue //50000
+    @Contended
+    val clauses = Array.ofDim[Array[Int]](noOfClauses)
 
-    var rmNoOfBodyExtraNogoods = noOfBodyExtraNogoods
+    val extraNogoods = ArrayBuffer[ArrayEliUnsafe]()
 
-    val newFalseAspifElisBoundaryForDIMACS = noOfPosAtomElis + 1
+    @deprecated val generatedAspifRules = ArrayBuffer[AspifRule]() // for experimental blit generation
 
-    val generatedAspifRules = ArrayBuffer[AspifRule]()
+    val headTokensForExtraNogoods: mutable.Set[Int] = if (genBodyLitsFromSATClauses == 1d)
+      ((-noOfVars to -1) ++ (1 to noOfVars)).to[mutable.Set]
+    else if (genBodyLitsFromSATClauses > 0d)
+      Seq.fill((noOfVars.toDouble * genBodyLitsFromSATClauses).toInt)({
 
-    val clauseTokensStr = ArrayBuffer[ArrayBuffer[String]](ArrayBuffer[String]())
+        val rvar = rngGlobal.nextInt(noOfVars) + 1
 
-    dimacsLinesStripped.tail.foreach(line => {
+        if (rngGlobal.nextBoolean())
+          rvar
+        else
+          -rvar
 
-      val tokensLocal: Array[String] = splitByRepChar(line)
+      }).to[mutable.HashSet]
+    else
+      mutable.HashSet[Int]()
 
-      if (line.startsWith("."))
-        delSAT.stomp(-103)
+    val minClauseLengthForExtraNogoods = 0
 
-      clauseTokensStr.last.appendAll(tokensLocal)  // we use this iterative foldLeft-emulation because clauses can range over multiple lines
+    var noOfBlits = 0 // unfortunately we need to determine this value before we can start generating nogoods
 
-      if (tokensLocal.last == "0") {
+    val directClauseNogoods = Array.ofDim[ArrayEliUnsafe](noOfClauses) // for debugging purposes only
 
-        clauseTokensStr.append(ArrayBuffer[String]())
+    var clauseInc = 0
 
-      }
+    delSAT.log("dimacsParseTimerNs 0: " + timerToElapsedMs(dimacsParseTimerNs) + " ms")
 
-    })
+    val llc = new IntArrayList(128)
 
-    val clauseTokens = clauseTokensStr.dropRight(1).map(ct => {
+    var i = 0
 
-      assert(ct.last == "0", "Error: unsupported syntax in DIMACS input: " + ct.mkString(" "))
+    val sl = s.length
 
-      val clauseNumTokens: Array[Int] = {
+    while (i < sl && (s(i) <= ' '))
+      i += 1
 
-        try {
-          ct.map(_.toInt)
-        } catch {
+    var index = i
 
-          case e => {
+    @inline def negateEliWithoutBlis(eli: Eli): Eli = if (eli < noOfPosAtomElis)
+      eli + noOfPosAtomElis
+    else
+      eli - noOfPosAtomElis
 
-            println("Error: " + e + "\n" + ct.map(t => "\"" + t + "\"").mkString(","))
+    while (i < sl) {
 
-            sys.exit(-1)
+      while (i < sl && s(i) > ' ')
+        i += 1
 
-          }
+      var intVal = 0
 
-            ArrayBuffer[Int]()
+      var mult = if (s(index) == '-') {
+
+        index += 1
+
+        -1
+
+      } else 1
+
+      var il = i
+
+      do {
+
+        il -= 1
+
+        intVal += (s(il) - '0') * mult
+
+        mult *= 10
+
+      } while (il > index)
+
+      if (intVal == 0) {
+
+        if (genBodyLitsFromSATClauses > 0d || delSAT.enforceSanityChecks) {
+
+          clauses(clauseInc) = llc.toIntArray
+
+          lazy val noOfHeadsForPseudoRule = clauses(clauseInc).count(headTokensForExtraNogoods.contains(_))
+
+          if (genBodyLitsFromSATClauses > 0d && clauses(clauseInc).length >= minClauseLengthForExtraNogoods &&
+            noOfHeadsForPseudoRule > 0)
+            noOfBlits += noOfHeadsForPseudoRule
 
         }
 
-      }.dropRight(1).toArray
+        if (genBodyLitsFromSATClauses == 0d) { // this branch works only if there are not blits:
 
-      if (generatePseudoRulesForNogoods && clauseNumTokens.length > 1) { // experimental, optional
+          directClauseNogoods(clauseInc) = new ArrayEliUnsafe(llc.size())
 
-        // we "fake" aspif rules, so that we can later generate body nogoods from it.
+          var i = 0
 
-        val headAspifElis = clauseNumTokens //.filter(_ > 0)
+          while (i < llc.size) {
 
-        headAspifElis.foreach(headAspifEli => {
+            val token = llc.getInt(i)
 
-          if (rngGlobal.nextFloat() <= 1f) { // NB: if < 1f, we'd need to disable generation of { head, Fblit1, Fblit2, ...} nogoods
+            directClauseNogoods(clauseInc).update(i, if (token < 0) (-token) - 1 else negateEliWithoutBlis(token - 1))
 
-            val (bodyPosAspifElis, bodyNegAspifElis) = clauseNumTokens.filterNot(_ == headAspifEli).map(-_).partition(_ >= 0)
-
-            val aspifRule = AspifRule(headPosAtomsAspifElis = if (headAspifEli > 0) Set(headAspifEli) else Set(),
-              headNegAtomsAspifElis = if (headAspifEli < 0) Set(headAspifEli) else Set(),
-              bodyPosAtomsAspifElis = bodyPosAspifElis.toSet,
-              bodyNegAtomsAspifElis = bodyNegAspifElis.toSet)
-
-            //println("Aspif pseudo-rule for body nogood generation: " + aspifRule.toString)
-
-            generatedAspifRules.append(aspifRule)
+            i += 1
 
           }
 
-        })
+        }
 
-      }
+        clauseInc += 1
 
-      clauseNumTokens
+        llc.clear()
 
-    }).toArray
+      } else
+        llc.add(intVal)
 
-    assert(clauseTokens.length == noOfClauses, "Error: Invalid input (number of clauses does not match declared number of clauses)")
+      while (i < sl && (s(i) <= ' '))
+        i += 1
 
-    val noOfBlits = generatedAspifRules.groupBy(rule => (rule.bodyPosAtomsAspifElis, rule.bodyNegAtomsAspifElis)).keys.size // only different bodies get their own blit
+      index = i
 
-    val posNegEliBoundary = noOfPosAtomElis + noOfBlits
+    }
 
-    @inline def isPosEli(eli: Eli) = eli < posNegEliBoundary
+    if (genBodyLitsFromSATClauses > 0d) { // in case we generate body literals (blits, experimental) we need a second pass:
 
-    @inline def negateEli(eli: Eli): Eli = {
+      val posNegEliBoundary = noOfPosAtomElis + noOfBlits
 
-      if (isPosEli(eli))
+      @inline def isPosEli(eli: Eli) = eli < posNegEliBoundary
+
+      @inline def negateEli(eli: Eli): Eli = if (isPosEli(eli))
         eli + posNegEliBoundary
       else
         eli - posNegEliBoundary
 
+      @inline def tokenToEli(intVal: Int): Eli = if (intVal < 0) negateEli((-intVal) - 1) else intVal - 1
+
+      @inline def tokenToNegEli(intVal: Int): Eli = if (intVal < 0) (-intVal) - 1 else negateEli(intVal - 1)
+
+      var currentBlit = noOfPosAtomElis
+
+      i = 0
+
+      while (i < clauseInc) {
+
+        val clauseWithElis = clauses(i).map(tokenToNegEli(_))
+
+        directClauseNogoods(i) = new ArrayEliUnsafe(clauseWithElis)
+
+        if (clauseWithElis.length >= minClauseLengthForExtraNogoods) { // experimentally and optionally (inactive by default), we generate further nogoods
+          // (besides the directClauseNogoods) which define or contain body literals. For
+          // approach to nogoods with body literals see Gebser et al: Conflict-Driven Answer Set Solving (and also see
+          // analogous code in Preparation.scala for nogood generation from real (ASP) rules)
+
+          val headTokensForPseudoRules = clauses(i).filter(headTokensForExtraNogoods.contains(_))
+
+          headTokensForPseudoRules.map(headToken => {
+
+            val headEli: Eli = tokenToEli(headToken)
+
+            val bodyElisNegated: Array[Eli] = clauses(i).filterNot(_ == headEli).map(token => negateEli(tokenToEli(token)))
+
+            val blitEli = currentBlit
+
+            currentBlit += 1
+
+            // we firstly generate nogoods which define the blit (\Delta(ß))
+
+            val bigDeltaBeta = bodyElisNegated.map(bodyEli => new ArrayEliUnsafe(Array(blitEli, negateEli(bodyEli))))
+
+            val deltaBeta = new ArrayEliUnsafe(bodyElisNegated.:+(negateEli(blitEli)))
+
+            extraNogoods ++= bigDeltaBeta
+
+            extraNogoods += deltaBeta
+
+            extraNogoods += new ArrayEliUnsafe(Array(negateEli(headEli), blitEli))
+
+          })
+
+        }
+
+        i += 1
+
+      }
+
+      assert(currentBlit - noOfPosAtomElis == noOfBlits)
+
     }
-
-    @inline def varToEli(v: Int) = if (v < 0) negateEli(-v - 1) else v - 1
-
-    val directClauseNogoods: ArrayBuffer[Array[Eli]] = clauseTokens.map(clauseNumTokens => {
-
-      // We translate clauses directly into nogoods...
-
-      val nogoodPosAtomsElis: Array[Eli] = clauseNumTokens.filter(_ < 0).map(negVariable => (-negVariable) - 1)
-
-      val nogoodNegAtomsElis: Array[Eli] = clauseNumTokens.filter(_ > 0).map(posVariable => negateEli(posVariable - 1))
-
-      nogoodPosAtomsElis ++ nogoodNegAtomsElis
-
-    }).to[ArrayBuffer]
 
     assert(noOfClauses == directClauseNogoods.length)
 
-    if (!generatePseudoRulesForNogoods)
-      AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
-        rulesOrClauseNogoods = Right(/*if (generatePseudoRulesForNogoodsForSATMode)bodyNogoods ++ directClauseNogoods else*/ directClauseNogoods),
-        noOfPosBlits = 0 /*noOfPosBlits*/ , externalAtomElis = Seq(), directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
-        clauseTokensOpt = Some(clauseTokens) /*we retain these just for debugging (cross-check) purposes*/)
-    else {
+    assert(noOfClauses == clauses.length)
 
-      val (rules, noOfPosBlits, emptyBodyBlit) = aspifRulesToEliRules(symbols.toArray, generatedAspifRules, aspifEliToSymbolOpt = None)
+    if (delSAT.verbose)
+      println("Parsing time: " + timerToElapsedMs(dimacsParseTimerNs) + " ms")
+
+    {
+
+      if (extraNogoods.isEmpty)
+        AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
+          rulesOrClauseNogoods = Right(directClauseNogoods),
+          noOfPosBlits = noOfBlits,
+          externalAtomElis = Seq() /*TODO*/ ,
+          directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
+          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /* we retain these just for debugging (cross-check) purposes */)
+      else {
+
+        if (delSAT.verbose)
+          println("#extra nogoods with blits generated: " + extraNogoods.length)
+
+        val fullClauseNogoods = if (genBodyLitsFromSATClauses == 1d) extraNogoods.toArray else (extraNogoods ++ directClauseNogoods).toArray
+
+        AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
+          rulesOrClauseNogoods = Right(fullClauseNogoods),
+          noOfPosBlits = noOfBlits,
+          externalAtomElis = Seq() /*TODO*/ ,
+          directClauseNogoodsOpt = Some(fullClauseNogoods.clone() /*otherwise this would get modified in-place*/),
+          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /*we retain these just for debugging (cross-check) purposes*/)
+
+      }
+
+    } /*else { // the following approach to combine clause nogoods with synthetic ASP rules is supported by Preparation.scala
+     // but not currently used:
+
+      val (rules, noOfPosBlits, _) = aspifRulesToEliRules(symbols.toArray, generatedAspifRules, aspifEliToSymbolOpt = None)
+
+      if (delSAT.verbose)
+        println("Generated " + rules.length + " additional rules with " + noOfPosBlits + " blits")
 
       AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
         rulesOrClauseNogoods = Left(rules),
-        noOfPosBlits = noOfPosBlits, externalAtomElis = Seq(), directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
-        clauseTokensOpt = Some(clauseTokens) /*we retain these just for debugging (cross-check) purposes*/)
+        noOfPosBlits = noOfPosBlits,
+        externalAtomElis = Seq() /*TODO*/ ,
+        directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
+        clauseTokensOpt = Some(clauses) /* we retain these just for debugging (cross-check) purposes */)
 
-    }
+    } */
 
   }
 

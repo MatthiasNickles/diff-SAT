@@ -1,23 +1,25 @@
 /**
-  * Parser for a subset of the ASP Intermediate Format (aspif).  *
-  * Not a general-purpose aspif parser - for internal use in the DelSAT project only.
+  * Parser for a subset of the ASP Intermediate Format (aspif) in DelSAT. NOT a general-purpose aspif parser -
+  * for internal use in the DelSAT project only.
   *
   * Copyright (c) 2018 Matthias Nickles
   *
   * THIS CODE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
   *
+  * Plain aspif file format (of which we support a subset): see "A Tutorial on Hybrid Answer Set Solving with clingo",
+  * https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6
   *
-  * Plain aspif file format: See "A Tutorial on Hybrid Answer Set Solving with clingo", https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6
-  *
-  * Currently supported: Normal rules, #show entries (partially), disjunctive heads via unfold/shift.
+  * Currently directly supported by DelSAT: Normal rules, #show entries (partially), disjunctions in heads via unfold/shift.  *
   * Use a preprocessor such as Clingo 5 (options --trans-ext=all --pre=aspif) or lp2normal to translate extended rules
-  * (choice, weight rules...) to normal rules.
+  * (e.g., choice rules, weight rules...) to normal rules.
   *
   */
 
 package parsing
 
+import commandline.delSAT
 import commandline.delSAT.{debug, log}
+
 import sharedDefs._
 
 import aspIOutils._
@@ -25,6 +27,9 @@ import aspIOutils._
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Map, Set, mutable}
 
+/**
+  * @author Matthias Nickles
+  */
 object AspifPlainParser {
 
   type AspifEli = Int
@@ -44,6 +49,8 @@ object AspifPlainParser {
   }
 
   val timerParserNs = System.nanoTime()
+
+  val pseudoBlitOffs = 666660000
 
   def parseAspif(aspifStr: String,
                  shiftAndUnfoldForDisjunctions: Boolean /* <- translate away disjunctions in the head; sound, but only complete for large
@@ -92,11 +99,12 @@ object AspifPlainParser {
 
     val aspifExternalLines = aspifExternalLinesB.result()
 
-    log("parsetimer 1: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
+    log("parsetimer 1: " + timerToElapsedMs(timerParserNs) + " ms")
 
-    assert(aspifExternalLines.length + aspifRulesStrLines.length + aspifNamedSymbolsLines.length + 1 /*<- for the 0 at the end*/ + 1 /*first line*/ ==
-      aspifLines.length, "Error: Unsupported line type(s) in aspif input data:\n " +
-      aspifLines.filter(line => !line.startsWith(" 1") && !line.startsWith("4 ") /*&& !line.startsWith("20")*/ && line.trim != "0").take(5).mkString("\n ") + "\n...")
+    if (aspifExternalLines.length + aspifRulesStrLines.length + aspifNamedSymbolsLines.length + 1 /*<- for the 0 at the end*/ + 1 /*first line*/ !=
+      aspifLines.length)
+      delSAT.stomp(-102, "Unsupported line type(s) in aspif input data:\n " +
+        aspifLines.filter(line => !line.startsWith(" 1") && !line.startsWith("4 ") /*&& !line.startsWith("20")*/ && line.trim != "0").take(5).mkString("\n ") + "\n...")
 
     val aspifEliToSymbol = mutable.HashMap[AspifEli, String]()
 
@@ -104,7 +112,7 @@ object AspifPlainParser {
 
     aspifRules.sizeHint(aspifRulesStrLines.length)
 
-    log("parsetimer 2: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
+    log("parsetimer 2: " + timerToElapsedMs(timerParserNs) + " ms")
 
     var si = 0
 
@@ -116,7 +124,8 @@ object AspifPlainParser {
 
       val v3 = Integer.parseInt(aspifNamedSymbolsLineTokens(3))
 
-      assert(v3 <= 1, "Error: Unsupported conditional #show statement\n encoded in line " + aspifNamedSymbolsLines(si))
+      if (v3 > 1)
+        delSAT.stomp(-102, "Unsupported conditional #show statement\n encoded in line " + aspifNamedSymbolsLines(si))
 
       val newSymbol = aspifNamedSymbolsLineTokens(2)
 
@@ -141,11 +150,8 @@ object AspifPlainParser {
          from #show x:y. (where y = literal 21)
        */
 
-      assert(aspifEliToSymbol.get(newSymbolAspifEli) == None, {
-
-        "Error: Unsupported line in aspif input. Ambiguous #show for predicate " + newSymbolAspifEli
-
-      })
+      if (aspifEliToSymbol.get(newSymbolAspifEli) != None)
+        delSAT.stomp(-102, "Unsupported line in aspif input. Ambiguous #show for predicate " + newSymbolAspifEli)
 
       aspifEliToSymbol.update(newSymbolAspifEli, newSymbol)
 
@@ -153,7 +159,7 @@ object AspifPlainParser {
 
     }
 
-    log("parsetimer 3: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
+    log("parsetimer 3: " + timerToElapsedMs(timerParserNs) + " ms")
 
     var disjWarningShow = false
 
@@ -169,12 +175,12 @@ object AspifPlainParser {
 
       val bodyStart = 3 + aspifRuleTokens2
 
-      assert(aspifRuleTokens(bodyStart) == "0" /*normal body indicator*/ ,
-        "Error: Non-normal rule detected. Consider preprocessing your program with, e.g., clingo --trans-ext=all or lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
+      if (aspifRuleTokens(bodyStart) != "0" /*normal body indicator*/ )
+        delSAT.stomp(-102, "Non-normal rule detected. Consider preprocessing your program with, e.g., clingo --trans-ext=all or lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
 
       if (!disjWarningShow && aspifRuleTokens2 > 1) {
 
-        System.out.println("Warning: Disjunction found. Translation of disjunctions using shift/unfold doesn't guarantee a complete set of answers set.\n Consider increasing the number of unfolds in case of non-convergence.")
+        delSAT.stomp(-104)
 
         disjWarningShow = true
 
@@ -208,7 +214,7 @@ object AspifPlainParser {
 
         lits.foreach(aspifEli => {
 
-          assert(aspifEli >= 0, "Error: Negative head literal found. Only normal rules are supported by delSAT: " + newAspifRule)
+          assert(aspifEli >= 0, "Error: Negative head literal found. Only normal rules are supported by DelSAT: " + newAspifRule)
 
           if (!aspifEliToSymbol.contains(aspifEli)) {
 
@@ -216,7 +222,7 @@ object AspifPlainParser {
               auxAtomSymbol(newFalsePredsPrefix, aspifEli - newFalseAspifElisBoundary)
             else {
               auxAtomSymbol(newLatentSymbolAuxAtomPrefix, aspifEli)
-              // ^ this way, all newly introduced symbols (posEli.e., those which weren't already present in the input program) get either an "L" or an "F" auxiliary atom name.
+              // ^ this way, all newly introduced symbols (eli.e., those which weren't already present in the input program) get either an "L" or an "F" auxiliary atom name.
 
             }
 
@@ -237,7 +243,7 @@ object AspifPlainParser {
 
     }
 
-    log("parsetimer E1: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
+    log("parsetimer E1: " + timerToElapsedMs(timerParserNs) + " ms")
 
     assert(shiftAndUnfoldForDisjunctions) // because we've disabled the non-disjunctive head checks in the aspif parser
 
@@ -344,27 +350,38 @@ object AspifPlainParser {
 
     val firstPosBlit = noOfPosAtomElis
 
-    var emptyBodyBlit = -1
+    @deprecated var emptyBodyBlit = -1
 
-    var noOfPosBlits: Int = { // we assume blits (body elis) only for distinct bodies; number gets amended further below!
+    // we assume blits (body elis) only for distinct bodies
 
-      val aspifRulesDistinctByBody: Predef.Map[(Set[AspifEli], Set[AspifEli]), ArrayBuffer[AspifRule]] /*: Map[(Set[Pred], Set[Pred]), Seq[DisjRule]]*/ =
-        aspifRules.groupBy(aspifRule => (aspifRule.bodyPosAtomsAspifElis /*note: we must work with sets here to compare bodies correctly*/ ,
-          aspifRule.bodyNegAtomsAspifElis))
+    val aspifRulesDistinctByBody0: Predef.Map[(Set[AspifEli], Set[AspifEli]), ArrayBuffer[AspifRule]] =
+      aspifRules.groupBy(aspifRule => (aspifRule.bodyPosAtomsAspifElis /*NB: we must work with sets here to compare bodies correctly*/ ,
+        aspifRule.bodyNegAtomsAspifElis))
 
-      val distinctBodiesWithIndex = aspifRulesDistinctByBody.keySet.toArray.zipWithIndex
+    val aspifRulesDistinctByBody = aspifRulesDistinctByBody0.filter((tuple: ((Set[AspifEli], Set[AspifEli]), ArrayBuffer[AspifRule])) =>
+      !omitSingletonBlits || tuple._1._1.size + tuple._1._2.size > 1 || tuple._1._1.size + tuple._1._2.size == 0 /*TODO: part == 0 is deprecated, remove after more tests*/)
 
-      val noOfPosBlits = distinctBodiesWithIndex.length
+    val distinctBodiesWithIndex = aspifRulesDistinctByBody.keySet.toArray.zipWithIndex
 
-      val distinctBodiesToIndex: Map[(Set[AspifEli], Set[AspifEli]), Int] = distinctBodiesWithIndex.toMap
+    val distinctBodiesToIndex: Map[(Set[AspifEli], Set[AspifEli]), Int] = distinctBodiesWithIndex.toMap
 
-      var i = 0
+    var noOfRealBlits = distinctBodiesWithIndex.length
 
-      val arlll = aspifRules.length
+    var i = 0
 
-      while (i < arlll) {
+    val arlll = aspifRules.length
 
-        val aspifRule = aspifRules(i)
+    while (i < arlll) {
+
+      val aspifRule = aspifRules(i)
+
+      if (omitSingletonBlits && aspifRule.bodyPosAtomsAspifElis.size + aspifRule.bodyNegAtomsAspifElis.size == 1) {
+
+        val pseudoBlit = if (aspifRule.bodyPosAtomsAspifElis.isEmpty) aspifRule.bodyNegAtomsAspifElis.head else aspifRule.bodyPosAtomsAspifElis.head
+
+        aspifRule.blit = if (pseudoBlit < 0) pseudoBlit else pseudoBlit + pseudoBlitOffs // in contrast to the real blits set below, this is not an eli yet!
+
+      } else {
 
         val body = (aspifRule.bodyPosAtomsAspifElis, aspifRule.bodyNegAtomsAspifElis)
 
@@ -380,21 +397,18 @@ object AspifPlainParser {
         } else
           aspifRule.blit = blit // note: this is already a body eli, not an aspif-eli
 
-        i += 1
-
       }
 
-      noOfPosBlits
+      i += 1
 
     }
 
-    log("parsetimer E2: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
+    log("parsetimer E2: " + timerToElapsedMs(timerParserNs) + " ms")
 
-    // Finally, we translate the rules with aspif-elis into rules with elis: (note: aspif-elis of negative literals are negative numbers, whereas elis of negative literals are positive numbers (differently from clasp))
+    // Finally, we translate the rules with aspif-elis into rules with elis: (note: aspif-elis of negative literals are negative numbers, whereas elis of negative literals are positive numbers
+    // (differently from, e.g., clingo/clasp and most other solvers))
 
-    // val originalNoOfPosBlits = noOfPosBlits
-
-    val posNegEliBoundary = symbols.length + noOfPosBlits //+ auxSymbolsForSpanningCount.get /*per each given uncertain rule/fact, we later generate two rules*/
+    val posNegEliBoundary = symbols.length + noOfRealBlits //+ auxSymbolsForSpanningCount.get /*per each given uncertain rule/fact, we later generate two rules*/
 
     @inline def isPosEli(eli: Eli) = eli < posNegEliBoundary
 
@@ -409,7 +423,7 @@ object AspifPlainParser {
 
     }
 
-    val symbolToEli: Map[String, Eli] = symbols.zipWithIndex.toMap // costly, but we need this again later anyway
+    val symbolToEli: Map[String, Eli] = symbols.zipWithIndex.toMap // TODO: costly, but we need this again later anyway
 
     @inline def positiveAspifEliToPositiveEli(aspifEli: AspifEli): Eli = if (aspifEliToSymbolOpt.isDefined)
       symbolToEli(aspifEliToSymbolOpt.get.get(aspifEli).get)
@@ -440,6 +454,7 @@ object AspifPlainParser {
           negateEli(positiveAspifEliToPositiveEli(-negAspifEli))
 
         })).toArray,
+
         bodyPosAtomsElis = aspifRule.bodyPosAtomsAspifElis.map(bpaeli => {
 
           assert(bpaeli > 0)
@@ -448,6 +463,7 @@ object AspifPlainParser {
 
 
         }).toArray,
+
         bodyNegAtomsElis = aspifRule.bodyNegAtomsAspifElis.map(negativeAspifEli => {
 
           assert(negativeAspifEli < 0)
@@ -455,9 +471,35 @@ object AspifPlainParser {
           negateEli(positiveAspifEliToPositiveEli(-negativeAspifEli))
 
         }).toArray,
-        posBodyEli = aspifRule.blit)
 
-      assert(rule.headAtomsElis.length == 1)
+        blit = {
+
+          if (aspifRule.blit < 0) {
+
+            assert(omitSingletonBlits)
+
+            val eli = negateEli(positiveAspifEliToPositiveEli(-aspifRule.blit))
+
+            assert(negateEli(eli) < symbols.length)
+
+            eli
+
+          } else if (aspifRule.blit >= pseudoBlitOffs) {
+
+            assert(omitSingletonBlits)
+
+            val eli = positiveAspifEliToPositiveEli(aspifRule.blit - pseudoBlitOffs)
+
+            assert(eli < symbols.length)
+
+            eli
+
+          } else
+            aspifRule.blit
+
+        })
+
+      assert(rule.headAtomsElis.length <= 1)
 
       rules.append(rule)
 
@@ -465,11 +507,10 @@ object AspifPlainParser {
 
     }
 
-    //assert(noOfPosBlits == originalNoOfPosBlits + auxSymbolsForSpanningCount.get())
+    if (delSAT.verbose)
+      println("Parsing time: " + timerToElapsedMs(timerParserNs) + " ms")
 
-    log("parsetimer E3: " + (System.nanoTime() - timerParserNs) / 1000000 + " ms")
-
-    (rules, noOfPosBlits, emptyBodyBlit)
+    (rules, noOfRealBlits, emptyBodyBlit)
 
   }
 

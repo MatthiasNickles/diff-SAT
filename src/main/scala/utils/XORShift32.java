@@ -1,10 +1,12 @@
+//  THIS CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+
 package utils;
 
 /**
- * Fast but low-quality random numbers using a basic XOR-shift algorithm (http://www.javamex.com/tutorials/random_numbers/xorshift.shtml)
- * Not threadsafe.
- * <p>
- * For better quality (longer period), consider using a >=128 XOR-Shift, e.g.,
+ * Fast, medium-quality random numbers using a basic XOR-shift algorithm (for basic algorithm see, e.g., http://www.javamex.com/tutorials/random_numbers/xorshift.shtml)
+ * Not cryptographically secure. Not threadsafe.
+ *
+ * For better quality (longer period) but also not cryptographically secure, consider using a >=128 XOR-Shift, see, e.g.,
  * https://www.codeproject.com/Articles/9187/A-fast-equivalent-for-System-Random
  */
 
@@ -14,7 +16,7 @@ public class XORShift32 extends java.util.Random {
 
     public XORShift32() {
 
-        x = System.nanoTime();
+        this(System.nanoTime());
 
     }
 

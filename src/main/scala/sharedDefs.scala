@@ -3,81 +3,94 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
+  *
   */
 
-import utils.{IntArrayUnsafe, XORShift32}
+import commandline.delSAT
+import utils.{IntArrayUnsafe, LongArrayUnsafe, XORShift32}
 
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ArrayBuilder}
-
 import scala.reflect.ClassTag
 
 package object sharedDefs {
 
-  // Solver settings. From the commandline, most of these can be set using --solverarg "paramName" "paramValue"  ------------------------------------------------------------------------------------------------------
+  // ************* Solver settings. From the delSAT commandline, most of these can be set using
+  // --solverarg "paramName" "paramValue(s)"
+  // Each --solverarg sets only a single parameter.
 
-  // Important: given the primary use case of DelSAT (sampling and multi-model optimisation), the following settings are
-  // geared towards fast solving of small or medium satisfiable problems. Many larger problems can also be solved but
-  // may require different settings (e.g., larger amount of removed nogoods, other freeEliSearchApproachesR, ...).
+  // NB: given the primary use case of DelSAT (sampling and multi-model optimisation), the following settings are
+  // geared towards solving of small or medium satisfiable problems. Many other problems can also be solved but
+  // may require different settings (e.g., larger amount of removed nogoods, different freeEliSearchConfigsP order, ...).
 
-  val specialConstrRuleNogoods: Boolean = false // TODO: must be false (true doesn't work yet); if true, we create an alternative form of nogoods for :- constraints (see code)
-
-  val generatePseudoRulesForNogoodsForSATMode = false // Experimental. Generates blits in SAT mode
-
-  var initShuffleCleanUpClarkNogoods: Boolean = false
-
-  var variableElimConfig = (false /*on/off*/ , 0d /*amount #resolvents can be larger than original nogood set for candidate variable, in % of nogis */ ,
-    0d /*#literals in original nogood set can be larger than literals in resolvents, in % of literals */ ,
-    0.05f /*maximum product of literals with positive or negative occurrence of variable candidate, in % of all literals*/ ,
-    false /*true actually removes eliminated variables (instead of just ignoring them). Only for SAT mode, not fully working yet*/ )
-  // On the commandline, use like this: --solverarg "variableElimConfig" "true 0.5 0.5 0.001 false"
-
-  assert(!generatePseudoRulesForNogoodsForSATMode || !variableElimConfig._5 || !variableElimConfig._1)
-
-  var prearrangeEliPoolR: Boolean = false // true arranges branching eli pool initially by number of nogoods with eli. For freeEliSearchApproachesR = 0, 2, 4, 5
+  var showProgressStats = false // Note: true causes some delay in the solving progress
 
   var restartTriggerConf = (true /*Geometric seq on/off*/ , -1 /*initial cutoff. -1: auto, -2: no restarts*/ ,
-    -1.5d /*base (if geometric) or cutoff as #conflicts since prev restart as % of learned nogoods. Negative: normally distributed closely around -x*/ )
-  // On the commandline, use like this: --solverarg "restartTriggerConf" "true 5 1.4"
+    -1.5d /*base (if geometric) or cutoff items (see code) since prev restart as % of learned nogoods.
+    Negative: normally distributed closely around -x*/ , -1 /*enforce restarts every x ms (disable with -1)*/ )
+  // ^ On the commandline, specify like this: --solverarg "restartTriggerConf" "true 5 1.4"
 
-  var removeLearnedNogoods: Double = 0.1d // factor, per restart. 0d: no removal of learned nogoods
+  var skipNogisHTElisInBCP = false // false is typically faster with our non-standard variant of CDNL and true isn't parallelized
 
-  var freeEliSearchApproachesR = Seq(0,3,6,4,1,5,2) //Seq(4,0,3,6,4,2,4,5) // 0<= item <=6, except 1(not implemented); parallel approaches if maxCompetingSolverThreads>0. If there is
-  // just one portfolio solver thread (see below), head is used. Duplicates allowed.
-  // Recommendations: For larger problems, try with approaches 3, 4 and 2 first. For small problems, try with 0, 5 and 6 first.
-  // On the commandline, use like this: --solverarg "freeEliSearchApproachesR" "0 3 3 4 2 6" (typically together with setting maxCompetingSolverThreads)
+  var removeLearnedNogoods: Double = 1d // if > 0, removes sqrt(#learnedNogoods)*x learned nogoods at each restart (but minimum 1).
+  // 0d: no removal of learned nogoods. Even small values can make a difference as they shuffle the problem
 
-  var maxCompetingSolverThreads = 1 // for portfolio solving with competing solver instances (number of threads not guaranteed)
+  // The following settings ending with "...P" are for parallel portfolio solving (see maxCompetingSolverThreadsR) - each
+  // solver thread is assigned a combination of values from the respective sequences.
+  // With a limited number of solver threads, values earlier in sequences get higher priority to be used by a solver thread.
 
-  var diversify: Boolean = false // if true, solver aims at generating diverse models (might slow down solver)
+  var freeEliSearchConfigsP = Seq(3, 2, 5, 1, 7, 8, 6, 0) // 0<= item <=8; parallel free eli search (branching) configurations if maxCompetingSolverThreads>0.
+  // Sequence order determines priority. If there is just one portfolio solver thread (see below), head is used.
+  // Duplicates allowed!
+  // On the commandline, use like this: --solverarg "freeEliSearchConfigsP" "1 2 8 3 0 1" (not that this doesn't specify the
+  // number of solver threads which has to be set using maxCompetingSolverThreadsR)
 
-  var recAssg = false // true (experimental) omits the intermediate heap data structure for unit props and makes assignments directly and recursively. You
-  // might have to increase stack size for that when calling java, e.g., -Xss5m ...
-  // true is often much faster for small or medium problems, whereas false scales better for larger problems.
+  var prearrangeEliPoolP: Seq[Int] = Seq(0, 1) // per solver thread; 0=off, 1=upwards, 2=downwards, 3=shuffle, 4=(0,1,2 or 3 picked at random) per each solver thread. Arranges branching eli pool initially by number of nogoods with eli (relevant where the freeEliSearchApproach chooses from a sequence of elis)
 
-  var candEliCheckCapFacR: Double = 1d // caps number of checks at x% with freeEliSearchApproaches 0, 1, 4. 1d = no capping
+  var rndmBranchP: Seq[Float] = Seq(0.0001f, 0.1f) // per solver thread; with probability x select the next branching literal purely randomly
+  // (instead of using one of the heuristics in freeEliSearchConfigsP). Each parallel solver thread uses one x out of the given list.
+  // -x uses a kind of "burst" approach where probability -x is active for periods alternating with (longer) periods of low probability otherwise.
 
-  val sortRemainderPoolProb = 0f
+  var noHeapP: Seq[Int] = Seq(1) // per solver thread; 0/1 off/on. "On" omits the intermediate heap data structure for
+  // BCP (unit propagations) and makes assignments directly and recursively.
+  // You might have to increase stack size for that when calling java, e.g., -Xss5m ...
+  // "On" is typically the best choice for DelSAT's main use case (sampling), as it is often much faster for small or medium problems,
+  // whereas "Off" sometimes(!) (not clear when exactly) scales better for large problems.
 
-  var initialActivUpdateValue: Int = 1
+  var maxCompetingSolverThreadsR: Int = -1 // for portfolio solving with competing solver instances (number of threads not guaranteed)
+  // Keep in mind that the machine might decrease maximum core frequencies with more cores being utilized.
+  // -1: auto (sets number of solver threads in dependency of number of cores and other factors).
+  // NB: DelSAT also spawns some parallelism from within individual solver threads.
 
-  var incActivUpdateValueOnNewNogoodFactor: Int = 2 // 1 = no activUpdateVal increases (activUpdateVal remains always initialActivUpdateValue).
+  var switchToBestConfig: Int = 2 // if >0, the portfolio approach which was fastest in the first sampling round is used
+  // exclusively (if 1, single threaded then, if 2, still competing using multiple threads if maxCompetingSolverThreads > 1) for
+  // all further model solving.
 
-  var reviseActivFreq = 1 // every x conflicts
+  var abandonThreadsThatFellBehind: Boolean = true // if true, solver threads which fell behind competing solver threads
+  // are aborted, giving any remaining threads more computation time. Can be used to work with larger maxCompetingSolverThreadsR.
 
-  var reviseActivDiv = 4 // 1 = no updates
+  var savePhasesR: Boolean = true // true overridden by diversify
 
-  var arrangeParamElisInEliPool = false
+  var diversify: Boolean = false // if true, solver aims at generating diverse models (might slow down solver, might override other settings)
 
-  var shuffleNogoodsOnRestart = false
+  var resolveFactsInitially = false // Note: true isn't necessarily faster
 
-  var nogoodExchangeProbability = 0f // exchange of nogoods between solver threads. 0f = no exchange
+  var initialActivBaseValue: Float = 1.05f // 1f = no updates. Must be >0
 
-  var nogoodExchangeSizeThresh = 4 // only nogoods with size below that threshold are copied to other threads
+  var reviseActivFreq = 10 // every x conflicts
 
-  var beliThR: Float = -1f //-1: auto
+  var reviseActivFact: Float = 0.25f // 1f = no rescaling
 
-  var parallelThresh = 400000000 // used as number of items threshold for loop parallelization in various places (TODO: auto)
+  var nogoodExchangeProbability = 0.01f // exchange of learned nogoods between solver threads. 0f = no exchange
+
+  var nogoodExchangeSizeThresh = 5 // only learned nogoods with size below that threshold are copied to other threads
+
+  var localSolverParallelThreshR = 500 // localSolverParallelThreshMax: off.
+  // Used (with various factors) as #items threshold for loop parallelization in various places (TODO: auto).
+  // Overridden by skipNogisHTElisInBCP
 
   var partDerivComplete = false // false: variant of ILP'18 approach (less general, use with MSE-style inner cost expressions),
   // true: variant of PLP'18 approach (more general)
@@ -86,16 +99,51 @@ package object sharedDefs {
   // negative infinity. Not required as such for non-probabilistic problems (you could simply set threshold = Double.MaxValue
   // and use -1 as number of models), but useful for debugging.
 
-  var noOfUnfolds = 0 // for translating away disjunctions in rule heads (an extension over normal ASP), increase the number of unfold operations
-  // if necessary (try with 0 first)
+  var noOfUnfolds = 0 // for translating away disjunctions in ASP rule heads (an extension over normal ASP), increase the number of unfold operations
+  // if necessary (try with 0 first, unless you need the full set of answer sets)
 
-  // ------------------------------------------------------------------------------------------------------------------------
+  var variableOrNogoodElimConfig = (false /*on/off*/ , 0d /*amount #resolvents can be larger than original nogood set for candidate variable, in % of nogis */ ,
+    0d /*#literals in original nogood set can be larger than literals in resolvents, in % of literals. NB: total #literals can
+    still become larger than original total #literals even with 0d here*/ ,
+    0.2f /*maximum product of literals with positive or negative occurrence of variable candidate, in % of sqrt(all literals)*/ ,
+    false /*true materially removes eliminated variables (instead of just ignoring them) <- only for SAT mode, not fully working yet*/ )
+  // On the commandline, use like this: --solverarg "variableOrNogoodElimConfig" "true 0.5 0.5 0.001 false"
+
+  var genBodyLitsFromSATClauses: Double = 0d // experimental. Generates "body literals" (blits) in SAT mode, for x% of all
+  // variables. If 1d, we completely replace the original clause nogoods with an equivalent theory using blits.
+  // Can easily blow up space.
+
+  val initCleanUpSortClarkNogoods: Boolean = true // internal; leave at true
+
+  val shuffleNogoodsOnRestart = false // experimental, leave at false
+
+  val omitSingletonBlits = true // internal; leave at true
+
+  checkSettings
+
+  // *****************************************************************************************************************
+
+  def checkSettings = {
+
+    if (!(
+      (!resolveFactsInitially || initCleanUpSortClarkNogoods) &&
+        (!skipNogisHTElisInBCP || noHeapP == Seq(1)) &&
+        (!shuffleNogoodsOnRestart || noHeapP == Seq(0))
+
+      ))
+      delSAT.stomp(-5006)
+
+  }
+
+  val localSolverParallelThreshMax = 99999999 // (we use this value just so to be able to multiply by small ints without overflow)
 
   var omitSysExit0 = false // If this .jar is dynamically included in prasp2 using classloader, we must not sys.exit in case of successful termination (except -v/-h), as this
   // would quit the overall program. We could prevent this issue using some additional wrapper method, but we want to keep prasp2 compatible with Java tools other than this.
   // If on the other hand the tool is invoked as an external process, sys.exit(0) is required.
 
-  def overrideSolverArgs(additionalSolverArgsR: mutable.HashMap[String, String]) = { // preliminary, TODO
+  def overrideSolverArgs(additionalSolverArgsR: mutable.HashMap[String, String]) = {
+
+    delSAT.log("additionalSolverArgsR = " + additionalSolverArgsR)
 
     val additionalSolverArgs = additionalSolverArgsR.map((tuple: (String, String)) => (tuple._1.replaceAllLiterally("\"", "").trim, tuple._2.replaceAllLiterally("\"", "").trim))
 
@@ -103,53 +151,65 @@ package object sharedDefs {
 
       (paramName, paramValueStr.split("\\s+")) match {
 
-        case ("variableElimConfig", Array(v1, v2, v3, v4, v5)) => variableElimConfig = (v1.toBoolean, v2.toDouble, v3.toDouble, v4.toFloat, v5.toBoolean)
+        case ("showProgressStats", Array(v1)) => showProgressStats = v1.toBoolean
 
-        case ("restartTriggerConf", Array(v1, v2, v3)) => restartTriggerConf = (v1.toBoolean, v2.toInt, v3.toDouble)
+        //case ("initCleanUpSortClarkNogoods", Array(v1)) => initCleanUpSortClarkNogoods = v1.toBoolean
 
-        case ("freeEliSearchApproachesR", Array(v@_*)) => freeEliSearchApproachesR = v.map(_.toInt)
+        case ("variableOrNogoodElimConfig", Array(v1, v2, v3, v4, v5)) => variableOrNogoodElimConfig = (v1.toBoolean, v2.toDouble, v3.toDouble, v4.toFloat, v5.toBoolean)
 
-        case ("maxCompetingSolverThreads", Array(v1)) => maxCompetingSolverThreads = v1.toInt
+        case ("prearrangeEliPoolP", Array(v@_*)) => prearrangeEliPoolP = v.map(_.toInt)
 
-        case ("parallelThresh", Array(v1)) => parallelThresh = v1.toInt
+        case ("restartTriggerConf", Array(v1, v2, v3, v4)) => restartTriggerConf = (v1.toBoolean, v2.toInt, v3.toDouble, v4.toInt)
+
+        case ("skipNogisHTElisInBCP", Array(v1)) => skipNogisHTElisInBCP = v1.toBoolean
+
+        case ("freeEliSearchConfigsP", Array(v@_*)) => freeEliSearchConfigsP = v.map(_.toInt)
+
+        case ("rndmBranchP", Array(v@_*)) => rndmBranchP = v.map(_.toFloat)
+
+        case ("savePhasesR", Array(v1)) => savePhasesR = v1.toBoolean
+
+        case ("maxCompetingSolverThreadsR", Array(v1)) => maxCompetingSolverThreadsR = v1.toInt
+
+        case ("switchToBestConfig", Array(v1)) => switchToBestConfig = v1.toInt
+
+        case ("abandonThreadsThatFellBehind", Array(v1)) => abandonThreadsThatFellBehind = v1.toBoolean
+
+        case ("localSolverParallelThreshR", Array(v1)) => localSolverParallelThreshR = v1.toInt
 
         case ("partDerivComplete", Array(v1)) => partDerivComplete = v1.toBoolean
 
-        case ("recAssg", Array(v1)) => recAssg = v1.toBoolean
+        case ("noHeapP", Array(v@_*)) => noHeapP = v.map(_.toInt)
 
         case ("diversify", Array(v1)) => diversify = v1.toBoolean
 
-        case ("prearrangeEliPoolR", Array(v1)) => prearrangeEliPoolR = v1.toBoolean
+        case ("resolveFactsInitially", Array(v1)) => resolveFactsInitially = v1.toBoolean
 
-        case ("arrangeParamElisInEliPool", Array(v1)) => arrangeParamElisInEliPool = v1.toBoolean
-
-        case ("shuffleNogoodsOnRestart", Array(v1)) => shuffleNogoodsOnRestart = v1.toBoolean
+        //case ("shuffleNogoodsOnRestart", Array(v1)) => shuffleNogoodsOnRestart = v1.toBoolean
 
         case ("ignoreParamVariables", Array(v1)) => ignoreParamVariables = v1.toBoolean
 
         case ("noOfUnfolds", Array(v1)) => noOfUnfolds = v1.toInt
 
-        case ("parallelThresh", Array(v1)) => parallelThresh = v1.toInt
-
-        case ("beliThR", Array(v1)) => beliThR = v1.toFloat
-
-        case ("initialActivUpdateValue", Array(v1)) => initialActivUpdateValue = v1.toInt
+        case ("initialActivBaseValue", Array(v1)) => initialActivBaseValue = v1.toFloat
 
         case ("reviseActivFreq", Array(v1)) => reviseActivFreq = v1.toInt
 
-        case ("reviseActivDiv", Array(v1)) => reviseActivDiv = v1.toInt
-
-        case ("incActivUpdateValueOnNewNogoodFactor", Array(v1)) => incActivUpdateValueOnNewNogoodFactor = v1.toInt
+        case ("reviseActivFact", Array(v1)) => reviseActivFact = v1.toFloat
 
         case ("removeLearnedNogoods", Array(v1)) => removeLearnedNogoods = v1.toDouble
 
-        case ("initShuffleCleanUpClarkNogoods", Array(v1)) => initShuffleCleanUpClarkNogoods = v1.toBoolean
+        case ("genBodyLitsFromSATClauses", Array(v1)) => genBodyLitsFromSATClauses = v1.toDouble
 
         case ("nogoodExchangeProbability", Array(v1)) => nogoodExchangeProbability = v1.toFloat
 
-        case (arg: String, Array(v1)) => System.err.println("Invalid --solverarg " + arg + " " + v1)
+        //case ("omitSingletonBlits", Array(v1)) => omitSingletonBlits = v1.toBoolean
+
+        case (arg: String, Array(v1)) => delSAT.stomp(-1, "--solverarg " + arg + " " + v1)
 
       }
+
+      checkSettings
 
     }
 
@@ -166,7 +226,7 @@ package object sharedDefs {
   final case class Rule(headAtomsElis: Array[Eli],
                         bodyPosAtomsElis: Array[Eli],
                         bodyNegAtomsElis: Array[Eli],
-                        posBodyEli: Eli) {}
+                        blit: Eli /*note: if omitSingletonBlits, this is an ordinary (non body) eli if there's just one body literal*/) {}
 
   val newAspifEliOffsets = 5000000
 
@@ -187,18 +247,20 @@ package object sharedDefs {
   final case class AspifOrDIMACSPlainParserResult(symbols: Array[String],
                                                   rulesOrClauseNogoods: Either[
                                                     /*from aspif:*/ ArrayBuffer[Rule],
-                                                    /*from DIMACS:*/ ArrayBuffer[Array[Eli]]],
+                                                    /*from DIMACS:*/ Array[ArrayEliUnsafe]],
                                                   noOfPosBlits: Int,
                                                   externalAtomElis: Seq[Eli], // for aspif only
                                                   emptyBodyBlit: Int = -1,
-                                                  directClauseNogoodsOpt: Option[ArrayBuffer[Array[Eli]]] = None /*for debugging/crosschecks*/ ,
+                                                  directClauseNogoodsOpt: Option[Array[ArrayEliUnsafe]] = None /*for debugging/crosschecks*/ ,
                                                   clauseTokensOpt: Option[Array[Array[Int]]]
                                                  ) {}
 
+  type RandomGen = java.util.SplittableRandom
+
   val rngGlobal: java.util.Random = new XORShift32() // not thread-safe
 
-  @inline def shuffleArrayBlocked[A](arr: mutable.Seq[A], rg: java.util.Random): Unit = { // Blocked Fisher-Yates shuffle
-    // (based on public domain code from https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog)
+  @inline def shuffleArrayBlocked[A](arr: mutable.Seq[A], rg: RandomGen): Unit = { // Blocked Fisher-Yates shuffle
+    // (method code based on public domain code from https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog)
 
     def swap(i: Int, j: Int) = {
 
@@ -254,7 +316,7 @@ package object sharedDefs {
 
   }
 
-  @inline def shuffleArray[A](array: mutable.Seq[A], rg: java.util.Random, to: Int = -1): Unit = { // plain Fisher-Yates shuffle
+  @inline def shuffleArray[A](array: mutable.Seq[A], rg: RandomGen, to: Int = -1): Unit = { // plain Fisher-Yates shuffle on init of array
 
     if (to < 0 && array.length >= 16384)
       shuffleArrayBlocked[A](array, rg)
@@ -282,7 +344,7 @@ package object sharedDefs {
 
   }
 
-  @inline def shuffleArray[A](array: IntArrayUnsafe, rg: java.util.Random): Unit = { // plain Fisher-Yates shuffle
+  @inline def shuffleArray[A](array: IntArrayUnsafe, rg: RandomGen): Unit = { // plain Fisher-Yates shuffle
 
     var i: Long = array.size - 1
 
@@ -410,7 +472,7 @@ package object sharedDefs {
 
     }
 
-    @inline def removeItem(item /*not an index*/ : T): Int /*Index of removed item (only the first occurrence is considered), or -1 */ = {
+    @inline def removeItem(item /*<- not an index*/ : T): Int /*Index of removed item (only the first occurrence is considered), or -1 */ = {
 
       var indexOfItem = -1
 
@@ -604,33 +666,30 @@ package object sharedDefs {
 
     }
 
-    @inline def removeIntItemsRange(from: Int /*first item, not an index!*/ , to: Int): Unit = {
+    @inline def removeIntItemsRange(from: Int /*item, not an index!*/ , to: Int): Unit = {
 
-      val bld: ArrayBuilder.ofInt = new mutable.ArrayBuilder.ofInt
+      var i = l - 1
 
-      var i = 0
-
-      while (i < l) {
+      while (i >= 0) {
 
         val bi = buffer.get(i)
 
-        if (bi < from || bi > to)
-          bld.+=(bi)
+        if (bi >= from && bi <= to) {
 
-        i += 1
+          buffer.remove(i)
+
+          l -= 1
+
+        }
+
+        i -= 1
 
       }
-
-      val a = bld.result()
-
-      buffer = new IntArrayUnsafe(a.length)
-
-      buffer.setFromIntArray(a)
-
-      l = a.length
 
     }
 
   }
+
+  @inline def timerToElapsedMs(startNano: Long): Long = (System.nanoTime() - startNano) / 1000000
 
 }

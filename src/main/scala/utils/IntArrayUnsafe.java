@@ -1,25 +1,37 @@
+//  THIS CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
 
 package utils;
 
 import sun.misc.Unsafe;
 
-import java.lang.reflect.Field;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+
 
 public class IntArrayUnsafe {
 
     public int size_;  // number of primitive int (4 byte) items
 
-    private long address;
+    public boolean isSorted = false;
 
-    static public Unsafe UNSAFE = null;
+    private long addr;
 
-    //private static long BYTE_ARRAY_OFFSET = -1l;
+    static public Unsafe unsafe = null;  // see ByteArrayUnsafe for how to initialize
 
-    private static long INT_ARRAY_OFFSET = -1l;
+    private static long intArrayOffset = -1l;
 
-    public static void init() {
+    private static long alignment = -1l;
 
-        INT_ARRAY_OFFSET = UNSAFE.arrayBaseOffset(int[].class);
+    private static long internalPadding = 1;  // multiple of alignment
+
+    public boolean aligned = false;  // false avoids creation overhead for short-lived unsafe arrays
+
+    public static void init(Unsafe us) {
+
+        unsafe = us;
+
+        intArrayOffset = unsafe.arrayBaseOffset(int[].class);
+
+        alignment = unsafe.pageSize(); // for cache line size, use typically 64l
 
     }
 
@@ -27,13 +39,43 @@ public class IntArrayUnsafe {
 
         size_ = size;
 
-        address = UNSAFE.allocateMemory(size << 2);
+        if (!aligned)
+            addr = unsafe.allocateMemory(size << 2);
+        else {
+
+            addr = unsafe.allocateMemory((size << 2) + alignment + alignment * internalPadding);
+
+            if (alignment > 0l && (addr & (alignment - 1l)) != 0)
+                addr += (alignment - (addr & (alignment - 1)));
+
+            addr += alignment * internalPadding;
+
+        }
+
+    }
+
+    public IntArrayUnsafe(int[] values) {
+
+        this(values.length);
+
+        setFromIntArray(values);
+
+    }
+
+    public IntArrayUnsafe(IntArrayList values) {
+
+        this(values.size());
+
+        int i = -1;
+
+        while (++i < size_)
+            update(i, values.getInt((i)));
 
     }
 
     public void free() {
 
-        UNSAFE.freeMemory(address);
+        unsafe.freeMemory(addr);
 
     }
 
@@ -43,89 +85,114 @@ public class IntArrayUnsafe {
 
     }
 
+    @Override
+    public int hashCode() {
+
+        int hashVal = 1;
+
+        for (int i = 0; i < size_; i++)
+            hashVal = 31 * hashVal + get(i);
+
+        return hashVal;
+
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+
+        if(!(obj instanceof IntArrayUnsafe) || ((IntArrayUnsafe) obj).size_ != size_)
+            return false;
+
+        if(isSorted) {
+
+            for (int i = 0; i < size_; i++)
+                if(((IntArrayUnsafe) obj).get(i) != get(i))
+                    return false;
+
+            return true;
+
+        } else
+            return java.util.Arrays.equals(toArray(), ((IntArrayUnsafe) obj).toArray());
+
+    }
+
     public void setFromIntArray(int[] values) {
 
         long bytesToCopy = values.length << 2;
 
-        UNSAFE.copyMemory(values, INT_ARRAY_OFFSET,
-                null, address,
-                bytesToCopy);
+        unsafe.copyMemory(values, intArrayOffset,
+                null, addr, bytesToCopy);
 
     }
 
-    public void update(int i, int value) {
+    public void update(int index, int value) {
 
-        UNSAFE.putInt(address + (i << 2), value);
-
-    }
-
-    public void update(long i, int value) {
-
-        UNSAFE.putInt(address + (i << 2), value);
+        unsafe.putInt(addr + (index << 2), value);
 
     }
 
-    public int get(long i) {
+    public void update(long index, int value) {
 
-        return UNSAFE.getInt(address + (i << 2));
+        unsafe.putInt(addr + (index << 2), value);
+
+    }
+
+    public int get(int index) {
+
+        return unsafe.getInt(addr + (index << 2));
+
+    }
+
+    public int get(long index) {
+
+        return unsafe.getInt(addr + (index << 2));
 
     }
 
     public int first() {
 
-        return UNSAFE.getInt(address);
+        return unsafe.getInt(addr);
 
     }
 
     public int second() {
 
-        return UNSAFE.getInt(address + 4);
+        return unsafe.getInt(addr + 4);
 
     }
 
-    public int get(int i) {
+    public void inc(int index) {
 
-        return UNSAFE.getInt(address + (i << 2));
-
-    }
-
-    public void inc(int i) {
-
-        UNSAFE.getAndAddInt(null, address + (i << 2), 1);
+        unsafe.getAndAddInt(null, addr + (index << 2), 1);
 
     }
 
-    public void incBy(int i, int x) {
+    public int dec(int index) {
 
-        UNSAFE.getAndAddInt(null, address + (i << 2), x);
-
-    }
-
-    public int dec(int i) {
-
-        return UNSAFE.getAndAddInt(null, address + (i << 2), -1) - 1;
+        return unsafe.getAndAddInt(null, addr + (index << 2), -1) - 1;
 
     }
 
+    public void incBy(int index, int x) {
 
-    public void remove(int i) {
-
-        UNSAFE.copyMemory(address + ((i + 1) << 2), address + (i << 2), (--size_ - i) << 2);
+        unsafe.getAndAddInt(null, addr + (index << 2), x);
 
     }
 
+    public void remove(int index) {
+
+        unsafe.copyMemory(addr + ((index + 1) << 2), addr + (index << 2), (--size_ - index) << 2);
+
+    }
 
     public int[] toArray() {
 
-        //byte[] array = new byte[(int) size];  // note that an UNSAFE array can exceed Int.MaxValue size, in which case this would fail
+        //byte[] array = new byte[(int) size];  // note that an unsafe array can exceed Int.MaxValue size, in which case this would fail
 
         int[] array = new int[size_];
 
-        UNSAFE.copyMemory(null, address,
-                array, INT_ARRAY_OFFSET,
-                size_ << 2);
-
-        //UNSAFE.copyMemory(address, 0, array, BYTE_ARRAY_OFFSET, size_); nope
+        unsafe.copyMemory(null, addr,
+                array, intArrayOffset, size_ << 2);
 
         return array;
 
@@ -135,9 +202,21 @@ public class IntArrayUnsafe {
 
         int[] array = new int[l];
 
-        UNSAFE.copyMemory(null, address,
-                array, INT_ARRAY_OFFSET,
+        unsafe.copyMemory(null, addr,
+                array, intArrayOffset,
                 l << 2);
+
+        return array;
+
+    }
+
+    public int[] toArray(int from, int until) {
+
+        int[] array = new int[until - from];
+
+        unsafe.copyMemory(null, addr + (from << 2),
+                array, intArrayOffset,
+                (until - from) << 2);
 
         return array;
 
@@ -158,9 +237,50 @@ public class IntArrayUnsafe {
 
         IntArrayUnsafe bau = new IntArrayUnsafe(size_ + padding);
 
-        UNSAFE.copyMemory(address, bau.address, size_ << 2);
+        unsafe.copyMemory(addr, bau.addr, size_ << 2);
 
         return bau;
+
+    }
+
+    public void distinctSorted() {
+
+        // insertion sort, since our eli arrays are typically very small:
+
+        int i = 1;
+
+        while (i < size_) {
+
+            int j = i;
+
+            while (j > 0 && get(j - 1) > get(j)) {
+
+                int h = get(j);
+
+                update(j, get(j - 1));
+
+                update(j - 1, h);
+
+                j--;
+
+            }
+
+            i++;
+
+        }
+
+        // we remove duplicates:
+
+        i = size_ - 1;
+
+        while (i > 0 && i < size_) {
+
+            if (get(i) == get(i - 1))
+                remove(i - 1);
+            else
+                i--;
+
+        }
 
     }
 

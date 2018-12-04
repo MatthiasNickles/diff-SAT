@@ -1,11 +1,11 @@
 /**
  * DelSAT
  *
- *  A tool for differentiable satisfiability and differentiable answer set programming
- *
  * Copyright (c) 2018 Matthias Nickles
  *
- * THIS CODE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+ * matthiasDOTnicklesATgmxDOTnet
+ *
+ * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
  *
  */
 

@@ -1,13 +1,13 @@
 package utils
 
-import com.carrotsearch.hppc.IntObjectHashMap
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap
 
 import scala.collection.mutable
 
-@deprecated object Tarjan {
+object Tarjan {
 
-  /** Original: http://danlec.com/st4k#questions/18289991, modified by M. Nickles */
-  def trajanRec(g: IntObjectHashMap[List[Int]]): mutable.ArrayBuffer[mutable.ArrayBuffer[Int]] = {
+  /* Based on an answer at http://danlec.com/st4k#questions/18289991 from T. Brown, modified and amended by M. Nickles */
+  def trajanRec(g: Int2ObjectOpenHashMap[List[Int]]): mutable.ArrayBuffer[mutable.ArrayBuffer[Int]] = {
     // TODO: create iterative variant
 
     val s = mutable.Buffer.empty[Int]
@@ -63,14 +63,16 @@ import scala.collection.mutable
       }
     }
 
-    val gKeys = g.keys()
+    val gKeysIterator = g.keySet().iterator()
 
-    gKeys.forEach(v => {
+    while(gKeysIterator.hasNext()) {
 
-      if (v.value >= 0 && !index.keySet.contains(v))
-        visit(v.value)
+      val v = gKeysIterator.nextInt()
 
-    })
+      if (v >= 0 && !index.keySet.contains(v))
+        visit(v)
+
+    }
 
     ret
 

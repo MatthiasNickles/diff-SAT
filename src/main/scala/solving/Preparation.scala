@@ -3,6 +3,10 @@
   *
   * Copyright (c) 2018 Matthias Nickles
   *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
+  *
   */
 
 package solving
@@ -10,22 +14,29 @@ package solving
 import aspIOutils._
 
 import com.accelad.math.nilgiri.DoubleReal
-import com.accelad.math.nilgiri.autodiff.{AbstractBinaryFunction, AbstractUnaryFunction, DifferentialFunction, Variable}
 
-import com.carrotsearch.hppc._
+import com.accelad.math.nilgiri.autodiff.{AbstractBinaryFunction, AbstractUnaryFunction, DifferentialFunction, Variable}
 
 import commandline.delSAT
 import commandline.delSAT._
 
-import diff.UncertainAtomsSeprt
-
+import it.unimi.dsi.fastutil.ints.{Int2ObjectOpenHashMap, IntSet}
+import it.unimi.dsi.fastutil.objects.ObjectArrayList
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet
+
+import diff.UncertainAtomsSeprt
 
 import sharedDefs._
 
+import sun.misc.Contended
+
+import utils.{FloatArrayUnsafe, IntArrayUnsafe}
+
 import scala.annotation.tailrec
+
 import scala.collection.{Iterator, Seq, mutable}
 import scala.collection.mutable.ArrayBuffer
+
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
 
@@ -33,14 +44,18 @@ import scala.concurrent.duration.Duration
   * @author Matthias Nickles
   *
   */
-class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainParserResult, costsOpt: Option[UncertainAtomsSeprt],
-                  satMode: Boolean, omitAtomNogoods: Boolean) {
+class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult, costsOpt: Option[UncertainAtomsSeprt],
+                  satModeR: Boolean, omitAtomNogoods: Boolean) {
+
+  assert(!omitAtomNogoods)
+
+  val satMode = satModeR
 
   val timerPrepNs = System.nanoTime()
 
   val rulesOpt: Option[ArrayBuffer[Rule]] = aspifOrDIMACSParserResult.rulesOrClauseNogoods.left.toOption
 
-  val dimacsClauseNogoodsOpt: Option[ArrayBuffer[Array[Eli]]] = aspifOrDIMACSParserResult.rulesOrClauseNogoods.right.toOption
+  val dimacsClauseNogoodsOpt: Option[Array[ArrayEliUnsafe]] = aspifOrDIMACSParserResult.rulesOrClauseNogoods.right.toOption
 
   var symbols = aspifOrDIMACSParserResult.symbols
 
@@ -109,11 +124,11 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   var negBlitToPosBodyElis = new java.util.HashMap[Eli /*negative blit*/ , Array[Eli]]() // for non-tight ASP only
 
-  val clarkNogoods1: ArrayBuffer[Array[Eli]] = dimacsClauseNogoodsOpt.getOrElse {
+  val clarkNogoods1: Array[ArrayEliUnsafe] = dimacsClauseNogoodsOpt.getOrElse {
 
     val rules = rulesOpt.get
 
-    val (cngs1: ArrayBuffer[Array[Eli]], pHatomNegBlits: java.util.HashMap[Eli, Array[Eli]], bpbes: java.util.HashMap[Eli, Array[Eli]]) =
+    val (cngs1: Array[ArrayEliUnsafe], pHatomNegBlits: java.util.HashMap[Eli, Array[Eli]], bpbes: java.util.HashMap[Eli, Array[Eli]]) =
       computeClarkNogis(rules)
 
     posHeadAtomToNegBlits = pHatomNegBlits
@@ -122,10 +137,10 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
     val cngs = if (aspifOrDIMACSParserResult.directClauseNogoodsOpt.isDefined) {
 
-      log("#extra nogoods (in addition to direct clause nogoods): " + cngs1.length)
+      if (verbose)
+        println("#extra nogoods from pseudo-rules (in addition to direct clauses nogoods): " + cngs1.length)
 
-      cngs1 ++ aspifOrDIMACSParserResult.directClauseNogoodsOpt.get // if we create the full set of nogoods (all rules, all heads...),
-      // we can omit the "++ aspifOrDIMACSParserResult..." (I guess - check again!)
+      aspifOrDIMACSParserResult.directClauseNogoodsOpt.get ++ cngs1
 
     } else cngs1
 
@@ -133,40 +148,56 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   }
 
-  val (clarkNogoods2: ArrayBuffer[Array[Eli]], removedNogoodsPerAtomOpt) = {
+  val (clarkNogoods2: Array[ArrayEliUnsafe], removedNogoodsPerAtomOpt) = {
 
-    val cns1R: ArrayBuffer[Array[Eli]] = clarkNogoods1
+    val cns1: ArrayBuffer[ArrayEliUnsafe] = clarkNogoods1.to[ArrayBuffer]
 
-    val cns1: ArrayBuffer[Array[Eli]] = cns1R //.map(nogood => nogood /*.map(negateEli(_))*/      /*.sorted*/)
+    lazy val lorgno = cns1.map(_.size()).sum
 
-    println("#cns1 (K-org): " + cns1.length)
+    lazy val oldN = symbols.length
 
-    println("L-org: " + cns1.map(_.length).sum)
+    if (verbose && variableOrNogoodElimConfig._1) {
 
-    println("Original #variables: " + symbols.length)
+      println("K-org (clauses): " + cns1.length) // original #clauses
 
-    val (cns2: ArrayBuffer[Array[Eli]], removedNogoodsPerAtomOpt: Option[mutable.TreeMap[Eli /*atom eli*/ , ArrayBuffer[Array[Eli]]]]) =
-      if (!variableElimConfig._1) (cns1, None) else {
+      println("L-org (literals): " + lorgno) // original #literals (i.e. elis in our case)
 
-        // TODO (improvement opportunities!):
+      println("N-org (variables): " + oldN) // original #symbols (variables)
 
-        val removedNogis = new IntHashSet()
+    }
 
-        val productPosNegLitsOrigCap = (cns1.length.toDouble * variableElimConfig._4).toInt
+    val startTimeVarElim = System.nanoTime()
 
-        val noOfResolventsOverheadCap = (cns1.length.toDouble * variableElimConfig._2).toInt
+    val (cns2: ArrayBuffer[ArrayEliUnsafe], removedNogoodsPerAtomOpt: Option[mutable.TreeMap[Eli /*atom eli*/ , ArrayBuffer[ArrayEliUnsafe]]]) =
+      if (!variableOrNogoodElimConfig._1) (cns1, None) else { // static variable elimination
 
-        val noOfOriginalLitsOverheadCap = (noOfAllElis.toDouble * variableElimConfig._3).toInt
+        // TODO (improvement opportunities):
 
-        val eliToNogis = Array.fill[mutable.HashSet[Nogi]](noOfAllElis)(mutable.HashSet[Nogi] /*mutable.LinkedHashSet[Nogi]*/ ())
+        val removedNogis = new IntOpenHashSet()
+
+        val productPosNegLitsOrigCap = (Math.sqrt(cns1.length.toDouble) * variableOrNogoodElimConfig._4).toInt
+
+        val noOfResolventsOverheadCap = (cns1.length.toDouble * variableOrNogoodElimConfig._2).toInt
+
+        val noOfOriginalLitsOverheadCap = (noOfAllElis.toDouble * variableOrNogoodElimConfig._3).toInt
+
+        val eliToNogisTemp = Array.fill[IntOpenHashSet](noOfAllElis)(new IntOpenHashSet /*mutable.LinkedHashSet[Nogi]*/ ())
 
         var nogi = cns1.length - 1
 
         while (nogi >= 0) {
 
-          val nogood = cns1(nogi)
+          val nogood: ArrayEliUnsafe = cns1(nogi)
 
-          nogood.foreach(eliInNogood => eliToNogis(eliInNogood).add(nogi))
+          var k = nogood.size() - 1
+
+          while (k >= 0) {
+
+            eliToNogisTemp(nogood.get(k)).add(nogi)
+
+            k -= 1
+
+          }
 
           nogi -= 1
 
@@ -176,28 +207,11 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
         var maxElimIts = 1 // sometimes eliminating a variable (pos atom) leads to follow-up elimination opportunities, in which case > 1 should be set
 
-        val elimPosAtoms = new IntHashSet() // NB: IntScatterSet.remove (hppc v. 8.1) doesn't seem to work properly?
+        val elimPosAtoms = new IntOpenHashSet()
 
         var pnNogood = Array.ofDim[Eli](10000)
 
-        val removedNogoodsPerAtom = mutable.TreeMap[Eli /*atom eli*/ , ArrayBuffer[Array[Eli]]]()
-
-        @inline def countNogoods = {
-
-          if (false) {
-            val finalNogis = new IntHashSet()
-
-            val finalNogoods = ArrayBuffer[Set[Eli]]()
-
-            eliToNogis.foreach(nogis => nogis.foreach(a => finalNogis.add(a)))
-
-            finalNogis.forEach(a => finalNogoods.append(cns1(a.value).toSet))
-
-            log("#nogoods: " + finalNogoods.length + "\n")
-
-          }
-
-        }
+        val removedNogoodsPerAtom = mutable.TreeMap[Eli /*atom eli*/ , ArrayBuffer[ArrayEliUnsafe]]()
 
         do {
 
@@ -211,7 +225,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
               val negPosEli = negatePosEli(posEli)
 
-              val resolvents = new ObjectArrayList[Array[Eli]]() //new mutable.ArrayBuilder.ofRef[Array[Eli]] ()
+              val resolvents = new ObjectArrayList[ArrayEliUnsafe]()
 
               var resolventsL = 0
 
@@ -219,9 +233,9 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
               var resCount = 0
 
-              val nogisWithPosEli = eliToNogis(posEli).toArray
+              val nogisWithPosEli = eliToNogisTemp(posEli).toIntArray
 
-              val nogisWithNegPosEli = eliToNogis(negPosEli).toArray
+              val nogisWithNegPosEli = eliToNogisTemp(negPosEli).toIntArray
 
               var pncLits = 0
 
@@ -233,15 +247,15 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
                 var nIt = nogisWithNegPosEli.length - 1
 
-                val res = new IntHashSet()
+                val res = new IntOpenHashSet()
 
                 if (pIt * nIt < productPosNegLitsOrigCap)
-                  while (pIt >= 0 /*pIndex >= 0*/ ) {
+                  while (pIt >= 0) {
                     {
 
                       val pNogi: Nogi = nogisWithPosEli(pIt)
 
-                      if (true /*!removedNogis.contains(pNogi)*/ ) {
+                      if (!removedNogis.contains(pNogi)) {
 
                         nIt = nogisWithNegPosEli.length - 1
 
@@ -250,87 +264,91 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
                             val nNogi: Nogi = nogisWithNegPosEli(nIt)
 
-                            if (true /*!removedNogis.contains(nNogi)*/ ) {
+                            if (!removedNogis.contains(nNogi)) {
 
-                              {
+                              val pNogood: ArrayEliUnsafe = cns1(pNogi)
 
-                                val pNogood: Array[Eli] = cns1(pNogi)
+                              val nNogood: ArrayEliUnsafe = cns1(nNogi)
 
-                                val nNogood: Array[Eli] = cns1(nNogi)
+                              res.clear()
 
-                                res.clear()
+                              //res.sizeHint(pNogood.length + nNogood.length - 2)
 
-                                //res.sizeHint(pNogood.length + nNogood.length - 2)
+                              pncLits += /*(nNogood.toArray ++ pNogood.toArray).distinct.length*/ nNogood.size() + pNogood.size()
 
-                                pncLits += nNogood.length + pNogood.length
+                              var ik = pNogood.size() - 1
 
-                                var ik = pNogood.length - 1
+                              var jk = nNogood.size() - 1
 
-                                var jk = nNogood.length - 1
+                              if (ik == 1 && jk == 1) {
 
-                                if (ik == 1 && jk == 1) {
+                                val res = Array.ofDim[Eli](2)
 
-                                  val res = Array.ofDim[Eli](2)
+                                if (pNogood.get(0) == posEli)
+                                  res(0) = pNogood.get(1)
+                                else
+                                  res(0) = pNogood.get(0)
 
-                                  if (pNogood(0) == posEli)
-                                    res(0) = pNogood(1)
-                                  else
-                                    res(0) = pNogood(0)
+                                if (nNogood.get(0) == negPosEli)
+                                  res(1) = nNogood.get(1)
+                                else
+                                  res(1) = nNogood.get(0)
 
-                                  if (nNogood(0) == negPosEli)
-                                    res(1) = nNogood(1)
-                                  else
-                                    res(1) = nNogood(0)
+                                if (res(0) != negateEli(res(1))) {
 
-                                  if (res(0) != negateEli(res(1))) {
+                                  resLits += res.size
 
-                                    resLits += res.size
+                                  resolvents.add(new ArrayEliUnsafe(res))
 
-                                    resolvents.add(res)
-
-                                  }
-
-                                } else {
-
-
-                                  var isTaut = false
-
-                                  while (ik >= 0) {
-
-                                    val lit = pNogood(ik)
-
-                                    if (lit != posEli)
-                                      res.add(lit)
-
-                                    ik -= 1
-
-                                  }
-
-                                  while (jk >= 0 && !isTaut) {
-
-                                    val lit = nNogood(jk)
-
-                                    if (res.contains(negateEli(lit))) {
-
-                                      isTaut = true
-
-                                    } else if (lit != negPosEli /*&& lit != posEli*/ )
-                                      res.add(lit)
-
-                                    jk -= 1
-
-                                  }
-
-
-                                  if (!isTaut) {
-
-                                    resLits += res.size
-
-                                    resolvents.add(res.toArray)
-
-                                  }
                                 }
 
+                              } else {
+
+                                var isTaut = false
+
+                                while (ik >= 0) {
+
+                                  val lit = pNogood.get(ik)
+
+                                  if (lit != posEli) {
+
+                                    res.add(lit)
+
+                                    resLits += 1
+
+                                  }
+
+                                  ik -= 1
+
+                                }
+
+                                while (jk >= 0 && !isTaut) {
+
+                                  val lit = nNogood.get(jk)
+
+                                  if (res.contains(negateEli(lit))) {
+
+                                    isTaut = true
+
+                                  } else if (lit != negPosEli) {
+
+                                    res.add(lit)
+
+                                    resLits += 1
+
+                                  }
+
+                                  jk -= 1
+
+                                }
+
+                                if (!isTaut) {
+
+                                  //resLits += res.size
+
+                                  resolvents.add(new ArrayEliUnsafe(res.toIntArray))
+
+                                }
                               }
 
                             }
@@ -355,22 +373,13 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
               @inline def adc1 = {
 
-                val rmv = ArrayBuffer[Array[Eli]]()
+                val rmv = ArrayBuffer[ArrayEliUnsafe]()
 
                 @inline def rmNogood(nogi: Nogi) = {
 
                   removedNogis.add(nogi)
 
                   rmv.append(cns1(nogi))
-
-                  eliToNogis.foreach { case nogis: mutable.HashSet[Nogi] => {
-
-                    nogis.remove(nogi)
-
-                    //assert(!nogis.contains(nogi))
-
-                  }
-                  }
 
                 }
 
@@ -388,19 +397,17 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
                 removedNogoodsPerAtom.put(posEli, rmv)
 
-                //println("  -Eliminated positive eli (variable) " + posEli + "  [negated: " + negatePosEli(posEli) + "]")
-
-                countNogoods
+                //println("  -Eliminated positive eli (variable) " + eli + "  [negated: " + negatePosEli(eli) + "]")
 
               }
 
-              val resolventsA = resolvents
+              val resolventsA: ObjectArrayList[ArrayEliUnsafe] = resolvents
 
               @inline def adc2 = {
 
-                resolventsA.forEach { a => {
+                resolventsA.forEach { a /*: ObjectCursor[ArrayEliUnsafe]*/ => {
 
-                  val resolvent = a.value
+                  val resolvent = a //.value
 
                   val newNogi = cns1.length
 
@@ -408,19 +415,15 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
                   cns1.append(resolventA)
 
-                  var k = resolventA.length - 1
+                  var k = resolventA.size - 1
 
                   while (k >= 0) {
 
-                    val eli = resolventA(k)
-
-                    eliToNogis(eli).add(newNogi)
+                    eliToNogisTemp(resolventA.get(k)).add(newNogi)
 
                     k -= 1
 
                   }
-
-                  //}
 
                 }
 
@@ -443,8 +446,6 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
                 elimPosAtoms.add(posEli)
 
-                countNogoods
-
               }
 
             }
@@ -457,25 +458,23 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
         } while (entry && maxElimIts > 0)
 
-        val finalNogis = new IntHashSet()
+        val finalNogis = new mutable.HashSet[Eli]()
 
-        val finalNogoods = ArrayBuffer[Array[Eli]]()
+        val finalNogoods = ArrayBuffer[ArrayEliUnsafe]()
 
-        eliToNogis.foreach(nogis => nogis.foreach(a => finalNogis.add(a)))
+        eliToNogisTemp.foreach(nogis => nogis.toIntArray.foreach(a => if (!removedNogis.contains(a)) finalNogis.add(a)))
 
-        finalNogis.forEach(a => finalNogoods.append(cns1(a.value)))
+        finalNogis.foreach { a: Eli => finalNogoods.append(cns1(a /*.value*/)) }
 
         (finalNogoods, Some(removedNogoodsPerAtom))
 
       }
 
-    log("#cns2: " + cns2.length)
-
-    val cns3 = if (variableElimConfig._5 && removedNogoodsPerAtomOpt.isDefined) {
+    val cns3: ArrayBuffer[ArrayEliUnsafe] = if (variableOrNogoodElimConfig._5 && removedNogoodsPerAtomOpt.isDefined) {
 
       assert(satMode) // TODO: make work with ASP (see "posHeadAtomToNegBlits =" below) or generatePseudoRulesForNogoodsForSATMode
 
-      println("Removing eliminated elis...")
+      log("Removing eliminated elis...")
 
       val removedPosElis = removedNogoodsPerAtomOpt.get.keys.toSet
 
@@ -494,28 +493,44 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
         }
       })
 
-      val r = cns2.map(nogood => nogood.map { oldEli => {
+      val r = cns2.map(nogood => {
 
-        assert(!removedPosElis.contains(oldEli))
+        val updatedNogood = new ArrayEliUnsafe(nogood.size())
 
-        val newEli = if (isPosEli(oldEli)) {
+        var i = 0
+
+        while (i < nogood.size()) {
+
+          val oldEli = nogood.get(i)
 
           assert(!removedPosElis.contains(oldEli))
 
-          eliChangeMap(oldEli)
+          val newEli = if (isPosEli(oldEli)) {
+
+            assert(!removedPosElis.contains(oldEli))
+
+            eliChangeMap(oldEli)
+
+          }
+          else {
+
+            assert(!removedPosElis.contains(negateNegEli(oldEli)))
+
+            eliChangeMap(oldEli)
+
+          }
+
+          updatedNogood.update(i, newEli)
+
+          i += 1
 
         }
-        else {
 
-          assert(!removedPosElis.contains(negateNegEli(oldEli)))
+        updatedNogood
 
-          eliChangeMap(oldEli)
-
-        }
-
-        newEli
       }
-      })
+
+      )
 
       symbols = symbolsWithIndex.filterNot { case (_, index) => removedPosElis.contains(index) }.map(_._1)
 
@@ -535,49 +550,86 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
     } else cns2
 
-    if (debug) {
+    if (verbose && variableOrNogoodElimConfig._1) {
 
-      log("\nNogoods from Clark's Completion:\n")
+      println("Time variable elimination: " + timerToElapsedMs(startTimeVarElim) + "ms")
 
-      cns3.foreach((nogood: Array[Eli]) => {
+      println("K (clauses) after elimination: " + cns3.length + " (" + (cns3.length - cns1.length).toFloat / cns1.length.toFloat * 100f + "%)")
 
-        log(" " + nogood.map(eli => if (!isBlit(eli)) (if (isNegEli(eli)) "not " + symbols(negateEli(eli)) else symbols(eli)) else (if (isNegEli(eli)) "not " + "bodyeli" + negateEli(eli) else "bodyeli" + eli)).mkString(","))
+      val l = cns3.map(_.size()).sum
 
+      println("L (literals) after elimination: " + l + " (" + (l - lorgno).toFloat / lorgno.toFloat * 100 + "%)")
 
-      })
-
-      log("\n-------------------\n")
-
-      log("\nNogoods from Clark's Completion (as eli seqs):\n")
-
-      cns3.foreach((nogood: Array[Eli]) => {
-
-        log(" " + nogood.mkString(","))
-
-
-      })
+      println("N (variables) after elimination: " + symbols.length + "(" + (symbols.length - oldN).toFloat / oldN.toFloat * 100f + "%)")
+      if (!variableOrNogoodElimConfig._5) println("  (note: material variable elimination is off)")
 
     }
 
-    (cns3, removedNogoodsPerAtomOpt)
+    (cns3.toArray, removedNogoodsPerAtomOpt)
 
   }
 
-  //println("#clarkNogoods1: " + clarkNogoods1.length)
+  //@Contended
+  val clarkNogoods: Array[ArrayEliUnsafe] = if (!initCleanUpSortClarkNogoods) clarkNogoods2 else {
 
-  val clarkNogoods = clarkNogoods2 //.filterNot(nogood1 => clarkNogoods1.exists(nogood2 => nogood2.toSet.subsetOf(nogood1.toSet)))
+    clarkNogoods2.foreach(
 
-  log("final #clarkNogoods: " + clarkNogoods.length)
+      ng => {
 
-  val dependencyGraph: IntObjectHashMap[List[Eli]] = if (satMode) new IntObjectHashMap[List[Eli]]() else rulesOpt.map(rules =>
-    computeDependencyGraph(rules, noOfPosAtomElis)).getOrElse(new IntObjectHashMap[List[Eli]]())
+        ng.distinctSorted
+
+        ng.isSorted = true
+
+      })
+
+    //val noVarOccurrences = Array.ofDim[Int](noOfAllElis)
+
+    //clarkNogoods2.foreach(_.toArray().foreach(noVarOccurrences(_) += 1))
+
+    val r = clarkNogoods2.distinct //.sortBy(-_.size_)
+
+    //val r = clarkNogoods2.distinct.sortBy(ng => ng.toArray().map(noVarOccurrences(_)).sum)
+
+    /*val r = clarkNogoods2.distinct.map(ngus => {
+
+      val ng = ngus.toArray
+
+      new ArrayEliUnsafe(util.Random.shuffle(ng.toVector).toArray)
+
+    })*/
+
+    r.foreach(
+
+      ng => {
+
+        ng.isSorted = false
+
+      })
+
+    if (verbose) {
+
+      println("#initial nogoods before cleanup: " + clarkNogoods2.length)
+
+      println("   after cleanup: " + r.length)
+
+    }
+
+    r
+
+  }
+
+  val dependencyGraph: Int2ObjectOpenHashMap[List[Eli]] = if (satMode) new Int2ObjectOpenHashMap[List[Eli]]() else rulesOpt.map(rules =>
+    computeDependencyGraph(rules, noOfPosAtomElis)).getOrElse(new Int2ObjectOpenHashMap[List[Eli]]())
 
   val progIsTight: Boolean = if (satMode) true else isAcyclic(dependencyGraph)
 
-  if (!satMode) (if (progIsTight) println("Program is tight") else println("Program is not tight"))
+  if (!satMode) (if (progIsTight && verbose) println("\nProgram is tight") else if (verbose) println("\nProgram is not tight"))
 
-  val costFctsInnerWithPossMeasuredElis = ArrayBuffer[(DifferentialFunction[DoubleReal], Eli /*measured*/ )]()
+  //@Contended
+  val costFctsInnerWithPossMeasuredElis = mutable.HashMap[Eli, DifferentialFunction[DoubleReal]]() //ArrayBuffer[(DifferentialFunction[DoubleReal], Eli /*measured*/ )]()
+  //Note ^: the mapping eli->innerCost is needed only for the simplified MSE case (where we use simplified derivation formulas, see further below)
 
+  //@Contended
   val nablasInner /*partial derivatives of the inner cost functions*/ : Array[DifferentialFunction[DoubleReal]] =
     Array.fill[DifferentialFunction[DoubleReal]](symbols.length /*if we could place
           the uncertain atoms at the beginning of symbols, we could keep this array smaller, but this would require costly re-ordering operations
@@ -587,6 +639,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   val parameterAtomVarForParamAtomEli_forPartDerivCompl = mutable.HashMap[Int, Variable[DoubleReal]]()
 
+  //@Contended
   val symbolToEli: Predef.Map[String, Eli] = symbols.zipWithIndex.toMap
 
   val parameterAtomsElis0 /*(from  the "pats" line)*/ : Array[Eli] = costsOpt.map(_.parameterAtomsSeq).map(pmasg =>
@@ -598,8 +651,8 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   val measuredAtomsElis /*(from within the cost functions)*/ : Array[Eli] = costsOpt.map(_.measuredAtomsSeq).map(_.map(vn => symbolToEli(measuredAtomNameInCostFnToSymbol(vn)))).getOrElse(Array[Eli]())
 
-  // TODO: no current use for measured atoms (since this version doesn't support, e.g., cost backtracking), we simply assume here that
-  // they are identical to the parameter atoms.
+  // TODO: no current use for measured atoms yet (since this version doesn't support, e.g., cost backtracking), we simply assume here that
+  // they are identical with the parameter atoms.
 
   setCostFctsInner
 
@@ -680,7 +733,8 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
         val costFunInnerWithElis: DifferentialFunction[DoubleReal] = translateMeasuredAtomIndices(costFunInner, noPhi = true /*partDerivComplete*/)
 
-        costFctsInnerWithPossMeasuredElis.append((costFunInnerWithElis, possibleMeasuredEli))
+        costFctsInnerWithPossMeasuredElis.put(possibleMeasuredEli, costFunInnerWithElis) //Note: the mapping eli->innerCost is needed
+        // only for the simplified MSE case (where we use simplified derivation formulas, see further below)
 
         log("Translated costFctsInner(measuredAtomEli): " + costFunInnerWithElis)
 
@@ -690,35 +744,31 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   }
 
-  log("\npreptimer 2.1: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+  log("\npreptimer 2.1: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
   @inline def findInnerCostFunForParameterAtom(parameterAtomEli: Eli): Option[DifferentialFunction[DoubleReal]] = {
 
-    val fOpt = costFctsInnerWithPossMeasuredElis.find(_._2 == parameterAtomEli)
-
-    if (fOpt.isDefined)
-      Some(fOpt.get._1)
-    else
-      None
+    costFctsInnerWithPossMeasuredElis.get(parameterAtomEli) //costFctsInnerWithPossMeasuredElis.find(_._2 == parameterAtomEli)
 
   }
 
-  log("\npreptimer 3: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+  log("\npreptimer 3: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
   val parameterAtomsElis = parameterAtomsElis0.filter(parameterAtomVarForParamAtomEli_forPartDerivCompl.contains(_))
   // ^the above ensures we only keep parameter atoms which occur as measured atoms in cost formulas (TODO: remove as soon as
   // delSAT supports disjoint param vs. measured)
 
-  val innerCostFunForParamAtomEli = if (ignoreParamVariables) mutable.Map[Eli, Option[DifferentialFunction[DoubleReal]]]() else
+  val innerCostFunForParamAtomEli = if (ignoreParamVariables || partDerivComplete) mutable.Map[Eli, Option[DifferentialFunction[DoubleReal]]]() else
     mutable.HashMap[Eli, Option[DifferentialFunction[DoubleReal]]]().++(parameterAtomsElis.map(eli => {
 
       eli -> findInnerCostFunForParameterAtom(eli)
 
     }).toMap)
 
-  log("\npreptimer 4: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+  log("\npreptimer 4: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
-  val costFctsInner = costFctsInnerWithPossMeasuredElis.unzip._1
+  @Contended
+  val costFctsInner = costFctsInnerWithPossMeasuredElis.values.toArray //costFctsInnerWithPossMeasuredElis.unzip._1
 
   val n = dFFactory.`val`(new DoubleReal(costFctsInner.length.toDouble))
 
@@ -735,14 +785,15 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
         nablasInner(parameterAtomEli) = totalCostFun_forPartDerivCompl.diff(parameterAtomVar)
 
-      } else { // faster, less general. For simple MSE-style (and some others?) cost functions. See ILP'18 paper.
+      } else { // faster, less general. For simple MSE-style (and some others?) cost functions. See M. Nickles: ILP'18 paper.
 
         val innerCostFun: DifferentialFunction[DoubleReal] = innerCostFunForParamAtomEli /*findInnerCostFunForParameterAtom*/ (parameterAtomEli).getOrElse {
-          assert(false, "Inner cost functions invalid for selected type of differentiation. Try with command line argument\n --solverarg \"partDerivComplete\" \"true\"");
-          costFctsInner(0)
-        }
 
-        val indexOfPwPr = /*translatePosEli2DiffUncertainAtomIndex*/ (parameterAtomEli)
+          stomp(-5003)
+
+          costFctsInner(0)
+
+        }
 
         nablasInner(parameterAtomEli) = innerCostFun.diff(parameterAtomVar)
 
@@ -752,13 +803,14 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
     })
 
-  log("\npreptimer 5: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+  log("\npreptimer 5: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
   val parameterAtomsElisSet: Set[Eli] = parameterAtomsElis.toSet
 
+  //@Contended
   val parameterLiteralElis: Array[Eli] = parameterAtomsElis ++ parameterAtomsElis.map(negatePosEli(_))
 
-  @inline def deficitByDeriv(parameterLiteralEli : Eli): Double = {
+  @inline def deficitByDeriv(parameterLiteralEli: Eli): Double = {
 
     // Assumes that in a step directly preceding the re-sorting, the variables in the nablaInner have been
     // updated to measuredAtomEliToStatisticalFreq!
@@ -766,7 +818,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
     (if (isPosAtomEli(parameterLiteralEli))
       nablasInner(parameterLiteralEli).getReal
     else
-      -nablasInner(negateNegEli(parameterLiteralEli)).getReal) //+ 1d
+      -nablasInner(negateNegEli(parameterLiteralEli)).getReal)
 
   }
 
@@ -796,18 +848,78 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   }
 
-  update_parameterAtomVarForParamEli_forPartDerivCompl
+  val ruliformNogiToNegBlits = new Int2ObjectOpenHashMap[Array[Eli /*negative blit*/ ]]() // only needed for non-tight ASP programs
 
-  println("\nPreparation time: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+  val eliToNogisBuilder = Array.fill(noOfAllElis)(new mutable.ArrayBuilder.ofInt)
 
-  def computeClarkNogis(rules: ArrayBuffer[Rule]): (ArrayBuffer[Array[Eli]], java.util.HashMap[Eli, Array[Eli]], java.util.HashMap[Eli, Array[Eli]]) = {
+  val eliToNogisClark: Array[ArrayValExtensibleIntUnsafe] = Array.ofDim[ArrayValExtensibleIntUnsafe](noOfAllElis) // per each eli, all nogis which contain that eli
 
-    // Follows (with a few minor differences) https://www.cs.uni-potsdam.de/wv/pdfformat/gekanesc07a.pdf
+  var nogj = 0
+
+  val cnl = clarkNogoods.length
+
+  while (nogj < cnl) {
+
+    val clarkNogood: Array[Eli] = clarkNogoods(nogj).toArray
+
+    if (!progIsTight) {
+
+      val posAtoms = clarkNogood.filter(isPosAtomEli(_))
+
+      if (posAtoms.length == 1) {
+
+        val ruleHeadAtom = posAtoms.head
+
+        val negBlitsForHead: Array[Eli] = posHeadAtomToNegBlits.get(ruleHeadAtom)
+
+        if (negBlitsForHead != null)
+          ruliformNogiToNegBlits.put(nogj, negBlitsForHead)
+
+      }
+
+    }
+
+    clarkNogood.foreach(eliInNogood => {
+
+      eliToNogisBuilder(eliInNogood).+=(nogj)
+
+    })
+
+    nogj += 1
+
+  }
+
+  var elk = 0
+
+  while (elk < noOfAllElis) {
+
+    eliToNogisClark(elk) = new ArrayValExtensibleIntUnsafe(eliToNogisBuilder(elk).result())
+
+    elk += 1
+
+  }
+
+  @Contended
+  var absEliActiv = new FloatArrayUnsafe(noOfPosElis, true) //new ArrayEliUnsafe(noOfPosElis) // similar to BerkMin's var_activity; must be global (and yes, we are accessing this sometimes without synchronization)
+
+  val elisArrangedR: Array[Eli] = if (freeEliSearchConfigsP.contains(7)) (0 until noOfAllElis).toArray else Array[Int]()
+
+  if (delSAT.verbose)
+    println("\nPreparation time: " + timerToElapsedMs(timerPrepNs) + " ms\n")
+
+  def computeClarkNogis(rules: ArrayBuffer[Rule]): (Array[ArrayEliUnsafe], java.util.HashMap[Eli, Array[Eli]], java.util.HashMap[Eli, Array[Eli]]) = {
+
+    // Nogood generation follows (with a few minor differences) https://www.cs.uni-potsdam.de/wv/pdfformat/gekanesc07a.pdf
 
     // NB: the following algorithm assumes that all rules are normal. E.g., :- integrity constraints are not allowed (need
     // to be preprocessed, see AspifParser).
 
-    val exclEmptyBodyInDeltaAtoms = false // must be false (true for debugging only)
+    // NB: in SATmode, we can end up in this method only with experimental flag generatePseudoRulesForNogoodsForSATMode = true,
+    // otherwise in SAT mode all nogoods have already been generated entirely from the CNF clauses.
+
+    val exclEmptyBodyInDeltaAtoms = resolveFactsInitially // true simplifies nogoods from empty bodies, but without prior resolution during solving it can also increase solving time (simpler != easier)
+
+    val test = false // must be false (true for debugging purposes only)
 
     val thresholdForSymbolsPar = 1000000
 
@@ -815,9 +927,11 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
     val noOfThreads = 4
 
-    val createFalsNgs: Boolean = false // deprecated
+    @deprecated val createFalsNgs: Boolean = false
 
-    val rulesWoConstr = if (!sharedDefs.specialConstrRuleNogoods) rules else /*we create special nogoods later for the omitted ones: */
+    val specialConstrRuleNogoods: Boolean = false // TODO: must be false (true doesn't work yet); if true, we create an alternative form of nogoods for :- constraints (see code)
+
+    val rulesWoConstr = if (!specialConstrRuleNogoods) rules else /*we create special nogoods later for the omitted ones: */
       rules.filterNot(rule => isPosEli(rule.headAtomsElis.head) && isFalsAuxAtom(symbols(rule.headAtomsElis.head)))
 
     val noOfThreadsNg = if (rulesWoConstr.length < thresholdForRulesPar) 1 else noOfThreads
@@ -830,11 +944,11 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
     val posHeadAtomToNegBlits: java.util.HashMap[Eli, Array[Eli]] = new java.util.HashMap[Eli, Array[Eli]]()
     // ^ we need this only for loop nogood generation in ASP; could be omitted for SAT or tight problems
 
-    log("\npreptimer0: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+    log("\npreptimer0: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
-    def deltaBetaPartComp(rulesPart: ArrayBuffer[Rule]) = { // generate body nogoods
+    def deltaBetaPartComp(rulesPart: ArrayBuffer[Rule]): ArrayBuffer[ArrayEliUnsafe] = { // generate body nogoods
 
-      val deltaBetaPart = mutable.ArrayBuffer[Array[Eli]]()
+      val deltaBetaPart = mutable.ArrayBuffer[ArrayEliUnsafe]()
 
       //deltaBetaPart.sizeHint(rulesWoConstr.length * 5 + 1000)
 
@@ -850,49 +964,53 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
         val bneg: Array[Eli] = rule.bodyNegAtomsElis
 
-        val bNeg = negatePosEli(rule.posBodyEli)
+        if (!test || bpos.length > 0 || bneg.length > 0) {
 
-        val s1: Array[Eli] = Array.ofDim[Eli](bpos.length + bneg.length + 1)
+          val blit = rule.blit // the blit of the rule. NB: if omitSingletonBlits, this is an ordinary (non body) eli if there's just one body literal
 
-        bpos.copyToArray(s1, 0)
+          val blitNegated = negateEli(blit)
 
-        bneg.copyToArray(s1, bpos.length)
+          val s1: Array[Eli] = Array.ofDim[Eli](bpos.length + bneg.length + 1)
 
-        s1(s1.length - 1) = bNeg
+          bpos.copyToArray(s1, 0)
 
-        deltaBetaPart.append(s1) // δ(β)
+          bneg.copyToArray(s1, bpos.length)
 
-        negBlitToPosBodyElis.put(bNeg, bpos)
+          s1(s1.length - 1) = blitNegated
 
-        val bPos = rule.posBodyEli // the blit of the rule
+          deltaBetaPart.append(new ArrayEliUnsafe(s1)) // δ(β)
 
-        val s2pos: Array[Array[Eli]] = bpos.map(eli => Array(bPos, negatePosEli(eli)))
+          negBlitToPosBodyElis.put(blitNegated, bpos)
 
-        deltaBetaPart.appendAll(s2pos) // Δ(β)
+          val s2pos: Array[ArrayEliUnsafe] = bpos.map(eli => new ArrayEliUnsafe(Array(blit, negatePosEli(eli))))
 
-        val s2neg: Array[Array[Eli]] = bneg.map(eli => Array(bPos, negateNegEli(eli)))
+          deltaBetaPart.appendAll(s2pos) // Δ(β)
 
-        deltaBetaPart.appendAll(s2neg) // Δ(β)
+          val s2neg: Array[ArrayEliUnsafe] = bneg.map(eli => new ArrayEliUnsafe(Array(blit, negateNegEli(eli))))
+
+          deltaBetaPart.appendAll(s2neg) // Δ(β)
+
+        }
 
         ri += 1
 
       }
 
-      log("\npreptimer1: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+      log("\npreptimer1: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
       deltaBetaPart
 
     }
 
-    def deltaAtomsComp(omit: Boolean): mutable.ArrayBuffer[Array[Eli]] = { // generate head/atom-related nogoods
+    def deltaAtomsComp(omit: Boolean): mutable.ArrayBuffer[ArrayEliUnsafe] = { // generate head/atom-related nogoods
 
-      val deltaAtoms = mutable.ArrayBuffer[Array[Eli]]()
+      val deltaAtoms = mutable.ArrayBuffer[ArrayEliUnsafe]()
 
       if (!omit) {
 
         //deltaAtoms.sizeHint(symbols.length * 5 + 1000)
 
-        log("\npreptimer2a: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+        log("\npreptimer2a: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
         val rulesGroupedByTheirHeadEli = Array.fill[ArrayBuffer[Rule]](noOfAllElis)(ArrayBuffer[Rule]())
 
@@ -914,7 +1032,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
         }
 
-        log("\npreptimer2b: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+        log("\npreptimer2b: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
         val zeroToSymLen = (0 until noOfPosAtomElis) ++ (posNegEliBoundary until posNegEliBoundary + noOfPosAtomElis)
         // ^ all positive and negative literals except blits. Note that negative head lits should not (yet) occur in ASP mode, these
@@ -924,15 +1042,16 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
           // TODO: We should optionally treat #external atoms here specially, even if they don't occur in any rules, in which case nogoods are generated for them to ensure they are never true.
 
-          val bodiesOfp: ArrayBuffer[Rule] = rulesGroupedByTheirHeadEli(atomEli_p)
+          val bodiesOfp: ArrayBuffer[Rule] = rulesGroupedByTheirHeadEli(atomEli_p) // NB: this also includes empty bodies!
 
-          val s1s2 = ArrayBuffer[Array[Eli]]()
+          val s1s2 = ArrayBuffer[ArrayEliUnsafe]()
 
-          if (!satMode || !bodiesOfp.isEmpty) {
+          var isFact = false
+
+          if (!satMode /*see above*/ || !bodiesOfp.isEmpty) {
 
             if (bodiesOfp.isEmpty && isPosEli(atomEli_p) && !symbols(atomEli_p).startsWith(auxPredPrefixBase))
               stomp(-5005, symbols(atomEli_p))
-
 
             s1s2.sizeHint(bodiesOfp.length + 1)
 
@@ -942,26 +1061,32 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
               bodiesOfp.foreach(rule => { // Δ(p)
 
-                s1s2.append(if (exclEmptyBodyInDeltaAtoms && (/*(rule.bodyPosAtomsElis.isEmpty && rule.bodyNegAtomsElis.isEmpty)*/
-                  rule.posBodyEli == emptyBodyBlit)) Array(negHeadAtomEli) else
-                  Array(negHeadAtomEli, rule.posBodyEli))
+                s1s2.append(if (exclEmptyBodyInDeltaAtoms && (
+                  rule.blit == emptyBodyBlit) || isFact) {
+
+                  isFact = true
+
+                  new IntArrayUnsafe(Array(negHeadAtomEli))
+
+                } else
+                  new IntArrayUnsafe(Array(negHeadAtomEli, rule.blit)))
 
               })
 
             }
 
-            // TODO:  handle #external atoms here (currently ignored / treated as undefined unless defined in some rule):
-            if (((bodiesOfp.length > 1 || bodiesOfp.length == 1 && bodiesOfp.head.posBodyEli != emptyBodyBlit))) { // δ(p)
-              // ^ in satMode, this branch is only allowed if we create _all_ possible pseudo-rules (for all clauses and heads),
-              // otherwise the following can lead to wrong UNSAT:
+            // TODO:  handle #external atoms here (currently ignored / treated as undefined unless defined by some rule):
+            if (((bodiesOfp.length > 1 || bodiesOfp.length == 1 && bodiesOfp.head.blit != emptyBodyBlit))) { // δ(p)
+              // (^ in satMode (which normally doesn't use this method anyway, see above), this branch is only allowed if we
+              // create _all_ possible pseudo-rules (for all clauses and heads), otherwise the following can lead to wrong UNSAT:)
 
-              val s2NogoodBuffer = Array.ofDim[Eli](bodiesOfp.length + 1)
+              val s2NogoodBuffer = new IntArrayUnsafe(bodiesOfp.length + 1) //Array.ofDim[Eli](bodiesOfp.length + 1)
 
               var s2i = 0
 
               bodiesOfp.foreach(rule => { // ? note: if we do this even if bodiesOfp is empty, which creates false-enforcing nogoods for undefined symbols
 
-                s2NogoodBuffer(s2i) = negatePosEli(rule.posBodyEli)
+                s2NogoodBuffer.update(s2i, negateEli(rule.blit))
 
                 s2i += 1
 
@@ -969,7 +1094,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
               s2NogoodBuffer(s2i) = atomEli_p
 
-              posHeadAtomToNegBlits.put(atomEli_p, s2NogoodBuffer.slice(0, s2i))
+              posHeadAtomToNegBlits.put(atomEli_p, s2NogoodBuffer.toArray(0, s2i))
 
               s1s2.append(s2NogoodBuffer)
 
@@ -983,7 +1108,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
         }
         }.seq.foreach(deltaAtoms.appendAll(_))
 
-        log("\npreptimer2: " + (System.nanoTime() - timerPrepNs) / 1000000 + " ms\n")
+        log("\npreptimer2: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
       }
 
@@ -991,7 +1116,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
     }
 
-    val deltaClark: mutable.ArrayBuffer[Array[Eli]] = if (noOfThreadsNg == 1) {
+    val deltaClark: mutable.ArrayBuffer[ArrayEliUnsafe] = if (noOfThreadsNg == 1) {
 
       val rulesOnlyPart = rulesPartitioning.next()
 
@@ -1003,7 +1128,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
       implicit val executor = scala.concurrent.ExecutionContext.global
 
-      val deltaBetaFutures: Iterator[Future[ArrayBuffer[Array[Eli]]]] = rulesPartitioning.map((rulesPart: ArrayBuffer[Rule]) => Future {
+      val deltaBetaFutures: Iterator[Future[ArrayBuffer[ArrayEliUnsafe]]] = rulesPartitioning.map((rulesPart: ArrayBuffer[Rule]) => Future {
 
         deltaBetaPartComp(rulesPart)
 
@@ -1015,33 +1140,29 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
       }(executor)
 
-      val deltas: ArrayBuffer[ArrayBuffer[Array[Eli]]] = Await.result(Future.sequence(Seq(deltaAtomsFuture) ++ deltaBetaFutures), Duration.Inf).to[ArrayBuffer]
+      val deltas: ArrayBuffer[ArrayBuffer[ArrayEliUnsafe]] = Await.result(Future.sequence(Seq(deltaAtomsFuture) ++ deltaBetaFutures), Duration.Inf).to[ArrayBuffer]
 
       deltas.flatten
 
     }
 
-    val falsNogoods: ArrayBuffer[Array[Eli]] = if (createFalsNgs)
-      symbolsWithIndex.filter(si => isFalsAuxAtom(si._1)).map(x => Array(x._2)).to[ArrayBuffer]
-    else if (!sharedDefs.specialConstrRuleNogoods) ArrayBuffer[Array[Eli]]() else {
+    val falsNogoods: ArrayBuffer[ArrayEliUnsafe] = if (createFalsNgs)
+      symbolsWithIndex.filter(si => isFalsAuxAtom(si._1)).map(x => new ArrayEliUnsafe(Array(x._2))).to[ArrayBuffer]
+    else if (!specialConstrRuleNogoods) ArrayBuffer[ArrayEliUnsafe]() else {
 
       // we add special nogoods for rules which have been (elsewhere) resulted from constraints :- b1, b2, ...
 
       val contraintRules = rules.filter(rule => isPosAtomEli(rule.headAtomsElis.head) && isFalsAuxAtom(symbols(rule.headAtomsElis.head)))
 
-      contraintRules.map(rule => rule.bodyPosAtomsElis ++ rule.bodyNegAtomsElis.filterNot(_ == negateEli(rule.headAtomsElis.head)))
+      contraintRules.map(rule => new ArrayEliUnsafe(rule.bodyPosAtomsElis ++ rule.bodyNegAtomsElis.filterNot(_ == negateEli(rule.headAtomsElis.head))))
 
     }
 
-    if (delSAT.showProgressStats) {
-
-      System.out.println("# special constraint rule nogoods = " + falsNogoods.length)
-
-    }
+    log("# special constraint rule nogoods = " + falsNogoods.length)
 
     val r = deltaClark ++ falsNogoods
 
-    (r, posHeadAtomToNegBlits, negBlitToPosBodyElis)
+    (r.toArray, posHeadAtomToNegBlits, negBlitToPosBodyElis)
 
   }
 
@@ -1078,7 +1199,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   def checkASPWithEliRules(modelCandidate: (Array[Eli], IntOpenHashSet), ruless: ArrayBuffer[Rule]): (Boolean, Array[Eli]) = {
 
-    val rules = ruless.filter(r => !(r.posBodyEli == emptyBodyBlit && r.headAtomsElis.isEmpty && r.bodyNegAtomsElis.isEmpty) /*<- dummy rules " :- "*/)
+    val rules = ruless.filter(r => !(r.blit == emptyBodyBlit && r.headAtomsElis.isEmpty && r.bodyNegAtomsElis.isEmpty) /*<- dummy rules " :- "*/)
 
     val r1: Seq[Rule] = rules.filterNot {
       _.bodyNegAtomsElis.exists(negEli /* modelCandidate contains positive atomic elis only, so we need to check for negated negEli: */ => {
@@ -1092,7 +1213,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
     }
 
     val reduct: Seq[Rule] = r1.map(r => new Rule(headAtomsElis = r.headAtomsElis,
-      bodyPosAtomsElis = r.bodyPosAtomsElis, bodyNegAtomsElis = Array[Eli](), posBodyEli = -1)) // Gelfond-Lifschitz reduct
+      bodyPosAtomsElis = r.bodyPosAtomsElis, bodyNegAtomsElis = Array[Eli](), blit = -1)) // Gelfond-Lifschitz reduct
 
     val lhm = computeLeastHerbrandDefClauses(reduct)
 
@@ -1127,9 +1248,9 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   }
 
-  def computeDependencyGraph(rules: ArrayBuffer[Rule], noOfAllPosAtomElis: Int): IntObjectHashMap[List[Eli]] = {
+  def computeDependencyGraph(rules: ArrayBuffer[Rule], noOfAllPosAtomElis: Int): Int2ObjectOpenHashMap[List[Eli]] = {
 
-    var graphInit = new IntObjectHashMap[List[Eli]]()
+    var graphInit = new Int2ObjectOpenHashMap[List[Eli]]()
 
     var jj = 0
 
@@ -1141,7 +1262,8 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
         val headEli = rule.headAtomsElis.head
 
-        assert(isPosEli(headEli), "Error: only normal rules with positive head literal supported")
+        if (!isPosEli(headEli))
+          stomp(-5004, rule.toString)
 
         val successorNodes: Array[Eli] = rule.bodyPosAtomsElis
 
@@ -1175,7 +1297,7 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
   }
 
-  @tailrec final def isAcyclic(depGraph: IntObjectHashMap[List[Eli]]): Boolean = {
+  @tailrec final def isAcyclic(depGraph: Int2ObjectOpenHashMap[List[Eli]]): Boolean = {
 
     depGraph.isEmpty || {
 
@@ -1183,24 +1305,28 @@ class Preparation(val aspifOrDIMACSParserResult: sharedDefs.AspifOrDIMACSPlainPa
 
       val nonLeaveGraphPart = ArrayBuffer[(Eli, List[Eli])]()
 
-      val graphEntries: IntObjectHashMap[List[Eli]]#KeysContainer = depGraph.keys()
+      val graphEntries: IntSet /*: Int2ObjectOpenHashMap[List[Eli]]#KeysContainer*/ = depGraph.keySet()
 
-      graphEntries.forEach(key => {
+      val graphEntriesIterator = graphEntries.iterator()
 
-        val v: List[Eli] = depGraph.get(key.value)
+      while (graphEntriesIterator.hasNext()) {
+
+        val key = graphEntriesIterator.nextInt()
+
+        val v: List[Eli] = depGraph.get(key)
 
         if (v.isEmpty)
-          leaveElisB.+=(key.value)
+          leaveElisB.+=(key)
         else
-          nonLeaveGraphPart.append((key.value, v))
+          nonLeaveGraphPart.append((key, v))
 
-      })
+      }
 
       val leaveElis = leaveElisB.result()
 
       !leaveElis.isEmpty && {
 
-        val strippedGraph = new IntObjectHashMap[List[Eli]]()
+        val strippedGraph = new Int2ObjectOpenHashMap[List[Eli]]()
 
         nonLeaveGraphPart.foreach((keyValues: (Eli, List[Eli])) => {
 
