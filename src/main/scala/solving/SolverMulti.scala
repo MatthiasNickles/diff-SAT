@@ -349,21 +349,8 @@ class SolverMulti(prep: Preparation) {
 
       val noHeap = if (noHeapR == -1) clarkNogoods.length < 20000 && noOfPosElis < 100000 else noHeapR == 1
 
-      val prearrangeEliPool = if (prearrangeEliPoolR <= 3) prearrangeEliPoolR else {
-
-        nextFloatRngLocal() match {
-
-          case r if r < 0.25f => 0
-
-          case r if r < 0.50f => 1
-
-          case r if r < 0.75f => 2
-
-          case _ => 3
-
-        }
-
-      }
+      val prearrangeEliPool = if (prearrangeEliPoolR <= 3) prearrangeEliPoolR else
+        Math.floor(nextFloatRngLocal() / 0.25)
 
       var elisArranged = if (prearrangeEliPool == 0) elisArrangedR else if (prearrangeEliPool == 3) {
 
