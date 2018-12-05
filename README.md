@@ -4,8 +4,8 @@
 
 **Purpose**
 
-DelSAT is an Answer Set Programming (ASP) and SAT solver for sampling-based multimodel optimization (but it can be
-used as a plain parallelized SAT or Answer Set solver too). 
+DelSAT is an Answer Set Programming (ASP) and SAT solver for sampling-based multimodel optimization, but it can also be
+used as a plain parallelized SAT or Answer Set solver or for distribution-aware ASP or SAT sampling. 
 
 DelSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (with support for Unsafe) is required. For performance reasons Java 11 or higher is recommended, e.g., OpenJDK 11.
 
