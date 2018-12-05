@@ -47,7 +47,7 @@ class SolverMulti(prep: Preparation) {
 
   val noPassBits = 64
 
-  val ORDERBITS: Long = 42 // number of bits for storing the assignment orderOfEli of an eli within a positive int (32bit) value
+  val ORDERBITS: Long = 42 // number of bits for storing the assignment orderOfEli of an eli 
 
   val maxOrderNo = 1l << ORDERBITS
 
@@ -626,22 +626,7 @@ class SolverMulti(prep: Preparation) {
         }
 
         @inline def fillUp: Unit = {
-
-          /*if (pool.size_ <= 2)
-            tlNotsetItem = -1
-          else if (pool.size_ == 3) {
-
-            if (isNotSetInPassAndNotEq(pool.get(2), hdNotsetItem))
-              tlNotsetItem = pool.get(2)
-            else if (isNotSetInPassAndNotEq(pool.get(1), hdNotsetItem))
-              tlNotsetItem = pool.get(1)
-            else if (isNotSetInPassAndNotEq(pool.get(0), hdNotsetItem))
-              tlNotsetItem = pool.get(0)
-            else
-              tlNotsetItem = -1
-
-          } else*/  {
-
+        {
             tlNotsetItem = -1
 
             if (pool.size_ >= 2) {
