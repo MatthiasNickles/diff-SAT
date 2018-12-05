@@ -5,17 +5,19 @@
 **Purpose**
 
 DelSAT is an Answer Set Programming (ASP) and SAT solver for sampling-based multimodel optimization (but it can be
-used for plain parallelized Answer Set or SAT solving too). 
+used as a plain parallelized SAT or Answer Set solver too). 
 
 DelSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (with support for Unsafe) is required. For performance reasons Java 11 or higher is recommended, e.g., OpenJDK 11.
 
 Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Format (aspif),
 with an optional list of user-defined differentiable _cost functions_.
 
-DelSAT generates a sample (a multiset of sampled answer sets or sampled satisfying assignments) which
+DelSAT generates a _sample_ (a multiset of sampled models, i.e., answer sets or satisfying assignments) which
 minimizes the given cost functions up to a user-specified accuracy. Such a sample is called a _solution_. 
+In contrast to traditional optimization in SAT or ASP, the cost function refers to the entire multiset of models,
+and the sampled multiset of models as a whole minimizes the cost function. 
 
-DelSAT makes use of an approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_ where
+DelSAT doesn't convert this problem to plain SAT or ASP, but makes use of a new approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_ where
 a form of Gradient Descent is embedded in CDCL/CDNL-style solving to iteratively generate models until the cost functions' minima are reached.
 Details on this approach can be found in the following publications:
 
@@ -76,7 +78,7 @@ Example input for ASP (recommended to use with switch -mse):
         cost (0.3-f(b))^2
            
 To generate aspif format (the lines above before "pats") from a non-ground Answer Set program, preprocess
-using, e.g., Clingo (https://potassco.org/clingo/). 
+using, e.g., Clingo's (https://potassco.org/clingo/) preprocessing and grounding capability . 
 
 Example preprocessor call: clingo myLogicProg.lp --trans-ext=all --pre=aspif
 
@@ -85,7 +87,7 @@ Example preprocessor call: clingo myLogicProg.lp --trans-ext=all --pre=aspif
 DelSAT is configured using command line arguments (call with --help to see the most important ones,
 e.g., desired accuracy). 
 
-More complex cost functions might require argument --solverarg partDerivComplete true  
+In principle, arbitrary differentiable cost functions can be specified. Certain more complex cost functions might require argument --solverarg partDerivComplete true  
 (DelSAT shows a message in this case).
 
 Harder SAT or ASP problems might also require a specific solver configuration to be (efficiently) solvable 
@@ -104,7 +106,7 @@ found in source code file sharedDefs.scala (more accessible documentation is pla
 command line switch -mse. With that switch, list the instantiated inner MSE terms (of form (wi-f(vari))^2) 
 individually instead of providing a single long MSE formula. DelSAT minimizes then the expression (innerCost1+...+innerCostN)/n.
 
-- For arbitrary cost functions, you might need to provide switch --solverarg "partDerivComplete" "true" which activates a 
+- For certain cost functions, you might need to provide switch --solverarg "partDerivComplete" "true" which activates a 
 differentiation approach which is more general than the (faster) default approach. DelSAT shows a message in case 
 the default approach isn't usable.
 
