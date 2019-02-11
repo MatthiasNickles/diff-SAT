@@ -1,23 +1,23 @@
-**DelSAT**
+**delSAT**
 
 **Current version:** 0.2
 
 **Purpose**
 
-DelSAT is an Answer Set Programming (ASP) and SAT solver for sampling-based multimodel optimization, but it can also be
+delSAT is an Answer Set Programming (ASP) and SAT solver for sampling-based multimodel optimization, but it can also be
 used as a plain parallelized SAT or Answer Set solver or for distribution-aware ASP or SAT sampling. 
 
-DelSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (with support for Unsafe) is required. For performance reasons Java 11 or higher is recommended, e.g., OpenJDK 11.
+delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (with support for Unsafe) is required. For performance reasons Java 11 or higher is recommended, e.g., OpenJDK 11.
 
 Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Format (aspif),
 with an optional list of user-defined differentiable _cost functions_.
 
-DelSAT generates a _sample_ (a multiset of sampled models, i.e., answer sets or satisfying assignments) which
+delSAT generates a _sample_ (a multiset of sampled models, i.e., answer sets or satisfying assignments) which
 minimizes the given cost functions up to a user-specified accuracy. Such a sample is called a _solution_. 
 In contrast to traditional optimization in SAT or ASP, the cost function refers to the entire multiset of models,
 and the sampled multiset of models as a whole minimizes the cost function. 
 
-DelSAT doesn't convert this problem to plain SAT or ASP, but makes use of a new approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_ where
+delSAT doesn't convert this problem to plain SAT or ASP, but makes use of a new approach called _Differentiable Satisfiability_ / _Differentiable Answer Set Programming_ where
 a form of Gradient Descent is embedded in CDCL/CDNL-style solving to iteratively generate models until the cost functions' minima are reached.
 Details on this approach can be found in the following publications:
 
@@ -37,7 +37,7 @@ In addition to the cost functions, DelSAT input requires a list of _parameter at
 can occur in cost functions. They need to be listed in a single line starting with "pats " (preceding the cost function declarations). 
 In SAT-mode only, parameter atoms within cost function expressions need to be prefixed by character 'v'. 
 
-The DelSAT input can state any number of arbitrary such cost functions and can specify arbitrary 
+The delSAT input can state any number of arbitrary such cost functions and can specify arbitrary 
 logical dependencies between parameter atoms (but of course not all such constraint systems have 
 a solution).
 
@@ -82,13 +82,13 @@ using, e.g., Clingo's (https://potassco.org/clingo/) preprocessing and grounding
 
 Example preprocessor call: clingo myLogicProg.lp --trans-ext=all --pre=aspif
 
-(Note that DelSAT itself doesn't require Clingo or any other external ASP or SAT solver.)
+(Note that delSAT itself doesn't require Clingo or any other external ASP or SAT solver.)
  
-DelSAT is configured using command line arguments (call with --help to see the most important ones,
+delSAT is configured using command line arguments (call with --help to see the most important ones,
 e.g., desired accuracy). 
 
 In principle, arbitrary differentiable cost functions can be specified. Certain more complex cost functions might require argument --solverarg partDerivComplete true  
-(DelSAT shows a message in this case).
+(delSAT shows a message in this case).
 
 Harder SAT or ASP problems might also require a specific solver configuration to be (efficiently) solvable 
 (such as a certain restart configuration, number of parallel solver threads, non-default portfolio of concurrent solver configurations...). 
@@ -98,7 +98,7 @@ found in source code file sharedDefs.scala (more accessible documentation is pla
 
 **Tips & Tricks & Miscellanea**
 
-- DelSAT can be used with most types of logic programs supported by modern answer set solvers (including Disjunctive Logic Programs) but such programs might require preprocessing and grounding as explained above
+- delSAT can be used with most types of logic programs supported by modern answer set solvers (including Disjunctive Logic Programs) but such programs might require preprocessing and grounding as explained above
 
 - For using First-Order Logic (FOL) syntax (under stable model semantics), consider preprocessing using a tool such as fol2asp or f2lp.
 
@@ -126,7 +126,7 @@ Web: https://www.researchgate.net/profile/Matthias_Nickles
 
 Feedback and bug reports on this software are welcome!
 
-**DelSAT Copyright & License**
+**delSAT Copyright & License**
 
  Copyright (c) 2018 by Matthias Nickles
 
