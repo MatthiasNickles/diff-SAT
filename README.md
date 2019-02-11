@@ -33,7 +33,7 @@ In the input, cost functions are defined in lines starting with "cost ". Cost fu
 differentiable with respect to their respective parameter atom terms (see below). If multiple cost functions
 are given, their normalized sum is minimized.
 
-In addition to the cost functions, DelSAT input requires a list of _parameter atoms_ (parameter variables); these are the random variables which 
+In addition to the cost functions, delSAT input requires a list of _parameter atoms_ (parameter variables); these are the random variables which 
 can occur in cost functions. They need to be listed in a single line starting with "pats " (preceding the cost function declarations). 
 In SAT-mode only, parameter atoms within cost function expressions need to be prefixed by character 'v'. 
 
@@ -43,7 +43,7 @@ a solution).
 
 A term of form f(p) in a cost function, where p is a parameter atom, evaluates during sampling to 
 the frequency of p in the sample (count of p in all models in the sample, normalized with the total number of models in the sample). 
-(Parameter atoms are listed in addition to the cost functions because a future version of DelSAT is planned to allow for
+(Parameter atoms are listed in addition to the cost functions because a future version of delSAT is planned to allow for
 atoms to occur in cost functions which are not parameter atoms, as proposed in the ILP'18 paper.)
 
 Example input for SAT (recommended to use with switch -mse - activates optimized handling of costs which have the form of inner MSE (Mean Squared Error) terms):
@@ -104,15 +104,15 @@ found in source code file sharedDefs.scala (more accessible documentation is pla
 
 - While in principle usable with any kind of differentiable cost function(s), MSE-style costs receive optimized treatment with 
 command line switch -mse. With that switch, list the instantiated inner MSE terms (of form (wi-f(vari))^2) 
-individually instead of providing a single long MSE formula. DelSAT minimizes then the expression (innerCost1+...+innerCostN)/n.
+individually instead of providing a single long MSE formula. delSAT minimizes then the expression (innerCost1+...+innerCostN)/n.
 
 - For certain cost functions, you might need to provide switch --solverarg "partDerivComplete" "true" which activates a 
-differentiation approach which is more general than the (faster) default approach. DelSAT shows a message in case 
+differentiation approach which is more general than the (faster) default approach. delSAT shows a message in case 
 the default approach isn't usable.
 
 - There is no API documentation yet, but it is planned for the near future
 
-- For performance reasons, DelSAT is largely programmed in imperative style. 
+- For performance reasons, delSAT is largely programmed in imperative style. 
 
 More tbw. 
 
@@ -130,4 +130,4 @@ Feedback and bug reports on this software are welcome!
 
  Copyright (c) 2018 by Matthias Nickles
 
-License: [MIT license](https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE)
+License: [MIT license](https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE)
