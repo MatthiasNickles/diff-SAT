@@ -42,7 +42,7 @@ package object sharedDefs {
   // solver thread is assigned a combination of values from the respective sequences.
   // With a limited number of solver threads, values earlier in sequences get higher priority to be used by a solver thread.
 
-  var freeEliSearchConfigsP = Seq(3, 2, 5, 1, 7, 8, 6, 0) // 0<= item <=8; parallel free eli search (branching) configurations if maxCompetingSolverThreads>0.
+  var freeEliSearchConfigsP = Seq(5, 3, 2, 1, 7, 8, 6, 0) // 0<= item <=8; parallel free eli search (branching) configurations if maxCompetingSolverThreads>0.
   // Sequence order determines priority. If there is just one portfolio solver thread (see below), head is used.
   // Duplicates allowed!
   // On the commandline, use like this: --solverarg "freeEliSearchConfigsP" "1 2 8 3 0 1" (not that this doesn't specify the
