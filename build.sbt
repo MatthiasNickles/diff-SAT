@@ -9,7 +9,7 @@
   *
   */
 
-name := "DelSAT"
+name := "delSAT"
 
 version := "0.3"
 
