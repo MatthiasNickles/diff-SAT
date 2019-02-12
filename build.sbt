@@ -1,13 +1,27 @@
-// DelSAT
-// Copyright (c) 2018 Matthias Nickles
+/**
+  * delSAT
+  *
+  * Copyright (c) 2018, 2019 Matthias Nickles
+  *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  *
+  */
 
 name := "DelSAT"
 
-version := "0.2"
+version := "0.3"
 
-scalaVersion := "2.12.7"
+scalaVersion := "2.12.8"
 
-libraryDependencies += "com.accelad" % "nilgiri-math" % "1.16"
+scalacOptions ++= Seq("-Xdisable-assertions")  // remove line for debugging 
+
+mainClass in (Compile, run) := Some("commandline.delSAT")
+
+mainClass in (Compile, packageBin) := Some("commandline.delSAT") 
+
+libraryDependencies += "com.accelad" % "nilgiri-math" % "1.16" 
 
 libraryDependencies += "org.scijava" % "parsington" % "1.0.1"
 
