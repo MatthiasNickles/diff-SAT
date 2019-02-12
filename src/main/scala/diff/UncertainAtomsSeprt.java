@@ -1,11 +1,11 @@
 /**
- * DelSAT
+ * delSAT
  *
- * Copyright (c) 2018 Matthias Nickles
+ * Copyright (c) 2018, 2019 Matthias Nickles
  *
  * matthiasDOTnicklesATgmxDOTnet
  *
- * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
+ * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
  *
  */
 
@@ -21,7 +21,8 @@ public class UncertainAtomsSeprt implements Serializable {  // for interoperabil
 
     public String parameterAtomsSeq[];
 
-    public String measuredAtomsSeq[];
+    public String measuredAtomsSeq[];  // within delSAT, the set of measured atoms is considered to be identical to the set ofparameter atoms
+    // (whereas the called of delSAT might distinguish with them, e.g., for inductive logic programming / weight learning purposes)
 
     public DifferentialFunction<DoubleReal> innerCostExpressionInstances[];
 

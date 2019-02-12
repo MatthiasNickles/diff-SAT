@@ -1,13 +1,28 @@
+/**
+  * delSAT
+  *
+  * Copyright (c) 2018, 2019 Matthias Nickles
+  *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  *
+  */
+
 package utils
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap
 
 import scala.collection.mutable
 
+/**
+  *  Not a general-purpose Tarjan implementation. Not well-tested yet.
+  */
 object Tarjan {
 
-  /* Based on an answer at http://danlec.com/st4k#questions/18289991 from T. Brown, modified and amended by M. Nickles */
+  /* Function based on an answer at http://danlec.com/st4k#questions/18289991 from Travis Brown, modified and amended by M. Nickles */
   def trajanRec(g: Int2ObjectOpenHashMap[List[Int]]): mutable.ArrayBuffer[mutable.ArrayBuffer[Int]] = {
+
     // TODO: create iterative variant
 
     val s = mutable.Buffer.empty[Int]

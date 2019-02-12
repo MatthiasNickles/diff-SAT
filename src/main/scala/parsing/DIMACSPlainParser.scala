@@ -1,7 +1,7 @@
 /*
- * Parser for DIMACS-CNF in DelSAT. NOT a general-purpose DIMACS-CNF parser - for use in the DelSAT project only.
+ * Parser for DIMACS-CNF in delSAT. Not a general-purpose DIMACS-CNF parser - designated for use within delSAT only.
  *
- * Copyright (c) 2018 Matthias Nickles
+ * Copyright (c) 2018, 2019 Matthias Nickles.
  *
  * THIS CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
  *
@@ -10,14 +10,9 @@
 package parsing
 
 import commandline.delSAT
-
-import parsing.AspifPlainParser.AspifRule
-
 import it.unimi.dsi.fastutil.ints.IntArrayList
-
 import sharedDefs._
-
-import sun.misc.Contended
+import utils.IntArrayUnsafeS
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -42,7 +37,10 @@ object DIMACPlainSparser {
 
     val hStr = hStr0.dropWhile(!_.isDigit).trim
 
-    val noOfVars = hStr.takeWhile(_.isDigit).toInt
+    val noOfVarsR = hStr.takeWhile(_.isDigit).toInt
+
+    val noOfVars = noOfVarsR // we could simplify some operation if we would use next2Pow(noOfVarsR) or next2Pow(noOfVarsR * 2) / 2, but
+    // this would not necessarily be faster.
 
     val noOfClauses = hStr.dropWhile(_.isDigit).trim.takeWhile(_.isDigit).toInt
 
@@ -61,16 +59,20 @@ object DIMACPlainSparser {
 
     val noOfPosAtomElis = symbols.length
 
-    @Contended
+    val genBodyLitsFromSATClauses: Double = 0d // TODO; must leave at 0d for now. Experimentally generates pseudo-"body literals" (blits) in SAT mode, for x% of all
+    // variables. If 1d, we completely replace the original clause nogoods with an equivalent theory using blits.
+    // Can easily blow up space.
+
     val clauses = Array.ofDim[Array[Int]](noOfClauses)
 
-    val extraNogoods = ArrayBuffer[ArrayEliUnsafe]()
-
-    @deprecated val generatedAspifRules = ArrayBuffer[AspifRule]() // for experimental blit generation
+    val extraNogoods = ArrayBuffer[IntArrayUnsafeS]()
 
     val headTokensForExtraNogoods: mutable.Set[Int] = if (genBodyLitsFromSATClauses == 1d)
       ((-noOfVars to -1) ++ (1 to noOfVars)).to[mutable.Set]
-    else if (genBodyLitsFromSATClauses > 0d)
+    else if (genBodyLitsFromSATClauses > 0d) { // TODO: genBodyLitsFromSATClauses > 0 not properly working yet (test e.g. with 0.5 and hanoi5)
+
+      assert(false, "Internal error: feature locked.")
+
       Seq.fill((noOfVars.toDouble * genBodyLitsFromSATClauses).toInt)({
 
         val rvar = rngGlobal.nextInt(noOfVars) + 1
@@ -81,14 +83,14 @@ object DIMACPlainSparser {
           -rvar
 
       }).to[mutable.HashSet]
-    else
+    } else
       mutable.HashSet[Int]()
 
     val minClauseLengthForExtraNogoods = 0
 
     var noOfBlits = 0 // unfortunately we need to determine this value before we can start generating nogoods
 
-    val directClauseNogoods = Array.ofDim[ArrayEliUnsafe](noOfClauses) // for debugging purposes only
+    val directClauseNogoods = Array.ofDim[IntArrayUnsafeS](noOfClauses) // for debugging purposes only
 
     var clauseInc = 0
 
@@ -100,8 +102,24 @@ object DIMACPlainSparser {
 
     val sl = s.length
 
-    while (i < sl && (s(i) <= ' '))
-      i += 1
+    @inline def skipSpaceAndComment = {
+
+      while (i < sl && (s(i) <= ' '))
+        i += 1
+
+      while (i < sl && s(i) == 'c') { // skip comment
+
+        while (i < sl && s(i) != '\r' && s(i) != '\n')
+          i += 1
+
+        while (i < sl && (s(i) <= ' '))
+          i += 1
+
+      }
+
+    }
+
+    skipSpaceAndComment
 
     var index = i
 
@@ -146,14 +164,14 @@ object DIMACPlainSparser {
           lazy val noOfHeadsForPseudoRule = clauses(clauseInc).count(headTokensForExtraNogoods.contains(_))
 
           if (genBodyLitsFromSATClauses > 0d && clauses(clauseInc).length >= minClauseLengthForExtraNogoods &&
-            noOfHeadsForPseudoRule > 0)
+            noOfHeadsForPseudoRule > 0)  // TODO: genBodyLitsFromSATClauses is experimental; not fully tested yet
             noOfBlits += noOfHeadsForPseudoRule
 
         }
 
         if (genBodyLitsFromSATClauses == 0d) { // this branch works only if there are not blits:
 
-          directClauseNogoods(clauseInc) = new ArrayEliUnsafe(llc.size())
+          directClauseNogoods(clauseInc) = new IntArrayUnsafeS(llc.size(), aligned = false)
 
           var i = 0
 
@@ -176,14 +194,18 @@ object DIMACPlainSparser {
       } else
         llc.add(intVal)
 
-      while (i < sl && (s(i) <= ' '))
-        i += 1
+      skipSpaceAndComment
 
       index = i
 
     }
 
+    if(!directClauseNogoods.isEmpty && directClauseNogoods.last == null)
+      delSAT.stomp(-100, "Fewer than the specified number of clauses found in DIMACS file")
+
     if (genBodyLitsFromSATClauses > 0d) { // in case we generate body literals (blits, experimental) we need a second pass:
+
+      // TODO: genBodyLitsFromSATClauses is experimental; not fully tested yet
 
       val posNegEliBoundary = noOfPosAtomElis + noOfBlits
 
@@ -204,11 +226,11 @@ object DIMACPlainSparser {
 
       while (i < clauseInc) {
 
-        val clauseWithElis = clauses(i).map(tokenToNegEli(_))
+        val nogood = clauses(i).map(tokenToNegEli(_))
 
-        directClauseNogoods(i) = new ArrayEliUnsafe(clauseWithElis)
+        directClauseNogoods(i) = new IntArrayUnsafeS(nogood, aligned = false)
 
-        if (clauseWithElis.length >= minClauseLengthForExtraNogoods) { // experimentally and optionally (inactive by default), we generate further nogoods
+        if (nogood.length >= minClauseLengthForExtraNogoods) { // Experimentally and optionally (inactive by default), we generate further nogoods
           // (besides the directClauseNogoods) which define or contain body literals. For
           // approach to nogoods with body literals see Gebser et al: Conflict-Driven Answer Set Solving (and also see
           // analogous code in Preparation.scala for nogood generation from real (ASP) rules)
@@ -227,15 +249,15 @@ object DIMACPlainSparser {
 
             // we firstly generate nogoods which define the blit (\Delta(ß))
 
-            val bigDeltaBeta = bodyElisNegated.map(bodyEli => new ArrayEliUnsafe(Array(blitEli, negateEli(bodyEli))))
+            val bigDeltaBeta = bodyElisNegated.map(bodyEli => new IntArrayUnsafeS(Array(blitEli, negateEli(bodyEli)), aligned = false))
 
-            val deltaBeta = new ArrayEliUnsafe(bodyElisNegated.:+(negateEli(blitEli)))
+            val deltaBeta = new IntArrayUnsafeS(bodyElisNegated.:+(negateEli(blitEli)), aligned = false)
 
             extraNogoods ++= bigDeltaBeta
 
             extraNogoods += deltaBeta
 
-            extraNogoods += new ArrayEliUnsafe(Array(negateEli(headEli), blitEli))
+            extraNogoods += new IntArrayUnsafeS(Array(negateEli(headEli), blitEli), aligned = false)
 
           })
 
@@ -264,7 +286,8 @@ object DIMACPlainSparser {
           noOfPosBlits = noOfBlits,
           externalAtomElis = Seq() /*TODO*/ ,
           directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
-          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /* we retain these just for debugging (cross-check) purposes */)
+          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /* we retain these just for debugging (cross-check) purposes */,
+          symbolToEliOpt = None)
       else {
 
         if (delSAT.verbose)
@@ -277,7 +300,8 @@ object DIMACPlainSparser {
           noOfPosBlits = noOfBlits,
           externalAtomElis = Seq() /*TODO*/ ,
           directClauseNogoodsOpt = Some(fullClauseNogoods.clone() /*otherwise this would get modified in-place*/),
-          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /*we retain these just for debugging (cross-check) purposes*/)
+          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /*we retain these just for debugging (cross-check) purposes*/,
+          symbolToEliOpt = None)
 
       }
 

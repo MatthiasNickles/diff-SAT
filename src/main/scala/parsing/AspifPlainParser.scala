@@ -1,15 +1,15 @@
 /**
-  * Parser for a subset of the ASP Intermediate Format (aspif) in DelSAT. NOT a general-purpose aspif parser -
-  * for internal use in the DelSAT project only.
+  * Parser for a subset of the ASP Intermediate Format (aspif) in delSAT. Not a general-purpose aspif parser -
+  * designated for use within delSAT only.
   *
-  * Copyright (c) 2018 Matthias Nickles
+  * Copyright (c) 2018, 2019 Matthias Nickles
   *
   * THIS CODE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
   *
-  * Plain aspif file format (of which we support a subset): see "A Tutorial on Hybrid Answer Set Solving with clingo",
+  * aspif file format (of which we support a subset): see "A Tutorial on Hybrid Answer Set Solving with clingo",
   * https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6
   *
-  * Currently directly supported by DelSAT: Normal rules, #show entries (partially), disjunctions in heads via unfold/shift.  *
+  * Currently directly supported by delSAT: Normal rules, #show entries (partially), disjunctions in heads via unfold/shift.  *
   * Use a preprocessor such as Clingo 5 (options --trans-ext=all --pre=aspif) or lp2normal to translate extended rules
   * (e.g., choice rules, weight rules...) to normal rules.
   *
@@ -28,6 +28,8 @@ import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Map, Set, mutable}
 
 /**
+  * Parser for a subset of the aspif format.
+  *
   * @author Matthias Nickles
   */
 object AspifPlainParser {
@@ -222,7 +224,7 @@ object AspifPlainParser {
               auxAtomSymbol(newFalsePredsPrefix, aspifEli - newFalseAspifElisBoundary)
             else {
               auxAtomSymbol(newLatentSymbolAuxAtomPrefix, aspifEli)
-              // ^ this way, all newly introduced symbols (eli.e., those which weren't already present in the input program) get either an "L" or an "F" auxiliary atom name.
+              // ^ this way, all newly introduced symbols (i.e., those which weren't already present in the input program) get either an "L" or an "F" auxiliary atom name.
 
             }
 
@@ -268,7 +270,7 @@ object AspifPlainParser {
 
       log("---------------------------------\n") */
 
-      for (i <- 1 to noOfUnfolds) { // TODO: optionally repeat until closed under unfold? But might take a very long time, as number of unfolds grows exponentially
+      for (i <- 1 to noOfUnfolds) { // TODO: optionally repeat until closed under unfold? Might take a very long time, as number of unfolds grows exponentially
 
         log("Unfold iteration " + i)
 
@@ -332,15 +334,15 @@ object AspifPlainParser {
 
     val symbols: Array[String] = aspifEliToSymbol.values.toArray // needs to be the complete set of all symbols (before we can assign blits to rule bodies below)
 
-    val (rules, noOfPosBlits, emptyBodyBlit) = aspifRulesToEliRules(symbols, aspifRules, Some(aspifEliToSymbol))
+    val (rules, noOfPosBlits, emptyBodyBlit, symbolToEli) = aspifRulesToEliRules(symbols, aspifRules, Some(aspifEliToSymbol))
 
     AspifOrDIMACSPlainParserResult(symbols, Left(rules), noOfPosBlits, externalAtomElis = Seq() /*aspifExternalsElis*/ ,
-      emptyBodyBlit = emptyBodyBlit, directClauseNogoodsOpt = None, clauseTokensOpt = None)
+      emptyBodyBlit = emptyBodyBlit, directClauseNogoodsOpt = None, clauseTokensOpt = None, symbolToEliOpt = Some(symbolToEli))
 
   }
 
   def aspifRulesToEliRules(symbols: Array[String], aspifRules: ArrayBuffer[AspifRule],
-                           aspifEliToSymbolOpt: Option[mutable.HashMap[AspifEli, String]]): (ArrayBuffer[Rule], Int, Int) = {
+                           aspifEliToSymbolOpt: Option[mutable.HashMap[AspifEli, String]]): (ArrayBuffer[Rule], Int, Int, Predef.Map[String, AspifEli]) = {
 
     val rules = ArrayBuffer[Rule]()
 
@@ -390,12 +392,12 @@ object AspifPlainParser {
         if (body._1.isEmpty && body._2.isEmpty) {
 
           if (emptyBodyBlit == -1)
-            emptyBodyBlit = blit // we memorize this just to simplify nogoods later
+            emptyBodyBlit = blit  // we memorize this just to simplify nogoods later
 
-          aspifRule.blit = emptyBodyBlit // note: this is already a body eli, not an aspif-eli
+          aspifRule.blit = emptyBodyBlit  // note: this is already a body eli, not an aspif-eli (original literal number)
 
         } else
-          aspifRule.blit = blit // note: this is already a body eli, not an aspif-eli
+          aspifRule.blit = blit  // note: this is already a body eli, not an aspif-eli
 
       }
 
@@ -412,7 +414,7 @@ object AspifPlainParser {
 
     @inline def isPosEli(eli: Eli) = eli < posNegEliBoundary
 
-    @inline def isNegEli(eli: Eli) = eli >= posNegEliBoundary
+    //@inline def isNegEli(eli: Eli) = eli >= posNegEliBoundary
 
     @inline def negateEli(eli: Eli): Eli = {
 
@@ -423,7 +425,7 @@ object AspifPlainParser {
 
     }
 
-    val symbolToEli: Map[String, Eli] = symbols.zipWithIndex.toMap // TODO: costly, but we need this again later anyway
+    var symbolToEli: Predef.Map[String, AspifEli] = symbols.zipWithIndex.toMap  // TODO: optimize this line
 
     @inline def positiveAspifEliToPositiveEli(aspifEli: AspifEli): Eli = if (aspifEliToSymbolOpt.isDefined)
       symbolToEli(aspifEliToSymbolOpt.get.get(aspifEli).get)
@@ -510,7 +512,7 @@ object AspifPlainParser {
     if (delSAT.verbose)
       println("Parsing time: " + timerToElapsedMs(timerParserNs) + " ms")
 
-    (rules, noOfRealBlits, emptyBodyBlit)
+    (rules, noOfRealBlits, emptyBodyBlit, symbolToEli)
 
   }
 

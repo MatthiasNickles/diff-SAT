@@ -1,11 +1,11 @@
 /**
-  * DelSAT
+  * delSAT
   *
-  * Copyright (c) 2018 Matthias Nickles
+  * Copyright (c) 2018, 2019 by Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
+  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
   *
   */
 
@@ -21,17 +21,14 @@ import com.accelad.math.nilgiri.autodiff.DifferentialFunction
 
 import diff.UncertainAtomsSeprt
 
-import org.scijava.parse.ExpressionParser
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet
 
+import org.scijava.parse.ExpressionParser
 import parsing.{AspifPlainParser, DIMACPlainSparser}
 
 import sharedDefs._
-
 import solving.{Preparation, SolverMulti}
-
-import sun.misc.Unsafe
-
-import utils.{FloatArrayUnsafe, IntArrayUnsafe, LongArrayUnsafe}
+import utils._
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -40,6 +37,8 @@ import scala.collection.mutable.ArrayBuffer
   * See sharedDefs.scala for solver settings available
   * (most of these can also be specified on the command line using --solverarg, see --help below)
   *
+  * TODO: more detailed API documentation
+  *
   * @author Matthias Nickles
   *
   */
@@ -47,26 +46,36 @@ object delSAT {
 
   val debug = false
 
-  // For flight control, use e.g. -XX:+UnlockCommercialFeatures -XX:+FlightRecorder -XX:StartFlightRecording=duration=60s,filename=delsatRecording.jfr
+  // For flight control, use e.g. -XX:+FlightRecorder -XX:StartFlightRecording=duration=60s,filename=delsatRecording.jfr
+
+  // For compiler options see https://docs.scala-lang.org/overviews/compiler-options/index.html
+  // Try compiling from Scala without any "optimization" arguments first - this was actually the fastest approach in our tests.
+  // Use Scala compiler option -Xdisable-assertions (unless for debgging purposes).
+
+  // For standard (MSE-style) problems, run delSAT with arguments -mse --solverarg "partDerivComplete" "false"
 
   var verbose = false
 
+  val noOfMinibenchmarkTrials = 1 // (this is just for a quick local mini-benchmark to get a very rough idea of performance)
 
-  val noOfMinibenchmarkTrials = 1 // this is just for a quick local mini-benchmark to get a (very) rough idea of performance
+  val enforceSanityChecks = false && noOfMinibenchmarkTrials == 1 // NB: for ASP, any invalid models are first bounced back to
+  // the solver before this check could occur (see SolverMulti.scala).
+  // NB: enforceSanityChecks currently doesn't check UNSAT results yet.
 
-  val enforceSanityChecks = false && noOfMinibenchmarkTrials == 1 // NB: for ASP, invalid models are first bounced back to the solver before this check could occur
+  // !! Set enforceSanityChecks to false before running via prasp2 or any benchmarks !!
+  // Also: disable assertions and recompile for any benchmarks: -Xdisable-assertions
 
   val printAnswers = true && noOfMinibenchmarkTrials == 1 && !enforceSanityChecks // false only for debugging purposes
 
   assert(!(printAnswers && enforceSanityChecks))
 
-  val version = "0.2"
+  val version = "0.3"
 
-  val copyrightAndVersionText = "DelSAT " + version + "\nCopyright (c) 2018 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE"
+  val copyrightAndVersionText = "delSAT " + version + "\nCopyright (c) 2018, 2019 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE"
 
   val defaultNoOfModelsStr = "-1"
 
-  val thirdPartyLibs = "DelSAT " + version + """ uses the following third-party software:
+  val thirdPartyLibs = "delSAT " + version + """ uses the following third-party software:
 
 JAutoDiff (https://github.com/accelad-com/nilgiri-math)
   Copyright (c) 2017 AccelaD
@@ -85,30 +94,33 @@ fastutil (http://fastutil.di.unimi.it)
     """
      A SAT and ASP solver for sampling-based multi-model optimization.
 
-     Usage:
+     Command line parameters:
 
-     delSAT [--version|-v|--about] [--help|-h]
+            [<filename>] [--version|-v|--about] [--help|-h]
             [-n <n>] [-t <t>] [-ci] [-mse]
-            [--solverarg "name" "value"]* [<filename>]
+            [--solverarg "name" "value"]*
 
      Reads from a file or STDIN input programs or clauses in aspif or DIMACS-CNF format or
-     extended aspif or DIMACS-CNF with list of parameter atoms and cost function(s). To
+     extended aspif or DIMACS with list of parameter atoms and cost function(s). To
      obtain aspif from a non-ground plain Answer Set Program, preprocess using, e.g.,
      clingo myProg.lp --trans-ext=all --pre=aspif
      Input is obtained from STDIN if no file name is provided or if flag -ci is specified.
 
-     Arguments:
+     Parameters:
 
      -n <n> lets the sampler sample <n> (not necessarily different) models such
-     that the specified or default threshold is reached. If -n is missing, sampling
-     continues until the minimum multiset of models has been generated st. the specified
-     or default threshold (or timeout) is reached. Models are either stable models
-     (answer sets) or satisfying Boolean assignments (in case the input is in extended
-     or plain DIMACS format). Use case of -n is primarly increase of entropy with
-     larger number of models.
+     that the sampled multiset of models solves the given cost up to the specified
+     accuracy if possible (or the maximum number of trials is reached). Target accuracy
+     is specified using an error threshold (see parameter -t below).
+     If -n is missing, sampling continues until the minimum multiset of models has been
+     generated st. the specified or default error threshold (or maximum number of trials)
+     is reached.
+     Models are either stable models (answer sets) or satisfying Boolean assignments (in
+     case the input is in extended or plain DIMACS format). Primary use case of -n is
+     increase of entropy with larger number of models.
 
      -t <threshold> specifies the error threshold for the total cost function (small
-     threshold means higher accuracy but more time required for sampling)
+     threshold means higher accuracy but more time required for sampling).
 
      -mse promises that the costs are provided entirely as part costs with inner MSE terms
      of the form (p-f(v))^2 where p is a probability and v is a parameter atom symbol
@@ -120,23 +132,24 @@ fastutil (http://fastutil.di.unimi.it)
      Examples:
        --solverarg "partDerivComplete" "true" (activates support for certain
        non-MSE-style costs)
-       --solverarg "maxCompetingSolverThreads" "6" --solverarg "freeEliSearchConfigsP" "2 3 3 4 5 7"
-       activates parallel portfolio solving using max. 6 threads and approaches 0,3,3,4,2,6
-       --solverarg "diversify" "true" (aims at generating more diverse models, might
-       decrease speed. Note that while this might achieve some degree of uniformity, DelSAT
-       does not aim to be a uniform sampling tool.)
+       --solverarg "maxCompetingSolverThreadsR" "6" --solverarg "freeEliSearchConfigsP" "4 3 8"
+       activates parallel portfolio solving using max. 6 threads and approaches 4,3,8 (with 4
+       chosen with priority when creating the solver threads).
+       --solverarg "diversify" "true" (aims at generating more diverse models, but typically
+       decreases speed. Note: while this might achieve some degree of uniformity, delSAT
+       does not aim to be a uniform sampling tool).
 
-     --showaux shows auxiliary atoms introduced for spanning formulas (omitted by
-     default).
+     --showaux also prints auxiliary atoms introduced for spanning formulas (omitted in models
+     by default)
 
-     -ci enforces reading from STDIN.
+     -ci enforces reading from STDIN
 
-     --verbose shows additional information
+     --verbose shows additional information about the solving and sampling process
 
      --version|-v|--about prints information about version and third-party software
-     used by DelSAT (including copyrights and license information), then exits.
+     used by delSAT (including copyrights and license information), then exits.
 
-     --help|-h prints this information and exits.
+     --help|-h prints this information and exits
 """
 
   object MessageTypes extends Enumeration {
@@ -158,6 +171,8 @@ fastutil (http://fastutil.di.unimi.it)
     -3 -> ("External program call failed", ERROR),
 
     -4 -> ("I/O error", ERROR),
+
+    -5 -> ("JVM option couldn't be set at runtime. It is recommended to specify it on the command line", WARNING),
 
     -100 -> ("Invalid input data", ERROR),
 
@@ -181,7 +196,7 @@ fastutil (http://fastutil.di.unimi.it)
 
     -5002 -> ("assureIsTight=true; This will lead to non-termination or wrong results if the ASP program isn't tight.", WARNING),
 
-    -5003 -> ("Inner cost function(s) invalid for selected type of differentiation. Try with command line argument\n --solverarg \"partDerivComplete\" \"true\"", ERROR),
+    -5003 -> ("Inner cost function(s) invalid for selected type of differentiation. Try with command line argument\n --solverarg \"partDerivComplete\" \"true\"\nand remove argument -mse, if any.", ERROR),
 
     -5004 -> ("Unsupported type of rule", ERROR),
 
@@ -193,7 +208,9 @@ fastutil (http://fastutil.di.unimi.it)
 
     -5008 -> ("Sampling ended but specified threshold not reached!", WARNING),
 
-    -5009 -> ("Invalid setting, see sharedDefs.scala for details", ERROR),
+    -5009 -> ("Invalid settings, see sharedDefs.scala for details", ERROR),
+
+    -5010 -> ("Literal scores out of valid range. Setting 'eliScoreUpdateFact' will be adapted in current solver thread.", WARNING),
 
     -10000 -> ("Internal error", ERROR)
 
@@ -205,12 +222,12 @@ fastutil (http://fastutil.di.unimi.it)
 
     if (message._2 == ERROR) {
 
-      System.err.println("\nError: " + message._1 + " " + additionalInfo)
+      System.err.println("\nError: " + message._1 + ". " + additionalInfo)
 
       sys.exit(code)
 
     } else if (message._2 == WARNING)
-      System.out.println("Warning: " + message._1 + " " + additionalInfo)
+      System.out.println("\nWarning: " + message._1 + ". " + additionalInfo)
     else
       assert(false) //System.out.println("Info: " + message._1 + " " + additionalInfo)
 
@@ -240,14 +257,13 @@ fastutil (http://fastutil.di.unimi.it)
   final case class InputData(spanningProgramAspifOrDIMACSOpt: Option[String],
                              costsOpt: Option[UncertainAtomsSeprt]) {}
 
-  @inline def measuredAtomIndex(atom: Pred, measuredAtomsSeqSorted: Array[String]): Int = {
+  @inline def measuredAtomIndex(atom: Pred, measuredAtomsSeqSorted: Array[String]): Int = { //NB: in delSAT, measured atoms/literals == parameter atoms/literals (might change in future extensions)
 
     val measuredAtomNameInExpr = atom
 
     val m: String = measuredAtomNameInExpr.replaceAllLiterally("ä", "_").replaceAllLiterally(".0" /*because we get a real number here*/ , "")
 
-    util.Arrays.binarySearch(measuredAtomsSeqSorted.asInstanceOf[Array[Object]] /*Scala arrays aren't covariant*/ , m)
-    // TODO: ^^ check again, find cleaner solution
+    util.Arrays.binarySearch(measuredAtomsSeqSorted.asInstanceOf[Array[Object]] /*Scala arrays aren't covariant*/ , m) // TODO: find cleaner solution
 
   }
 
@@ -317,7 +333,7 @@ fastutil (http://fastutil.di.unimi.it)
           if (measuredAtomsSet.contains(name)) {
 
             val dConstFromMeasuredAtomIndex = dFFactory.`val`(new DoubleReal(measuredAtomIndex(name, measuredAtomsSeqSorted)))
-            // ^a pseudo-real constant which is an index into measures atoms; these indices later need to be
+            // ^ a pseudo-real constant which is an index into measures atoms; these indices later need to be
             // translated into (positive atom) elis.
 
             tokenStack.push(dConstFromMeasuredAtomIndex)
@@ -458,7 +474,7 @@ fastutil (http://fastutil.di.unimi.it)
                     // (since there are no other actual functions than f(...), w(...) and the built-in functions like sqrt(...)).
 
                     // Also, we know that the atom must be a measured atom, as these are the only ones allowed in
-                    // cost functions.
+                    // cost functions (see M.Nickles ILP'18 paper for difference between parameter and measured variables or literals.
 
                     // We convert the "function application" therefore into a constant whose "real" value is the index
                     // into the list of measured atoms:
@@ -533,19 +549,23 @@ fastutil (http://fastutil.di.unimi.it)
 
   /**
     * Reads input from file (if file name is given) or STDIN (in various alternative formats, with input typically generated by prasp2)
+    *
+    * @param fileNameOpt
+    * @param mse  see command line option -mse
+    * @return Option[InputData]
     */
   def readInputData(fileNameOpt: Option[String], mse: Boolean = false): Option[InputData] = {
 
-    /* In contrast to nablaSAT, we receive the inner cost functions as plain text formulas which we need to convert
+    /* We receive the inner cost functions as plain text formulas which we need to convert
        to DifferentialFunction[DoubleReal] here.
 
        There are three stages for each inner cost function:
           1) as a string coming from prasp2 or the user, e.g., (0.5-f(v))^2
           2) in autodiff format, with f(atom) replaced with phi(index_in_measured_atoms_seq),
-              e.g., (0.5-phi(3.0))^2, where 3.0 is actually an int (index)
-              (produced in this method)
+             e.g., (0.5-phi(3.0))^2, where 3.0 is actually an int (index)
+             (produced in this method)
           3) in autodiff format, with phi(index) replaced with variable freqxEli_, where Eli
-              is the measured atom eli. E.g., (0.5-freqx5_)^2
+             is the measured atom eli. E.g., (0.5-freqx5_)^2
     */
 
     import java.nio.charset.StandardCharsets
@@ -590,7 +610,8 @@ fastutil (http://fastutil.di.unimi.it)
 
         val costLines: Array[String] = paramAtomsAndInnerCostsLines.filter(_.startsWith("cost ")).map(_.stripPrefix("cost ").trim)
 
-        // we obtain the measured atoms from the cost function expressions (whereas "pats ..." is the list of parameter atoms):
+        // we obtain the measured atoms from the cost function expressions (whereas "pats ..." is the list of parameter atoms - considered
+        // to be the same set as the measured atoms in delSAT for now, but might change in future versions):
 
         val measuredAtomsSet: mutable.HashSet[Pred] = mutable.HashSet[Pred]() ++ costLines.foldLeft(ArrayBuffer[Pred]()) {
 
@@ -650,10 +671,30 @@ fastutil (http://fastutil.di.unimi.it)
 
             if (!mse) {
 
-              val underscoreReplInner = innerCostFunStr.replaceAllLiterally("_", "ä") // ExpressionParser only recognizes Java-style identifiers
+              val underscoreReplInner: String = innerCostFunStr.replaceAllLiterally("_", "ä") // ExpressionParser only recognizes Java-style identifiers
               // with unicode characters but without leading underscores
 
-              val postfixTokens = new ExpressionParser().parsePostfix(underscoreReplInner)
+              val postfixTokens: util.LinkedList[Object] = try {
+
+                new ExpressionParser().parsePostfix(underscoreReplInner)
+
+              } catch {
+
+                case e: Throwable => {
+
+                  new PrintWriter("err") {
+                    write("Internal expression parse error for " + underscoreReplInner + "\n" + e); close
+                  }
+
+                  println("Internal expression parse error for " + underscoreReplInner + "\n" + e)
+
+                  System.err.println("Internal expression parse error for " + underscoreReplInner + "\n" + e)
+
+
+                  new util.LinkedList[Object]()
+                }
+
+              }
 
               val dfInnerCostExpression = convertToDfNEW(postfixTokens, measuredAtomsSeqSorted, measuredAtomsSet)
 
@@ -664,6 +705,12 @@ fastutil (http://fastutil.di.unimi.it)
               val dFFactory = new diff.DifferentialFunctionFactoryStasp() //null /*missing until we deserialize in nablaSAT*/)
 
               val dNumStr = innerCostFunStr.drop(1).takeWhile(c => c.isDigit || c == '.')
+
+              if (dNumStr.isEmpty) {
+
+                stomp(-5003)
+
+              }
 
               val weightDNum = dFFactory.`val`(new DoubleReal(java.lang.Double.parseDouble(dNumStr).doubleValue()))
 
@@ -700,14 +747,26 @@ fastutil (http://fastutil.di.unimi.it)
 
   }
 
+  /**
+    * Wrapper method for invoking the multimodel sampler. See sampleMulti() in SolverMulti.scala for the actual sampling method.
+    *
+    * @param inputData
+    * @param noOfModels
+    * @param thresholdOpt
+    * @param showaux
+    * @param satMode
+    * @param additionalSolverArgs
+    * @return Sample (bag of sampled models) in symbolic form and as list of (eli array, eli hash set). An eli is our internally used numerical representation
+    *         of a literal (not identical to numerical literals in DIMACS or aspif!).
+    */
   def invokeSampler(inputData: InputData, noOfModels: Int, thresholdOpt: Option[Double],
                     showaux: Boolean, satMode: Boolean, additionalSolverArgs: mutable.HashMap[String, String]):
-  (mutable.Seq[Array[Pred]], AspifOrDIMACSPlainParserResult) = {
+  ((mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)]), AspifOrDIMACSPlainParserResult) = {
 
     if (noOfMinibenchmarkTrials > 1)
       Thread.sleep(3000)
 
-    println("DelSAT " + commandline.delSAT.version + "\n")
+    println("delSAT " + commandline.delSAT.version + "\n")
 
     val timerInitNs = System.nanoTime()
 
@@ -727,27 +786,31 @@ fastutil (http://fastutil.di.unimi.it)
 
     log("inittimer after Preparation: " + timerToElapsedMs(timerInitNs) + " ms")
 
-    var res = mutable.Seq[Array[Pred]]()
+    var sampledModels = null.asInstanceOf[(mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)])]
 
-    val warmupTrialNo = if (noOfMinibenchmarkTrials > 1) 10 else 0
+    assert(noOfMinibenchmarkTrials == 1 || noOfMinibenchmarkTrials >= 10)
+
+    val warmupTrialNo = noOfMinibenchmarkTrials / 10
 
     val trialDurations = (1 to warmupTrialNo + noOfMinibenchmarkTrials).map(trial => {
 
       if (verbose)
         println("Solving... " + (if (noOfMinibenchmarkTrials > 1) "(trial " + trial + ")" else ""))
 
+      System.gc()
+
       val startTrialTimeNs = System.nanoTime()
 
       val solver = new SolverMulti(prep)
 
-      val sampleMultiConf = solver.SampleMultiConf(inputData.costsOpt,
+      val sampleMultiConf = solver.SampleMultiConf(
         requestedNoOfModelsBelowThresholdOrAuto = noOfModels,
         prep = prep,
         requestedNumberOfModels = noOfModels,
-        threshold = thresholdOpt.getOrElse(0.001d),
-        maxIt = 100000)
+        threshold = thresholdOpt.getOrElse(defaultThreshold),
+        maxIt = maxSamplingIterations)
 
-      res = solver.sampleMulti(sampleMultiConf)
+      sampledModels = solver.sampleMulti(sampleMultiConf)
 
       if (trial <= warmupTrialNo) 0l else System.nanoTime() - startTrialTimeNs
 
@@ -757,30 +820,46 @@ fastutil (http://fastutil.di.unimi.it)
 
     val avgDuration = ((trialDurations.sum.toDouble / noOfMinibenchmarkTrials.toDouble) / 1000000).toInt
 
-    if (noOfMinibenchmarkTrials > 1) /*println("\nOverall duration solving and sampling: " + avgDuration + " ms\n") else*/
+    if (noOfMinibenchmarkTrials > 1)
       println("\n@@@@@@ Average overall duration solver.sampleMulti: " + avgDuration + " ms\n")
 
-    (res, aspifOrDIMACSParserResult)
+    (sampledModels, aspifOrDIMACSParserResult)
 
   }
 
+  /**
+    * Command line processing
+    *
+    * @param args
+    */
   def main(args: Array[String]): Unit = {
-
-    //scala.io.StdIn.readLine()
 
     val timerOverallNs = System.nanoTime()
 
-    val unsafeRefl = classOf[Unsafe].getDeclaredField("theUnsafe")
+    FloatArrayUnsafeS.init(unsafe)
 
-    unsafeRefl.setAccessible(true)
+    ByteArrayUnsafeS.init(unsafe)
 
-    val unsafe = unsafeRefl.get(null).asInstanceOf[Unsafe]
+    try {
 
-    IntArrayUnsafe.init(unsafe)
+      import com.sun.management.HotSpotDiagnosticMXBean
+      import java.lang.management.ManagementFactory
 
-    LongArrayUnsafe.init(unsafe)
+      val hsDiag = ManagementFactory.getPlatformMXBean(classOf[HotSpotDiagnosticMXBean])
 
-    FloatArrayUnsafe.init(unsafe)
+      //hsDiag.setVMOption("MaxInlineSize", "4096")
+
+      //hsDiag.setVMOption("FreqInlineSize", "4096")
+
+      //hsDiag.setVMOption("InlineSmallCode", "4096")
+
+      //hsDiag.setVMOption("AllocatePrefetchStyle", "1")
+
+    } catch {
+
+      case t: Throwable => stomp(-5, t.toString)
+
+    }
 
     if (debug) {
 
@@ -864,7 +943,7 @@ fastutil (http://fastutil.di.unimi.it)
 
           } else {
 
-            val argT = if (arg == "0") Int.MaxValue.toString else arg // note: this is different from -n 0 like in Clingo, because DelSAT doesn't do enumeration but sampling
+            val argT = if (arg == "0") Int.MaxValue.toString else arg // NB: this is different from -n 0 like in Clingo, because delSAT doesn't do enumeration but sampling
 
             nextArg(argsList ++ Map('n -> List(argT)), tail)
 
@@ -945,7 +1024,7 @@ fastutil (http://fastutil.di.unimi.it)
     val mse = parsedArgsMap.contains('mse)
 
     val inputData = if (parsedArgs.exists(_._1 == 'enforceReadingFromSTDIN) || !parsedArgs.exists(_._1 == 'inputFile))
-      readInputData(None, mse = mse).get // we read from STDIN
+      readInputData(None, mse = mse).get  // we read from STDIN
     else {
 
       val fileName = parsedArgsMap.get('inputFile).get.head
@@ -960,30 +1039,89 @@ fastutil (http://fastutil.di.unimi.it)
 
     val satMode = !inputData.spanningProgramAspifOrDIMACSOpt.get.startsWith("asp")
 
-    var (sampledModelsWithSymbols: mutable.Seq[Array[Pred]], parserResult: AspifOrDIMACSPlainParserResult) =
+    var (sampledModels: (mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)]),
+    parserResult: AspifOrDIMACSPlainParserResult) =
       invokeSampler(inputData, noOfModels, thresholdOpt, showaux = showaux,
         satMode = satMode, additionalSolverArgs = additionalSolverArgs)
 
-    if (!sampledModelsWithSymbols.isEmpty) {
+    if (!sampledModels._1.isEmpty) {
 
-      val hideAuxPreds: Int = 4 // TODO
+      val hideAuxPreds: Int = if(showaux) 4 else 5
 
       val sampledModelsWithSymbolsCleanedR: mutable.Seq[Array[Pred]] = if (hideAuxPreds == 4)
-        sampledModelsWithSymbols.map(_.filterNot(isLatentSymbolAuxAtom(_)))
-      else if (hideAuxPreds == 1) sampledModelsWithSymbols.map(_.filterNot(a => isAuxAtom(a) && !isSpanAuxAtom(a)))
-      else if (hideAuxPreds == 2) sampledModelsWithSymbols.map(_.filterNot(isAuxAtom(_)))
-      else if (hideAuxPreds == 3) sampledModelsWithSymbols.map(_.filterNot(isSpanAuxAtom(_)))
+        sampledModels._1.map(_.filterNot(isLatentSymbolAuxAtom(_)))
+      else if (hideAuxPreds == 1) sampledModels._1.map(_.filterNot(a => isAuxAtom(a) && !isSpanAuxAtom(a)))
+      else if (hideAuxPreds == 2) sampledModels._1.map(_.filterNot(isAuxAtom(_)))
+      else if (hideAuxPreds == 3) sampledModels._1.map(_.filterNot(isSpanAuxAtom(_)))
+      else if (hideAuxPreds == 5) sampledModels._1.map(_.filterNot(a => isSpanAuxAtom(a) || isLatentSymbolAuxAtom(a)))
       else
-        sampledModelsWithSymbols
+        sampledModels._1
 
-      val symbolsSeq = parserResult.symbols //.toSeq
+      val symbolsSeq = parserResult.symbols
 
       val sampledModelsWithSymbolsCleaned: mutable.Seq[Array[Pred]] = if (!satMode) sampledModelsWithSymbolsCleanedR else
-        sampledModelsWithSymbolsCleanedR.map((model: Array[Pred]) => {
+        sampledModels._2.map((model: (Array[Eli], IntOpenHashSet)) => {
 
-          symbolsSeq.map(symbol => if (model.contains(symbol)) symbol else "-" + symbol)
+          val fullModelWithSymbols = symbolsSeq.map(symbol => if (model._2.contains(symbol.toInt - 1)) symbol else "-" + symbol)
+
+          if (enforceSanityChecks && satMode) {  // see further sanity checks in SolverMulti.scala
+
+            if (satMode) println("Checking model against original DIMACS-CNF clauses...")
+
+            var checkedDIMACSclauses = 0
+
+            val violatedDIMACSClauses: Boolean = if (!parserResult.clauseTokensOpt.isDefined) {
+
+              println("WARNING: enforceSanityChecks=true but cannot determine violatedDIMACSClauses!");
+
+              false
+
+            } else {
+
+              val modelCandWithSymbolsSet = fullModelWithSymbols.toSet
+
+              parserResult.clauseTokensOpt.get.exists(clause => { // TODO: optimize:
+
+                val clauseFulfilled = clause.exists((dimacsVarPN: Int) => {
+
+                  modelCandWithSymbolsSet.contains(dimacsVarPN.toString)
+
+                })
+
+                if (!clauseFulfilled)
+                  println("\\\\\\\\  Violated original CNF clauses: " + clause.mkString(" "))
+
+                checkedDIMACSclauses += 1
+
+                if (checkedDIMACSclauses % 500000 == 0)
+                  println("  original clauses checked so far: " + checkedDIMACSclauses + " / " + parserResult.clauseTokensOpt.get.length)
+
+                !clauseFulfilled
+
+              })
+
+            }
+
+            assert(checkedDIMACSclauses == parserResult.clauseTokensOpt.get.length &&
+              checkedDIMACSclauses == parserResult.directClauseNogoodsOpt.get.length)
+
+            println("Any violated original DIMACS clauses: " + violatedDIMACSClauses + " (checked: " + checkedDIMACSclauses + ")")
+
+            if (violatedDIMACSClauses) {
+
+              println("\n\\/\\/\\/\\/ Internal error: Sanity check on original DIMACS clauses failed on model candidate!\n")
+
+              sys.exit(-5)
+
+            }
+
+          }
+
+          fullModelWithSymbols
 
         })
+
+      // ----------------------
 
       if (printAnswers)
         sampledModelsWithSymbolsCleaned.zipWithIndex.foreach { case (model, index) =>
@@ -992,11 +1130,14 @@ fastutil (http://fastutil.di.unimi.it)
 
       System.out.println("SATISFIABLE") // this must be printed _directly_ after the list of answers (no empty line allowed in between)
 
+      // ----------------------
+
     }
 
     val overallTimeMs = timerToElapsedMs(timerOverallNs) // doesn't include JVM startup time
 
-    println("\nOverall time spent in DelSAT (incl parsing/pre-/post-processing): " + overallTimeMs + " ms (" + (overallTimeMs / 1000f) + " sec)")
+    println("\nOverall time spent in delSAT (incl parsing/pre-/post-processing): " + overallTimeMs + " ms (" + (overallTimeMs / 1000f) + " sec, " + (overallTimeMs / 1000f / 60f) + " min)")
+    // Note: string "Overall time spent in delSAT" literally used in some benchmark programs to identify this line with the time.
 
     if (!omitSysExit0) // we need exit if jar isn't loaded dynamically into the current JVM. Otherwise, we need return
       sys.exit(0)

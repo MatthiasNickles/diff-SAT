@@ -1,11 +1,11 @@
 /**
-  * DelSAT
+  * delSAT
   *
-  * Copyright (c) 2018 Matthias Nickles
+  * Copyright (c) 2018, 2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
+  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
   *
   */
 
@@ -13,7 +13,6 @@ package diff
 
 import com.accelad.math.nilgiri.autodiff.{AbstractUnaryFunction, DifferentialFunction, DifferentialFunctionFactory, Variable}
 import com.accelad.math.nilgiri.{DoubleReal, DoubleRealFactory}
-
 
 class DifferentialFunctionFactoryStasp extends DifferentialFunctionFactory[DoubleReal](DoubleRealFactory.instance()) {
 
@@ -25,20 +24,20 @@ class DifferentialFunctionFactoryStasp extends DifferentialFunctionFactory[Doubl
 
       assert(false, "differential function phi() should not be called from prasp2")
 
-      val uncertainAtomIndex = arg().getReal.toInt // must be a positive Eli
+      val uncertainAtomIndex = arg().getReal.toInt // must be toAbsEli positive Eli
 
       -1d // dummy
 
     }
 
-    @deprecated override def diff(i_v: Variable[DoubleReal]): DifferentialFunction[DoubleReal] = {  // subject to removal in one of the next versions of DelSAT
+    @deprecated override def diff(i_v: Variable[DoubleReal]): DifferentialFunction[DoubleReal] = { // subject to removal in one of the next versions of DelSAT
 
       //prt("Diff phi wrt " + i_v + "...")
 
       if (i_v.getName.stripPrefix("anyPwPrForAtom_").toDouble == arg().getValue().getReal)
 
-      // We are returning the partial derivative d/dx, where x = i_v is a variable with name "anyPwPrForAtom_"+uai, with uai being the index
-      // of an uncertain atom ua. Since phi(uai) is defined as sum(probabilities od all pws where atom ua holds), the result is
+      // We are returning the partial derivative d/dx, where x = i_v is toAbsEli variable with name "anyPwPrForAtom_"+uai, with uai being the index
+      // of an uncertain atom ua. Since phi(uai) is defined as sum(probabilities of all pws where atom ua holds), the result is
       // either 1 (if this sum is differentiated against the probability variable of any possible world where atom ua holds) or 0 (otherwise).
 
         one

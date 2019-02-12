@@ -1,11 +1,11 @@
 /**
-  * DelSAT
+  * delSAT
   *
-  * Copyright (c) 2018 Matthias Nickles
+  * Copyright (c) 2018, 2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE
+  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
   *
   */
 
@@ -25,6 +25,7 @@ import scala.io.BufferedSource
 import scala.sys.process._
 import scala.language.postfixOps
 import scala.util.matching.Regex
+
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 
@@ -85,7 +86,7 @@ package object aspIOutils {
       (cmd #< iterator2inputStream(sendToStdinOpt) lineStream_! ProcessLogger(line => errLines.append(line))) #> redirectOutputToFileOpt.get
     else
       cmd #< iterator2inputStream(sendToStdinOpt) lineStream_! ProcessLogger(line => errLines.append(line))
-    // note that some programs (such as Clingo) return non-zero codes
+    // Note that some programs (such as Clingo) return non-zero codes
     // even when completing correctly; we use lineStream_! to prevent the process to throw an exception in these cases.
 
     def iterator2inputStream(sendToStdinOpt: Option[Either[String, Array[Byte]]]): InputStream = {
@@ -138,7 +139,7 @@ package object aspIOutils {
     *
     */
   def externalJarMainCall(jarURL: URL, mainClassName: String, args: Array[String], sendToStdinOpt: Option[Either[String, Array[Byte]]]):
-  Option[(Any /*return object of method called unless with a main from Java code, then we return 0 (from original null) */ ,
+  Option[(Any /*return object of method called unless with toAbsEli main from Java code, then we return 0 (from original null) */ ,
     String /*captured stdout*/ , String /*captured stderr*/ )] = {
 
     val systemStdin = System.in
@@ -157,7 +158,7 @@ package object aspIOutils {
 
     try {
 
-      val loader: ClassLoader = URLClassLoader.newInstance(Array(jarURL), /*this.getClass <- no, since we want that DelSAT's
+      val loader: ClassLoader = URLClassLoader.newInstance(Array(jarURL), /*this.getClass <- no, since we want that delSAT's
       diff.DifferentialFunctionFactoryStasp overrides the class with the same name in prasp2, we need to use an unrelated
        class loader*/ "".getClass.getClassLoader)
 
@@ -227,7 +228,7 @@ package object aspIOutils {
 
       "\"" + parg + "\""
 
-    }) // covers simple cases. NB: under Windows, single quotes cannot be used to protect args with double quotes.
+    }) // covers simple cases. NB: under Windows (at least 8), single quotes cannot be used to protect args with double quotes.
 
   }
 
@@ -236,7 +237,7 @@ package object aspIOutils {
                               args: Array[String],
                               sendToStdinOpt: Option[Either[String, Array[Byte]]],
                               addArgForSysExitOmission: Boolean /* see below */):
-  Option[(Any /*<- Should be ignored; returns object of method called unless with a main from Java code,
+  Option[(Any /*<- Should be ignored; returns object of method called unless with toAbsEli main from Java code,
   then we return 0 (from original null) */ ,
     String /*captured stdout*/ , String /*captured stderr*/ )] = {
 
@@ -819,7 +820,7 @@ package object aspIOutils {
 
     // s must be trimmed
 
-    //val s = "123   65 3 -1  -987 7 0"
+    //example argument (as a string) = "123   65 3 -1  -987 7 0"
 
     val ll = new IntArrayList(10)
 
