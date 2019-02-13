@@ -1,39 +1,57 @@
-**delSAT**
+#####delSAT
 
-**Synopsis**
+[Synopsis](#synopsis)
 
-delSAT ("&#8711;SAT") is a SAT and Answer Set solver for the Java Virtual Machine (JVM), mainly targeted at model sampling and model multiset optimization. 
+[Introduction](#introduction)
+
+[Build and Run](#build-and-run)
+
+[Use](#use)
+
+[Miscellanea](#miscellanea)
+
+[Author & contact details](#author-contact-details)
+
+[delSAT Copyright & License](#delsat-copyright-license)
+
+[Dependencies](#dependencies)
+
+#####Synopsis
+
+delSAT ("&#8711;SAT") is an Answer Set and SAT solver for the Java Virtual Machine (JVM), mainly targeted at model sampling and model multiset optimization. 
 
 Example use cases: 
 
-- Finding an optimal multiset of models, given a user-defined multimodel cost function
+- Finding an optimal multiset of models, given a user-defined cost function which assigns costs to entire multisets of models
 
-- Distribution-aware sampling of satisfying propositional models or Answer Sets
+- Distribution-aware sampling of satisfying propositional models or answer sets
 
-- As a probabilistic inference engine which can use logical, graph or other relational background knowledge, as in Statistical Relational Learning
+- As a probabilistic inference engine which can use logical, graph or other relational background knowledge, as in Statistical Relational Learning (SRL)
+or probabilistic logic programming
 
 - Parallelized plain SAT or Answer Set solving for the JVM
 
 The sampling/optimization feature uses a new algorithm called _Differentiable SAT_ respectively _Differentiable Answer Set Programming_.
 
 The non-probabilistic part of the solver algorithm is, like the ASP and SAT solver clasp (https://github.com/potassco/clasp), 
-a complete solver, based on CDNL (Conflict-Driven Nogood Learning) - as opposed to more common older approaches such as CDCL and DPLL. 
+a complete solver, based on CDNL (Conflict-Driven Nogood Learning) - as opposed to related and more common older approaches such as CDCL and DPLL. 
 
-**Introduction**
+#####Introduction
 
-As an optimization and sampling tool, delSAT generates a _sample_ (a multiset (bag) of sampled models, i.e., answer sets or satisfying assignments (witnesses)) which
-minimizes a user-defined arbitrary differentiable cost function down to a user-specified threshold (allowing to trade-off accuracy against speed). 
+As an optimization and sampling tool, delSAT generates a _sample_ (a multiset (bag) of sampled models, i.e., answer sets (stable models) or satisfying assignments (witnesses, instances)) which
+minimizes a user-defined arbitrary differentiable cost function down to a user-specified threshold. The threshold allows to trade-off accuracy against speed. 
 
-Such a sample is called a _multi-solution_ (or just _solution_ if there is no ambiguity) of the given cost function and the logical rules/clauses. In contrast to traditional optimization in SAT or ASP, 
-a cost function refers to the entire multiset of models (instances, witnesses, answer sets), and the sampled <ins>multiset</ins> of models as a whole minimizes the cost function. 
-If multiple cost functions are provided, they are combined into a single overall cost function (see below). 
+Such a sample is called a _multi-solution_ (or just _solution_ if there is no ambiguity) of the given cost function and the logical rules/clauses. In 
+contrast to traditional optimization in SAT or ASP, a cost function refers to the entire multiset of models, and the sampled <ins>multiset</ins> of 
+models as a whole minimizes the cost function. If multiple cost functions are provided, they are combined into a single overall cost function (see below). 
 
-Cost functions can be used for example to specify desired probability distributions over satisfying Boolean assignments or stable models (answer sets)
-from which delSAT then samples. They can also be used to create expressive probabilistic logic programming frameworks (see literature below for details).
+Cost functions can be used, for example, to specify desired probability distributions over satisfying Boolean assignments or answer sets
+from which delSAT then samples. They can also be used to create expressive probabilistic logic programming frameworks. See literature below for details.
 
-To solve the described optimization problem efficiently and approximately, delSAT makes use of Differentiable Satisfiability 
+To solve the described optimization problem efficiently and approximately, delSAT makes use of a new approach called Differentiable Satisfiability 
 (respectively Differentiable Answer Set Programming) where a form of Gradient Descent is directly embedded in the core ASP or SAT solver algorithm, in order to 
-iteratively generate models until the cost function's minimum is (approximately) reached (as opposed to, e.g., converting the problem where possible into a linear programming form or a regular SAT or ASP problem).
+iteratively generate models until the cost function's minimum is (approximately) reached (as opposed to, e.g., converting the problem where possible into a linear programming 
+form or a regular (reified) SAT or ASP problem).
 
 Details about this approach can be found in the following publications:
 
@@ -45,7 +63,7 @@ http://arxiv.org/abs/1812.11948
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. In Proceedings of the 12th International Conference on 
   Scalable Uncertainty Management (SUM'18). Lecture Notes in Artificial Intelligence (LNAI), Springer 2018.
 
-**Build and Run**
+#####Build and Run
 
 delSAT is currently provided only in the form of source code. To build delSAT from sources, including all dependencies:
 
@@ -55,13 +73,13 @@ delSAT is currently provided only in the form of source code. To build delSAT fr
 
 This creates a self-contained jar file which you can run, for example, like this:
 
-java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myDIMACSFile.cnf --verbose --solverarg showProgressStats true
+java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myDIMACSFile.cnf 
 
 or like this: 
 
 java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myProbabilisticTask.pcnf -t 0.005 -mse 
 
-**Use**
+#####Use
 
 delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK.
 
@@ -69,7 +87,7 @@ Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Fo
 Most Answer Set programs, including disjunctive programs and programs with variables or typical ASP constructs such as integrity constraints or choice rules, 
 can be automatically translated into the supported aspif format using a grounding/preprocessing step, see further below in this guide.
 
-A delSAT cost function is a user-specified differentiable function over properties of multiple models (in particular certain statistics).
+A delSAT cost function is a user-specified differentiable function over properties of multiple models, in particular statistics over variables/atoms.
 
 In the input, multiple cost functions can be defined in lines starting with "cost ". Cost functions need to be 
 differentiable with respect to their respective parameter atom terms (see below). If multiple cost functions
@@ -77,15 +95,14 @@ are given, their normalized sum is minimized.
 
 In addition to the cost functions, delSAT input requires a list of _parameter atoms_ (parameter variables); these are the random variables which 
 can occur in cost functions. They need to be listed in a single line starting with "pats " (preceding the cost function declarations). 
-In SAT-mode only, parameter atoms within cost function expressions need to be prefixed by character 'v'. 
+In SAT-mode only, parameter atoms (variables) within cost function expressions need to be prefixed by character 'v'. 
 
 The delSAT input can state any number of arbitrary such cost functions and can specify arbitrary 
-logical dependencies between parameter atoms (but of course not all such problems have 
-a solution).
+logical dependencies between parameter atoms, but of course not all such problems have a solution.
 
 A term of form f(p) in a cost function, where p is a parameter atom, evaluates during sampling to 
-the frequency of p in the sample (count of p in all models in the sample, normalized with the total number of models in the sample). 
-(Remark: Parameter atoms are listed in addition to the cost functions because a future version of delSAT is planned to allow for
+the frequency of positive occurrences of p in the sample (count of p in all models in the sample, normalized with the total number of models in the sample). 
+(Remark: Parameter atoms are listed in addition to the cost functions because a future version of delSAT might allow for
 atoms to occur in cost functions which are not parameter atoms, as proposed in the ILP'18 paper.)
 
 Example input file for SAT (recommended to use with switch -mse which activates optimized handling of costs which have the form of inner MSE (Mean Squared Error) terms):
@@ -103,7 +120,7 @@ Example input file for SAT (recommended to use with switch -mse which activates 
 The costs in the above example specify that literal 1 has probability 0.2 and that literal 2 has probability 0.5.
 If, like above, multiple costs terms are provided, they add up to the overall cost.
 
-The part before "pats" is in plain DIMACS/CNF syntax.
+The part before "pats" is in plain DIMACS-CNF syntax.
            
 An example input file for ASP (recommended to use with switch -mse):
 
@@ -129,9 +146,9 @@ In the above example, the two cost function terms contain atoms a and b and spec
 
 The part above "pats" is in aspif syntax and typically generated automatically from an Answer Set (AnsProlog) program using a preprocessing/grounding tool - see further below for details.
         
-Costs can in principle be arbitrary differentiable functions, e.g., you could rephrase the above as follows (call 
+Costs can in principle be arbitrary differentiable functions, e.g., you could rephrase the above as follows. Then, call 
 delSAT with --solverarg "partDerivComplete" "true" and without -mse. This activates a more general but somewhat less 
-efficient approach):
+efficient differentiation approach:
 
         asp 1 0 0
         1 0 1 1 0 0
@@ -159,28 +176,30 @@ Example preprocessor call for a non-ground or non-normal Answer Set program:
 
 (Note that delSAT itself doesn't require Clingo or any other external ASP, SAT or SMT solver.)
  
-The final input file can then be created simply by appending the cost lines (if any) to the aspif or DIMACS file. 
+The final input file can then be created simply by appending the "pats" and "cost" lines (if any) to the aspif or DIMACS file, starting in a new line. 
  
-delSAT is configured using command line arguments (call with --help to see the list of available options). 
+delSAT can  be configured using command line arguments (call with --help to see the list of available options). Within the delSAT source code, settings are mainly 
+specified in files sharedDefs.scala and delSAT.scala.  
+
+Less common settings are specified using command line parameters of the form --solverarg "name" "value1 [value2 ...]"
+The list of solver parameters accessible via argument --solverarg can currently be found in source code file sharedDefs.scala (more accessible documentation is planned for a forthcoming version).
 
 Example delSAT call: 
     
-    java -jar delSAT.jar myDelSATInputFile.opt -t 0.0005 -mse --verbose
+    java -jar delSAT.jar myInputFile.pasp -t 0.1 -mse --solverarg "partDerivComplete" "true" --solverarg "maxCompetingSolverThreadsR" "6"
 
 Parameter -t specifies the accuracy threshold (lower = more accurate). Default is is 0.01.
 
 In principle, arbitrary differentiable cost functions can be specified. Certain more complex cost functions may require argument --solverarg partDerivComplete true  
-(delSAT shows a message in this case).
+(delSAT shows a message in this case). For the common MSE form of cost functions (see earlier in this text), argument -mse should be used.
 
 Harder SAT or ASP problems might also require a specific solver configuration to be (efficiently) solvable 
 (such as a certain restart configuration, number of parallel solver threads, non-default portfolio of concurrent solver configurations...). 
 
-The list of solver parameters (accessible via argument --solverarg) can currently be
-found in source code file sharedDefs.scala (more accessible documentation is planned for a forthcoming version).
+#####Miscellanea
 
-**Miscellanea**
-
-- delSAT can be used with most types of logic programs supported by modern answer set solvers (including Disjunctive Logic Programs) but such programs might require preprocessing and grounding as explained above
+- delSAT can be used with most types of logic programs supported by modern answer set solvers (including Disjunctive Logic Programs) but such programs 
+might require a preceeding preprocessing and grounding step as explained above.
 
 - For using First-Order Logic (FOL) syntax (under stable model semantics), consider preprocessing using a tool such as fol2asp or f2lp.
 
@@ -207,7 +226,7 @@ There is currently no way to let delSAT check for probabilistic (weight) inconsi
 case an increase of the threshold (specified with command line argument -t) should solve the problem.
 
 - delSAT doesn't require any assumptions about random event independence, but it can to some degree profit from
-probabilistic independence among variables using option maxBoostR (see sharedDefs.scala) 
+probabilistic independence among variables using option maxBurstR (see sharedDefs.scala) 
 
 - delSAT is not designed as a tool for sampling from the _uniform_ (or a near-uniform) distribution over models, but it supports model set diversification 
 with --solverarg "diversify" "true", and one can in principle associate arbitary probabiltities with individual models using cost functions.
@@ -216,7 +235,7 @@ with --solverarg "diversify" "true", and one can in principle associate arbitary
 
 - API documentation is planned for the near future.
 
-**Author & contact details**
+#####Author & contact details
 
 Author: Matthias Nickles 
 
@@ -226,22 +245,24 @@ Web: https://www.researchgate.net/profile/Matthias_Nickles
 
 Feedback and bug reports are welcome.
 
-**delSAT Copyright & License**
+#####delSAT Copyright & License
 
-Copyright (c) 2018, 2019 by Matthias Nickles
+Copyright (c) 2018-2019 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE)
 
-**Dependencies**
+#####Dependencies
 
 delSAT uses the following third-party libraries:
 
-- JAutoDiff (https://github.com/accelad-com/nilgiri-math)  
-  Copyright (c) 2017 AccelaD  
+- JAutoDiff (https://github.com/uniker9/JAutoDiff, https://github.com/accelad-com/nilgiri-math/tree/master/src/main/java/com/accelad/math/nilgiri)  
+  Copyright (c) 2012 uniker9 (JAutoDiff)  
+  License: https://github.com/uniker9/JAutoDiff/blob/master/LICENSE.txt  
+  Copyright (c) 2017 AccelaD (https://github.com/accelad-com/nilgiri-math/tree/master/src/main/java/com/accelad/math/nilgiri)  
   License: https://github.com/accelad-com/nilgiri-math/blob/master/src/main/java/com/accelad/math/nilgiri/LICENSE
 
 - Parsington (https://github.com/scijava/parsington)  
-  Copyright (c) 2015 - 2016, Board of Regents of the University of Wisconsin-Madison  
+  Copyright (c) 2015-2016, Board of Regents of the University of Wisconsin-Madison  
   License: https://github.com/scijava/parsington/blob/master/LICENSE.txt
 
 - fastutil (http://fastutil.di.unimi.it)  
