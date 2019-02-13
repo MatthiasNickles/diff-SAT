@@ -1,20 +1,20 @@
 ### delSAT ###
 
-[Synopsis](#synopsis)
+- [Synopsis](#synopsis)
 
-[Introduction](#introduction)
+- [Introduction](#introduction)
 
-[Build and Run](#build-and-run)
+- [Build and Run](#build-and-run)
 
-[Use](#use)
+- [Use](#use)
 
-[Miscellanea](#miscellanea)
+- [Miscellanea](#miscellanea)
 
-[Author & contact details](#author--contact-details)
+- [Author & contact details](#author--contact-details)
 
-[delSAT Copyright & License](#delsat-copyright--license)
+- [delSAT Copyright & License](#delsat-copyright--license)
 
-[Dependencies](#dependencies)
+- [Dependencies](#dependencies)
 
 #### Synopsis ####
 
