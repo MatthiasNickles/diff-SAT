@@ -1,4 +1,4 @@
-#####delSAT
+#### delSAT ####
 
 [Synopsis](#synopsis)
 
@@ -16,7 +16,7 @@
 
 [Dependencies](#dependencies)
 
-#####Synopsis
+##### Synopsis #####
 
 delSAT ("&#8711;SAT") is an Answer Set and SAT solver for the Java Virtual Machine (JVM), mainly targeted at model sampling and model multiset optimization. 
 
@@ -36,7 +36,7 @@ The sampling/optimization feature uses a new algorithm called _Differentiable SA
 The non-probabilistic part of the solver algorithm is, like the ASP and SAT solver clasp (https://github.com/potassco/clasp), 
 a complete solver, based on CDNL (Conflict-Driven Nogood Learning) - as opposed to related and more common older approaches such as CDCL and DPLL. 
 
-#####Introduction
+##### Introduction #####
 
 As an optimization and sampling tool, delSAT generates a _sample_ (a multiset (bag) of sampled models, i.e., answer sets (stable models) or satisfying assignments (witnesses, instances)) which
 minimizes a user-defined arbitrary differentiable cost function down to a user-specified threshold. The threshold allows to trade-off accuracy against speed. 
@@ -63,7 +63,7 @@ http://arxiv.org/abs/1812.11948
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. In Proceedings of the 12th International Conference on 
   Scalable Uncertainty Management (SUM'18). Lecture Notes in Artificial Intelligence (LNAI), Springer 2018.
 
-#####Build and Run
+##### Build and Run #####
 
 delSAT is currently provided only in the form of source code. To build delSAT from sources, including all dependencies:
 
@@ -79,7 +79,7 @@ or like this:
 
 java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myProbabilisticTask.pcnf -t 0.005 -mse 
 
-#####Use
+##### Use #####
 
 delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK.
 
@@ -95,7 +95,7 @@ are given, their normalized sum is minimized.
 
 In addition to the cost functions, delSAT input requires a list of _parameter atoms_ (parameter variables); these are the random variables which 
 can occur in cost functions. They need to be listed in a single line starting with "pats " (preceding the cost function declarations). 
-In SAT-mode only, parameter atoms (variables) within cost function expressions need to be prefixed by character 'v'. 
+In SAT-mode only, parameter atoms (the random variables) within cost function expressions need to be prefixed by character 'v'. 
 
 The delSAT input can state any number of arbitrary such cost functions and can specify arbitrary 
 logical dependencies between parameter atoms, but of course not all such problems have a solution.
@@ -196,7 +196,7 @@ In principle, arbitrary differentiable cost functions can be specified. Certain 
 Harder SAT or ASP problems might also require a specific solver configuration to be (efficiently) solvable 
 (such as a certain restart configuration, number of parallel solver threads, non-default portfolio of concurrent solver configurations...). 
 
-#####Miscellanea
+##### Miscellanea #####
 
 - delSAT can be used with most types of logic programs supported by modern answer set solvers (including Disjunctive Logic Programs) but such programs 
 might require a preceeding preprocessing and grounding step as explained above.
@@ -205,7 +205,7 @@ might require a preceeding preprocessing and grounding step as explained above.
 
 - Most of the configuration options in sharedDefs.scala can also be set when calling delSAT from the command line (see sharedDefs.scala) 
 
-- delSAT is not a solver for (weighted) Max-SAT or Min-SAT, or for finding an optimal individual model
+- delSAT is not a solver for (weighted) Max-SAT or Min-SAT, nor for finding individually optimal models
 
 - The input format of delSAT is similar to the input format typically used with PSAT (Probabilistic Satisifiability), so consistent PSAT problems 
 might in principle be feedable into delSAT in order to sample satisfying models. However, PSAT is a different problem and delSAT doesn't check the probabilistic coherence of the input (except for the 
@@ -226,7 +226,7 @@ There is currently no way to let delSAT check for probabilistic (weight) inconsi
 case an increase of the threshold (specified with command line argument -t) should solve the problem.
 
 - delSAT doesn't require any assumptions about random event independence, but it can to some degree profit from
-probabilistic independence among variables using option maxBurstR (see sharedDefs.scala) 
+probabilistic independence among random variables using option maxBurstR (see sharedDefs.scala) 
 
 - delSAT is not designed as a tool for sampling from the _uniform_ (or a near-uniform) distribution over models, but it supports model set diversification 
 with --solverarg "diversify" "true", and one can in principle associate arbitary probabiltities with individual models using cost functions.
@@ -235,7 +235,7 @@ with --solverarg "diversify" "true", and one can in principle associate arbitary
 
 - API documentation is planned for the near future.
 
-#####Author & contact details
+##### Author & contact details #####
 
 Author: Matthias Nickles 
 
@@ -245,13 +245,13 @@ Web: https://www.researchgate.net/profile/Matthias_Nickles
 
 Feedback and bug reports are welcome.
 
-#####delSAT Copyright & License
+##### delSAT Copyright & License #####
 
 Copyright (c) 2018-2019 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE)
 
-#####Dependencies
+##### Dependencies #####
 
 delSAT uses the following third-party libraries:
 
