@@ -1,4 +1,4 @@
-#### delSAT ####
+### delSAT ###
 
 [Synopsis](#synopsis)
 
@@ -10,13 +10,13 @@
 
 [Miscellanea](#miscellanea)
 
-[Author & contact details](#author-contact-details)
+[Author & contact details](#author-&-contact-details)
 
 [delSAT Copyright & License](#delsat-copyright-license)
 
 [Dependencies](#dependencies)
 
-##### Synopsis #####
+#### Synopsis ####
 
 delSAT ("&#8711;SAT") is an Answer Set and SAT solver for the Java Virtual Machine (JVM), mainly targeted at model sampling and model multiset optimization. 
 
@@ -36,7 +36,7 @@ The sampling/optimization feature uses a new algorithm called _Differentiable SA
 The non-probabilistic part of the solver algorithm is, like the ASP and SAT solver clasp (https://github.com/potassco/clasp), 
 a complete solver, based on CDNL (Conflict-Driven Nogood Learning) - as opposed to related and more common older approaches such as CDCL and DPLL. 
 
-##### Introduction #####
+#### Introduction ####
 
 As an optimization and sampling tool, delSAT generates a _sample_ (a multiset (bag) of sampled models, i.e., answer sets (stable models) or satisfying assignments (witnesses, instances)) which
 minimizes a user-defined arbitrary differentiable cost function down to a user-specified threshold. The threshold allows to trade-off accuracy against speed. 
@@ -63,7 +63,7 @@ http://arxiv.org/abs/1812.11948
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. In Proceedings of the 12th International Conference on 
   Scalable Uncertainty Management (SUM'18). Lecture Notes in Artificial Intelligence (LNAI), Springer 2018.
 
-##### Build and Run #####
+#### Build and Run ####
 
 delSAT is currently provided only in the form of source code. To build delSAT from sources, including all dependencies:
 
@@ -79,7 +79,7 @@ or like this:
 
 java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myProbabilisticTask.pcnf -t 0.005 -mse 
 
-##### Use #####
+#### Use ####
 
 delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK.
 
@@ -196,7 +196,7 @@ In principle, arbitrary differentiable cost functions can be specified. Certain 
 Harder SAT or ASP problems might also require a specific solver configuration to be (efficiently) solvable 
 (such as a certain restart configuration, number of parallel solver threads, non-default portfolio of concurrent solver configurations...). 
 
-##### Miscellanea #####
+#### Miscellanea ####
 
 - delSAT can be used with most types of logic programs supported by modern answer set solvers (including Disjunctive Logic Programs) but such programs 
 might require a preceeding preprocessing and grounding step as explained above.
@@ -235,7 +235,7 @@ with --solverarg "diversify" "true", and one can in principle associate arbitary
 
 - API documentation is planned for the near future.
 
-##### Author & contact details #####
+#### Author & contact details ####
 
 Author: Matthias Nickles 
 
@@ -245,13 +245,13 @@ Web: https://www.researchgate.net/profile/Matthias_Nickles
 
 Feedback and bug reports are welcome.
 
-##### delSAT Copyright & License #####
+#### delSAT Copyright & License ####
 
 Copyright (c) 2018-2019 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE)
 
-##### Dependencies #####
+#### Dependencies ####
 
 delSAT uses the following third-party libraries:
 
