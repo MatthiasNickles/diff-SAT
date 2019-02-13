@@ -10,9 +10,9 @@
 
 [Miscellanea](#miscellanea)
 
-[Author & contact details](#author---contact-details)
+[Author & contact details](#author--contact-details)
 
-[delSAT Copyright & License](#delsat-copyright---license)
+[delSAT Copyright & License](#delsat-copyright--license)
 
 [Dependencies](#dependencies)
 
