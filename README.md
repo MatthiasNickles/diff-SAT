@@ -233,7 +233,7 @@ with --solverarg "diversify" "true", and one can in principle associate arbitary
 
 - delSAT never guarantees that the models it prints are different from each other, as sampling is with replacement. --solverarg "diversify" "true" just increases the amount of randomness during decision making when generating a model.
 
-- API documentation is planned for the near future.
+- More detailed API documentation is planned for the near future.
 
 #### Author & Contact details ####
 
