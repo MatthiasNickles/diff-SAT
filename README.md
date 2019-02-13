@@ -10,7 +10,7 @@
 
 - [Miscellanea](#miscellanea)
 
-- [Author & contact details](#author--contact-details)
+- [Author & Contact details](#author--contact-details)
 
 - [delSAT Copyright & License](#delsat-copyright--license)
 
@@ -235,7 +235,7 @@ with --solverarg "diversify" "true", and one can in principle associate arbitary
 
 - API documentation is planned for the near future.
 
-#### Author & contact details ####
+#### Author & Contact details ####
 
 Author: Matthias Nickles 
 
