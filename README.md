@@ -87,9 +87,9 @@ The list of supported such argument names and values can be found in source code
 
 Another example delSAT call: 
     
-    java -jar delSAT.jar myInputFile.pasp -t 0.1 -mse --solverarg "partDerivComplete" "true" --solverarg "maxCompetingSolverThreadsR" "6"
+    java -jar delSAT-assembly-0.3.jar myInputFile.pasp -t 0.1 -mse --solverarg "maxCompetingSolverThreadsR" "6" --solverarg "partDerivComplete" "true" 
 
-Parameter -t specifies the accuracy threshold (lower = more accurate). Default is is 0.01.
+Parameter -t specifies the accuracy threshold (lower = more accurate). Default is is 0.01. For the meaning of -mse see the next section.
 
 The format of the input files and how to create them is described in the following section. 
 
