@@ -65,7 +65,7 @@ http://arxiv.org/abs/1812.11948
 
 #### Build and Run ####
 
-delSAT is currently provided only in the form of source code. To build delSAT from sources, including all dependencies:
+delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK. delSAT is currently provided only in the form of source code. To build delSAT from sources, including all dependencies:
 
 - Install sbt (https://www.scala-sbt.org/)
 - Make sure file project/assembly.sbt exists with content addSbtPlugin("com.eed3si9n" % "sbt-assembly" % "0.14.9")
@@ -79,9 +79,21 @@ or like this:
 
 java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myProbabilisticTask.pcnf -t 0.005 -mse 
 
-#### Use ####
+delSAT can be configured using command line arguments (use --help to see the list of available options). Within the source code, settings are mainly 
+specified in files sharedDefs.scala and delSAT.scala.  
 
-delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK.
+Less common settings are specified using command line arguments of the form --solverarg "name" "value1 [value2 ...]"
+The list of supported such argument names and values can be found in source code file sharedDefs.scala (more accessible documentation is planned for a forthcoming version).
+
+Another example delSAT call: 
+    
+    java -jar delSAT.jar myInputFile.pasp -t 0.1 -mse --solverarg "partDerivComplete" "true" --solverarg "maxCompetingSolverThreadsR" "6"
+
+Parameter -t specifies the accuracy threshold (lower = more accurate). Default is is 0.01.
+
+The format of the input files and how to create them is described in the following section. 
+
+#### Use ####
 
 Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Format (aspif), with optional cost function (loss function). 
 Most Answer Set programs, including disjunctive programs and programs with variables or typical ASP constructs such as integrity constraints or choice rules, 
@@ -166,7 +178,6 @@ efficient differentiation approach:
         
         cost ((0.4-f(a))^2+(0.3-f(b))^2)/2
 
-           
 To generate aspif format (the lines above before "pats") from a non-ground Answer Set program, preprocess
 using, e.g., Clingo's (https://potassco.org/clingo/) preprocessing and grounding capability. 
 
@@ -177,18 +188,6 @@ Example preprocessor call for a non-ground or non-normal Answer Set program:
 (Note that delSAT itself doesn't require Clingo or any other external ASP, SAT or SMT solver.)
  
 The final input file can then be created simply by appending the "pats" and "cost" lines (if any) to the aspif or DIMACS file, starting in a new line. 
- 
-delSAT can  be configured using command line arguments (call with --help to see the list of available options). Within the delSAT source code, settings are mainly 
-specified in files sharedDefs.scala and delSAT.scala.  
-
-Less common settings are specified using command line parameters of the form --solverarg "name" "value1 [value2 ...]"
-The list of solver parameters accessible via argument --solverarg can currently be found in source code file sharedDefs.scala (more accessible documentation is planned for a forthcoming version).
-
-Example delSAT call: 
-    
-    java -jar delSAT.jar myInputFile.pasp -t 0.1 -mse --solverarg "partDerivComplete" "true" --solverarg "maxCompetingSolverThreadsR" "6"
-
-Parameter -t specifies the accuracy threshold (lower = more accurate). Default is is 0.01.
 
 In principle, arbitrary differentiable cost functions can be specified. Certain more complex cost functions may require argument --solverarg partDerivComplete true  
 (delSAT shows a message in this case). For the common MSE form of cost functions (see earlier in this text), argument -mse should be used.
@@ -202,8 +201,6 @@ Harder SAT or ASP problems might also require a specific solver configuration to
 might require a preceeding preprocessing and grounding step as explained above.
 
 - For using First-Order Logic (FOL) syntax (under stable model semantics), consider preprocessing using a tool such as fol2asp or f2lp.
-
-- Most of the configuration options in sharedDefs.scala can also be set when calling delSAT from the command line (see sharedDefs.scala) 
 
 - delSAT is not a solver for (weighted) Max-SAT or Min-SAT, nor for finding individually optimal models
 
