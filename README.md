@@ -252,8 +252,8 @@ License: [MIT license](https://github.com/MatthiasNickles/delSAT/blob/master/LIC
 
 delSAT uses the following third-party libraries:
 
-- JAutoDiff (https://github.com/uniker9/JAutoDiff, https://github.com/accelad-com/nilgiri-math/tree/master/src/main/java/com/accelad/math/nilgiri)  
-  Copyright (c) 2012 uniker9 (JAutoDiff)  
+- JAutoDiff   
+  Copyright (c) 2012 uniker9 (https://github.com/uniker9/JAutoDiff)  
   License: https://github.com/uniker9/JAutoDiff/blob/master/LICENSE.txt  
   Copyright (c) 2017 AccelaD (https://github.com/accelad-com/nilgiri-math/tree/master/src/main/java/com/accelad/math/nilgiri)  
   License: https://github.com/accelad-com/nilgiri-math/blob/master/src/main/java/com/accelad/math/nilgiri/LICENSE
