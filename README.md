@@ -4,6 +4,8 @@
 
 - [Introduction](#introduction)
 
+- [References](#references)
+
 - [Build and Run](#build-and-run)
 
 - [Use](#use)
@@ -52,12 +54,13 @@ To solve the described optimization problem efficiently and approximately, delSA
 (respectively Differentiable Answer Set Programming) where a form of Gradient Descent is directly embedded in the core ASP or SAT solver algorithm, in order to 
 iteratively generate models until the cost function's minimum is (approximately) reached (as opposed to, e.g., converting the problem where possible into a linear programming 
 form or a regular (reified) SAT or ASP problem).
+Details about this approach can be found in the publications under [References](#references).
 
-Details about this approach can be found in the following publications:
+#### References ####
 
+- Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th International Workshop on Probabilistic Logic Programming (PLP'18). CEUR Vol. 2219, 2018.
 - Matthias Nickles: Differentiable Satisfiability and Differentiable Answer Set Programming for Sampling-Based Multi-Model Optimization
 http://arxiv.org/abs/1812.11948
-- Matthias Nickles: Differentiable SAT/ASP. In Proceedings of the 5th International Workshop on Probabilistic Logic Programming (PLP'18). CEUR Vol. 2219, 2018.
 - Matthias Nickles: Sampling-Based SAT/ASP Multi-Model Optimization as a Framework for Probabilistic Inference. 
   In Proceedings of the 28th International Conference on Inductive Logic Programming (ILP'18). Lecture Notes in Artificial Intelligence (LNAI), Springer, 2018.
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. In Proceedings of the 12th International Conference on 
