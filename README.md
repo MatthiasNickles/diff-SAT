@@ -8,7 +8,7 @@
 
 - [Build and Run](#build-and-run)
 
-- [Use](#use)
+- [Usage](#usage)
 
 - [Miscellanea](#miscellanea)
 
@@ -28,8 +28,9 @@ Example use cases:
 
 - Distribution-aware sampling of satisfying propositional models or answer sets
 
-- As a probabilistic inference engine which can use logical, graph or other relational background knowledge, as in Statistical Relational Learning (SRL)
-or probabilistic logic programming
+- Probabilistic SAT solving and probabilistic Answer Set Programming. More generally, as a probabilistic inference engine  
+  which can use logical, graph or other relational background knowledge, as in Statistical Relational Learning (SRL)  
+  or probabilistic logic programming
 
 - Parallelized plain SAT or Answer Set solving for the JVM
 
@@ -47,8 +48,8 @@ Such a sample is called a _multi-solution_ (or just _solution_ if there is no am
 contrast to traditional optimization in SAT or ASP, a cost function refers to the entire multiset of models, and the sampled <ins>multiset</ins> of 
 models as a whole minimizes the cost function. If multiple cost functions are provided, they are combined into a single overall cost function (see below). 
 
-Cost functions can be used, for example, to specify desired probability distributions over satisfying Boolean assignments or answer sets
-from which delSAT then samples. They can also be used to create expressive probabilistic logic programming frameworks. See literature below for details.
+E.g., cost functions can be used for (but are not limited to) the specifcation of probability distributions over satisfying Boolean assignments or answer sets
+from which delSAT then samples, by defining the probabilities of probabilistic propositonal variables (or, by extension, probabilistic formulas). This way, delSAT can be used as the "inference engine" for expressive probabilistic logic programming frameworks. See literature below for details.
 
 To solve the described optimization problem efficiently and approximately, delSAT makes use of a new approach called Differentiable Satisfiability 
 (respectively Differentiable Answer Set Programming) where a form of Gradient Descent is directly embedded in the core ASP or SAT solver algorithm, in order to 
@@ -96,7 +97,7 @@ Parameter -t specifies the accuracy threshold (lower = more accurate). Default i
 
 The format of the input files and how to create them is described in the following section. 
 
-#### Use ####
+#### Usage ####
 
 Input is currently accepted as DIMACS CNF or a subset of the ASP Intermediate Format (aspif), with optional cost function (loss function). 
 Most Answer Set programs, including disjunctive programs and programs with variables or typical ASP constructs such as integrity constraints or choice rules, 
@@ -207,9 +208,12 @@ might require a preceeding preprocessing and grounding step as explained above.
 
 - delSAT is not a solver for (weighted) Max-SAT or Min-SAT, nor for finding individually optimal models
 
-- The input format of delSAT is similar to the input format typically used with PSAT (Probabilistic Satisifiability), so consistent PSAT problems 
-might in principle be feedable into delSAT in order to sample satisfying models. However, PSAT is a different problem and delSAT doesn't check the probabilistic coherence of the input (except for the 
-Boolean satisfiability of the "hard" clauses). delSAT's semantics is different from SSAT (Stochastic Boolean Satisfiability).
+- In the case where the costs express probabilities of propositional variables (or, by straightforward extension, propositional 
+formulas), the input to delSAT is similar to the problem representation format used with PSAT (probabilistic satisfiability problem), 
+so consistent PSAT problem instances are in principle feedable into delSAT in order to sample satisfying models. However, note that 
+PSAT is a different problem and delSAT doesn't check the satisfiability of probability assignments (except for the Boolean 
+satisfiability of "hard" clauses), at least not directly (see remarks about termination and non-termination further below).  
+Also note that delSAT's semantics is different from SSAT (Stochastic Boolean Satisfiability).
 
 - While in principle usable with any kind of differentiable cost function(s), MSE-style costs receive optimized treatment with 
 command line switch -mse. With that switch, list the instantiated inner MSE terms (of form (wi-f(vari))^2) 
