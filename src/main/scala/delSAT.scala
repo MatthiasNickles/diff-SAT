@@ -69,7 +69,7 @@ object delSAT {
 
   assert(!(printAnswers && enforceSanityChecks))
 
-  val version = "0.3.1"
+  val version = "0.3.2"
 
   val copyrightAndVersionText = "delSAT " + version + "\nCopyright (c) 2018, 2019 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE"
 
