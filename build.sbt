@@ -9,9 +9,9 @@
   *
   */
 
-name := "delSAT"
+name := "DelSAT"
 
-version := "0.3"
+version := "0.3.1"
 
 scalaVersion := "2.12.8"
 
