@@ -69,22 +69,26 @@ http://arxiv.org/abs/1812.11948
 
 #### Build and Run ####
 
-delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK. delSAT is currently provided only in the form of source code. To build delSAT from sources, including all dependencies:
+delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK.  
+
+A ready-to-run JAR file can be found under [Releases](https://github.com/MatthiasNickles/delSAT/releases).  
+
+To build delSAT from sources, including all dependencies:
 
 - Install sbt (https://www.scala-sbt.org/)
 - Make sure file project/assembly.sbt exists with content addSbtPlugin("com.eed3si9n" % "sbt-assembly" % "0.14.9")
 - Run "sbt assembly" in console (from the directory with file build.sbt)
 
-This creates a self-contained jar file which you can run, for example, like this:
+Run delSAT, e.g., like this:
 
-java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myDIMACSFile.cnf 
+    java -jar delSAT.jar myDIMACSFile.cnf 
 
 or like this: 
 
-java -Xms2g -Xmx6g -Xss10m -jar delSAT-assembly-0.3.jar myProbabilisticTask.pcnf -t 0.005 -mse 
+    java -jar delSAT.jar myProbabilisticTask.pcnf -t 0.005 -mse 
 
 delSAT can be configured using command line arguments (use --help to see the list of available options). Within the source code, settings are mainly 
-specified in files sharedDefs.scala and delSAT.scala.  
+specified in files sharedDefs.scala and delSAT.scala.  To increase memory available to delSAT, use java with arguments, e.g., -Xms2g -Xmx6g -Xss10m 
 
 Less common settings are specified using command line arguments of the form --solverarg "name" "value1 [value2 ...]"
 The list of supported such argument names and values can be found in source code file sharedDefs.scala (more accessible documentation is planned for a forthcoming version).
