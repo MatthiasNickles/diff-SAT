@@ -69,7 +69,7 @@ object delSAT {
 
   assert(!(printAnswers && enforceSanityChecks))
 
-  val version = "0.3"
+  val version = "0.3.1"
 
   val copyrightAndVersionText = "delSAT " + version + "\nCopyright (c) 2018, 2019 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE"
 
@@ -77,8 +77,10 @@ object delSAT {
 
   val thirdPartyLibs = "delSAT " + version + """ uses the following third-party software:
 
-JAutoDiff (https://github.com/accelad-com/nilgiri-math)
-  Copyright (c) 2017 AccelaD
+JAutoDiff
+  Copyright (c) 2012 uniker9 (https://github.com/uniker9/JAutoDiff)
+  License: https://github.com/uniker9/JAutoDiff/blob/master/LICENSE.txt
+  Copyright (c) 2017 AccelaD (https://github.com/accelad-com/nilgiri-math/tree/master/src/main/java/com/accelad/math/nilgiri)
   License: https://github.com/accelad-com/nilgiri-math/blob/master/src/main/java/com/accelad/math/nilgiri/LICENSE
 
 Parsington (https://github.com/scijava/parsington)
@@ -92,7 +94,7 @@ fastutil (http://fastutil.di.unimi.it)
 
   val helpText =
     """
-     A SAT and ASP solver for sampling-based multi-model optimization.
+     An ASP and SAT solver for sampling-based multi-model optimization.
 
      Command line parameters:
 

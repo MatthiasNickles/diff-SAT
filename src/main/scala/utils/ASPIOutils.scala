@@ -58,7 +58,7 @@ package object aspIOutils {
 
   def isFalsAuxAtom(pred: String) = pred.startsWith(auxPredPrefixBase) && pred.contains("F")
 
-  def newSpanAuxAtomPrefix = auxPredPrefix("R") // prefixes for newly introduced uncertain auxiliary atom symbols in spanning formulas
+  //def newSpanAuxAtomPrefix = auxPredPrefix("R") // prefixes for newly introduced uncertain auxiliary atom symbols in spanning formulas
 
   def isSpanAuxAtom(pred: String) = isAuxAtom(pred) && pred.contains("R")
 
@@ -66,11 +66,12 @@ package object aspIOutils {
 
   def isLatentSymbolAuxAtom(pred: String) = pred.startsWith(auxPredPrefixBase) && pred.contains("L")
 
-  def newOtherAuxAtomPrefix = auxPredPrefix("O") // for all other newly introduced auxiliary atoms
+  //def newOtherAuxAtomPrefix = auxPredPrefix("O") // for all other newly introduced auxiliary atoms
 
   @inline def auxAtomSymbol(prefix: String, index: Int, encloseUncertainAuxWithParam: Boolean = false) = if (encloseUncertainAuxWithParam)
     "param_" + prefix + index else prefix + index
 
+  /*
   def externalCmdWithInput(cmd: String,
                            sendToStdinOpt: Option[Either[String, Array[Byte]]],
                            redirectOutputToFileOpt: Option[File] = None):
@@ -120,8 +121,9 @@ package object aspIOutils {
     else
       None
 
-  }
+  } */
 
+  /*
   def splitCommandLineStr(cmdStr: String): Seq[String] = {
 
     val regex = new Regex("\"(.*?)\"|([^\\s]+)")
@@ -132,8 +134,9 @@ package object aspIOutils {
       _.subgroups.flatMap(Option(_)).fold("")(_ ++ _)
     }
 
-  }
+  } */
 
+  /*
   /**
     * Dynamically adds jar and calls main-method.
     *
@@ -218,8 +221,9 @@ package object aspIOutils {
 
     }
 
-  }
+  } */
 
+  /*
   def quoteCmdArgs(args: Seq[String]): Seq[String] = {
 
     args.map(arg => {
@@ -230,9 +234,9 @@ package object aspIOutils {
 
     }) // covers simple cases. NB: under Windows (at least 8), single quotes cannot be used to protect args with double quotes.
 
-  }
+  } */
 
-  def externalCallAsProcOrJar(toolR: String,
+  /*def externalCallAsProcOrJar(toolR: String,
                               mainClassNameOpt: Option[String],
                               args: Array[String],
                               sendToStdinOpt: Option[Either[String, Array[Byte]]],
@@ -275,15 +279,16 @@ package object aspIOutils {
 
     }
 
-  }
+  } */
 
-
+  /*
   def getUniqueFileName(directory: String, extension: String): String = {
 
     Paths.get(directory, MessageFormat.format("{0}.{1}", UUID.randomUUID(), extension.trim())).toString()
 
-  }
+  } */
 
+  /*
   def isFileName(n: String): Boolean = {
 
     if (n.endsWith("/") || n.endsWith("\\"))
@@ -304,8 +309,9 @@ package object aspIOutils {
 
     }
 
-  }
+  } */
 
+  /*
   def isJarFileNameWithoutJava(n: String): Boolean = {
 
     val stripped = n.trim.stripPrefix("\"").stripSuffix("\"").trim
@@ -315,13 +321,15 @@ package object aspIOutils {
     r
 
   }
-
+*/
+  /*
   def readAllLinesFromStdIn: Iterator[String] = {
 
     scala.io.Source.stdin.getLines
 
-  }
+  } */
 
+  /*
   def slurpBytesFromInputStream(in: InputStream, maxLen: Int = Int.MaxValue): ArrayBuffer[Byte] = {
 
     val byteArrayStep = new Array[Byte](4096)
@@ -354,7 +362,7 @@ package object aspIOutils {
 
     byteBuf
 
-  }
+  } */
 
   def slurpFromInputStream(in: InputStream): String = {
 
@@ -376,6 +384,7 @@ package object aspIOutils {
 
   }
 
+  /*
   def slurpLinesFromFile(fileName: String): Iterator[String] = {
 
     val source = scala.io.Source.fromFile(fileName)
@@ -384,20 +393,23 @@ package object aspIOutils {
 
     //try source.getLines() finally source.close()
 
-  }
+  } */
 
+  /*
   def slurpFromFile(fileName: String): String = {
 
     new String(Files.readAllBytes(Paths.get(fileName)), StandardCharsets.UTF_8)
 
-  }
+  } */
 
+  /*
   def writeStrToFile(fileName: String, contents: String) = {
 
     Files.write(Paths.get(fileName), contents.getBytes(StandardCharsets.UTF_8))
 
-  }
+  } */
 
+  /*
   def concatenateFiles(fileNames: List[String]): Seq[String] = {
 
     fileNames.foldLeft({
@@ -417,8 +429,9 @@ package object aspIOutils {
     }
     }
 
-  }
+  } */
 
+  /*
   def readLineFromInputStream(is: InputStream, encoding: String = "UTF8"): Option[String] = {
 
     val buffer = new ByteArrayOutputStream()
@@ -440,7 +453,9 @@ package object aspIOutils {
     else
       Some(buffer.toString(encoding))
 
-  }
+  } */
+
+  /*
 
   /**
     * Parses lines with answer sets or propositional assignments.
@@ -499,6 +514,9 @@ package object aspIOutils {
 
   }
 
+  */
+
+  /*
   def extractNonNumSymbolsFromAspifLine(aspifLine: String): Set[Pred] = {
 
     var syms = Set[Pred]()
@@ -542,6 +560,8 @@ package object aspIOutils {
     }
 
   }
+
+  */
 
   case class DisjRule(headPosAtoms: Set[Pred] = Set[Pred](), headNegAtoms: Set[Pred] = Set[Pred](),
                       bodyPosAtoms: Set[Pred] = Set[Pred](), bodyNegAtoms: Set[Pred] = Set[Pred](),
@@ -638,6 +658,7 @@ package object aspIOutils {
 
   }
 
+  /*
   val varPattern = """\W(_*[A-Z][A-Za-z0-9_]*)""".r
 
   @inline def containsVars(f: String): Boolean = {
@@ -646,10 +667,11 @@ package object aspIOutils {
 
     varPattern.findFirstIn(f).isDefined
 
-  }
+  } */
 
-  @inline def isGround(f: String) = !containsVars(f)
+  // @inline def isGround(f: String) = !containsVars(f)
 
+  /*
   /**
     * Parses ASP rule into head and tail-literals. Literals can be aggregates or ranges, these are not touched.
     */
@@ -686,8 +708,9 @@ package object aspIOutils {
 
     }
 
-  }
+  } */
 
+  /*
   @inline def getQueryCondition(wStr: String): Option[String] = {
 
     val x: Array[String] = wStr.trim.split("""\?+(\s*)\|""") // we split at ?| or ??| but not at FOL disjunction symbol |
@@ -696,18 +719,18 @@ package object aspIOutils {
 
     if (x.length <= 1) None else Some(x(1))
 
-  }
+  } */
 
-
+  /*
   def isDIMACSOrASPIF(lines: Seq[String]): Boolean = {
 
     val firstLine = lines.find(!_.trim.isEmpty).getOrElse("").trim
 
     firstLine.startsWith("p cnf") || firstLine.startsWith("c ") || firstLine.startsWith("asp ")
 
-  }
+  } */
 
-  def aspParseGroundNormalRule(ruleASPgroundNormalStr: String): DisjRule = {
+  /*def aspParseGroundNormalRule(ruleASPgroundNormalStr: String): DisjRule = {
 
     val x: (String, List[String]) = headTailLitsASPrule(ruleASPgroundNormalStr, ":-")
 
@@ -720,8 +743,9 @@ package object aspIOutils {
       Set[Pred]().++(bodyPosAtoms.map(_.filterNot(_.isWhitespace))),
       Set[Pred]().++(bodyNegLits.map(_.stripPrefix("not").filterNot(_.isWhitespace))))
 
-  }
+  } */
 
+  /*
   @inline def linesTrimmed(s: String): List[String] = {
 
     s.linesWithSeparators.map(_.trim).toList // because of name clash of Scala's lines with JDK 11 lines method
@@ -747,8 +771,9 @@ package object aspIOutils {
 
     b.result()
 
-  }
+  } */
 
+  /*
   @inline def arrayMaxBy(a: Array[Int], by: (Int => Double), shuffle: Boolean = false, rdg: java.util.Random = null): Int = {
 
     var max = Double.MinValue
@@ -775,7 +800,7 @@ package object aspIOutils {
 
     maxI
 
-  }
+  } */
 
   @inline def splitByRepChar(s: String, delim1: Char = ' ', delim2: Char = '\t'): Array[String] = {
 
@@ -816,6 +841,7 @@ package object aspIOutils {
 
   }
 
+  /*
   @inline def splitByRepCharToInts(s: Array[Char]): IntArrayList = {
 
     // s must be trimmed
@@ -864,6 +890,6 @@ package object aspIOutils {
 
     ll
 
-  }
+  } */
 
 }
