@@ -28,9 +28,9 @@ Example use cases:
 
 - Distribution-aware sampling of satisfying propositional models or answer sets
 
-- Probabilistic SAT solving and Probabilistic Answer Set Programming. More generally, as a probabilistic inference engine  
-  which can use logical, graph or other relational background knowledge, as in Statistical Relational Learning (SRL)  
-  or probabilistic logic programming
+- Probabilistic SAT solving and Probabilistic Answer Set Programming. More generally, as a probabilistic inference 
+  engine which can use logical, graph or other relational background knowledge, as in Statistical Relational Learning 
+  (SRL) or for probabilistic logic programming (a declarative form of probabilistic programming)
 
 - Parallelized plain SAT or Answer Set solving for the JVM
 
