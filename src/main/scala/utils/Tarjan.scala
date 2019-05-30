@@ -20,7 +20,7 @@ import scala.collection.mutable
   */
 object Tarjan {
 
-  /* Function based on an answer at http://danlec.com/st4k#questions/18289991 from Travis Brown, modified and amended by M. Nickles */
+  /** Function and algo based on an answer at http://danlec.com/st4k#questions/18289991 from Travis Brown, modified and amended by M. Nickles */
   def trajanRec(g: Int2ObjectOpenHashMap[List[Int]]): mutable.ArrayBuffer[mutable.ArrayBuffer[Int]] = {
 
     // TODO: create iterative variant

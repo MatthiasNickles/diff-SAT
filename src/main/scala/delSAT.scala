@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2019 by Matthias Nickles
+  * Copyright (c) 2018,2019 by Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -15,14 +15,10 @@ import java.io._
 import java.util
 
 import aspIOutils._
-
+import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, Variable}
 import com.accelad.math.nilgiri.{DoubleReal, autodiff}
-import com.accelad.math.nilgiri.autodiff.DifferentialFunction
-
 import diff.UncertainAtomsSeprt
-
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet
-
 import org.scijava.parse.ExpressionParser
 import parsing.{AspifPlainParser, DIMACPlainSparser}
 
@@ -37,7 +33,13 @@ import scala.collection.mutable.ArrayBuffer
   * See sharedDefs.scala for solver settings available
   * (most of these can also be specified on the command line using --solverarg, see --help below)
   *
-  * TODO: more detailed API documentation
+  * TODO:
+  *   - more detailed API documentation
+  *   - support for #external in aspif
+  *   - option for reified model output (as supported by Clingo)
+  *   - direct support for simple queries (without model printing)
+  *   - a few minor issues (see inlined TODO's in sources)
+  *   - further improvement of performance
   *
   * @author Matthias Nickles
   *
@@ -46,13 +48,15 @@ object delSAT {
 
   val debug = false
 
-  // For flight control, use e.g. -XX:+FlightRecorder -XX:StartFlightRecording=duration=60s,filename=delsatRecording.jfr
+  /* For JVM flight control, use e.g. -XX:+FlightRecorder -XX:StartFlightRecording=duration=60s,filename=delsatRecording.jfr
 
-  // For compiler options see https://docs.scala-lang.org/overviews/compiler-options/index.html
-  // Try compiling from Scala without any "optimization" arguments first - this was actually the fastest approach in our tests.
-  // Use Scala compiler option -Xdisable-assertions (unless for debgging purposes).
+   For scalac compiler options see https://docs.scala-lang.org/overviews/compiler-options/index.html
+   Full "optimization" using scalac 2.12.x: -opt-inline-from -opt-inline-from:** but this doesn't seem to improve performance for delSAT.
+   Try compiling from Scala without any "optimization" arguments first - this was actually the fastest approach in our tests.
 
-  // For standard (MSE-style) problems, run delSAT with arguments -mse --solverarg "partDerivComplete" "false"
+   Use Scala compiler option -Xdisable-assertions (unless for debgging purposes).
+
+   */
 
   var verbose = false
 
@@ -69,7 +73,7 @@ object delSAT {
 
   assert(!(printAnswers && enforceSanityChecks))
 
-  val version = "0.3.2"
+  val version = "0.4.0"
 
   val copyrightAndVersionText = "delSAT " + version + "\nCopyright (c) 2018, 2019 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE"
 
@@ -129,11 +133,13 @@ fastutil (http://fastutil.di.unimi.it)
      (random variable). -mse is optional even for MSE-type costs but allows for faster
      parsing of large lists of such functions.
 
-     --solverarg "argname" "value" specifies additional solver arguments (see
-     sharedDefs.scala for the full list). Multiple --solverarg can be specified.
+     --solverarg "argname" "value" specifies additional solver arguments. See
+     sharedDefs.scala for the full list. Multiple --solverarg can be specified.
      Examples:
+       --solverarg "useNumericalFiniteDifferences" "true" (uses alternative optimization
+       approach for the case that set of parameter atoms is different from measured atoms)
        --solverarg "partDerivComplete" "true" (activates support for certain
-       non-MSE-style costs)
+       non-MSE-style costs, see documentation)
        --solverarg "maxCompetingSolverThreadsR" "6" --solverarg "freeEliSearchConfigsP" "4 3 8"
        activates parallel portfolio solving using max. 6 threads and approaches 4,3,8 (with 4
        chosen with priority when creating the solver threads).
@@ -141,8 +147,8 @@ fastutil (http://fastutil.di.unimi.it)
        decreases speed. Note: while this might achieve some degree of uniformity, delSAT
        does not aim to be a uniform sampling tool).
 
-     --showaux also prints auxiliary atoms introduced for spanning formulas (omitted in models
-     by default)
+     --showaux also prints in models auxiliary atoms introduced for spanning formulas (omitted
+       by default)
 
      -ci enforces reading from STDIN
 
@@ -184,13 +190,23 @@ fastutil (http://fastutil.di.unimi.it)
 
     -103 -> ("Weighted atoms only supported via cost functions", ERROR),
 
-    -104 -> ("Disjunction found in ASP input. Translation of disjunctions using shift/unfold doesn't guarantee a complete set of answers set.\n Consider increasing the number of unfolds in case of non-convergence.", ERROR),
+    -104 -> ("Disjunction found in ASP input. Translation of disjunctions using shift/unfold doesn't guarantee a complete set of answers set.\n Consider increasing the number of unfolds in case of non-convergence.", WARNING),
 
     -200 -> ("Unknown operator in expression", ERROR),
 
     -201 -> ("Call of unknown function in expression", ERROR),
 
     -202 -> ("Syntax error in cost function", ERROR),
+
+    -203 -> ("Undefined predicate in possible measured atom position in cost function", WARNING),
+
+    -204 -> ("Undefined predicate in measured or parameter atoms set, its frequency will be 0 in cost functions", WARNING),
+
+    -205 -> ("Constant inner cost function (possibly from undefined parameter atom)", WARNING),
+
+    -206 -> ("Unrecognized variable or constant in cost function", WARNING),
+
+    -207 -> ("Costs and parameter variables ignored (ignoreParamVariablesR=true)", WARNING),
 
     -5000 -> ("Specified local greedy decision policy won't work as expected since some measured atoms are not parameter atoms", WARNING),
 
@@ -214,6 +230,8 @@ fastutil (http://fastutil.di.unimi.it)
 
     -5010 -> ("Literal scores out of valid range. Setting 'eliScoreUpdateFact' will be adapted in current solver thread.", WARNING),
 
+    -5011 -> ("Cost stagnates, sampling aborted (use flag stopSamplingWhenCostStagnates to change this behavior)", WARNING),
+
     -10000 -> ("Internal error", ERROR)
 
   )
@@ -224,12 +242,12 @@ fastutil (http://fastutil.di.unimi.it)
 
     if (message._2 == ERROR) {
 
-      System.err.println("\nError: " + message._1 + ". " + additionalInfo)
+      System.err.println("\nError: " + message._1 + ": " + additionalInfo)
 
       sys.exit(code)
 
     } else if (message._2 == WARNING)
-      System.out.println("\nWarning: " + message._1 + ". " + additionalInfo)
+      System.out.println("\nWarning: " + message._1 + ": " + additionalInfo)
     else
       assert(false) //System.out.println("Info: " + message._1 + " " + additionalInfo)
 
@@ -256,21 +274,26 @@ fastutil (http://fastutil.di.unimi.it)
 
   }
 
-  final case class InputData(spanningProgramAspifOrDIMACSOpt: Option[String],
+  final case class InputData(aspifOrDIMACSPlainParserResult: AspifOrDIMACSPlainParserResult,
                              costsOpt: Option[UncertainAtomsSeprt]) {}
 
-  @inline def measuredAtomIndex(atom: Pred, measuredAtomsSeqSorted: Array[String]): Int = { //NB: in delSAT, measured atoms/literals == parameter atoms/literals (might change in future extensions)
+  @inline def generateMeasuredAtomVariableInCost(weightedAtomStr: String, dFFactory: diff.DifferentialFunctionFactoryStasp,
+                                                 aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
+                                                 eliToVariableInCostFunctions: mutable.HashMap[Int, Variable[DoubleReal]]): Variable[DoubleReal] = {
 
-    val measuredAtomNameInExpr = atom
+    val eli = aspifOrDIMACSParserResult.symbolToEliOpt.map(_ (weightedAtomStr)).getOrElse(weightedAtomStr.toInt - 1)
 
-    val m: String = measuredAtomNameInExpr.replaceAllLiterally("ä", "_").replaceAllLiterally(".0" /*because we get a real number here*/ , "")
-
-    util.Arrays.binarySearch(measuredAtomsSeqSorted.asInstanceOf[Array[Object]] /*Scala arrays aren't covariant*/ , m) // TODO: find cleaner solution
+    eliToVariableInCostFunctions.getOrElseUpdate(eli, dFFactory.`var`("freqx" + eli + "_", new DoubleReal(-1d /*value will later be updated with measured frequency*/)))
 
   }
 
+  @inline def unmangleMeasuredAtomName(measuredAtom: String) = measuredAtom.replaceAllLiterally("ä", "_").replaceAllLiterally(".0" /*because we get a real number here*/ , "")
+
   /** Converts a postfix queue of arithmetic expression tokens (e.g. from org.scijava.parse) into a com.accelad.math.nilgiri.diff-expression, using a stack */
-  def convertToDfNEW(tokensQueue: util.LinkedList[Object], measuredAtomsSeqSorted: Array[String], measuredAtomsSet: mutable.HashSet[Pred]):
+  def convertToDfNEW(tokensQueue: util.LinkedList[Object], /*measuredAtomsSeqSorted: Array[String],*/ measuredAtomsSet: mutable.HashSet[Pred],
+                     aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
+                     eliToVariableInCostFunctions: mutable.HashMap[Int, Variable[DoubleReal]],
+                     satMode: Boolean):
   DifferentialFunction[DoubleReal] = {
 
     // TODO: see https://github.com/scijava/parsington/blob/master/src/test/java/org/scijava/parse/ExpressionParserTest.java
@@ -287,16 +310,16 @@ fastutil (http://fastutil.di.unimi.it)
 
         case dArg: DifferentialFunction[DoubleReal] => Some(dArg)
 
-        case dNum: DoubleReal => {
-
-          Some(dFFactory.`val`(new DoubleReal(dNum.doubleValue())))
-
-        }
+        case dNum: DoubleReal => Some(dFFactory.`val`(new DoubleReal(dNum.doubleValue())))
 
         case eVar: org.scijava.parse.Variable => {
 
-          val dVar: autodiff.Variable[DoubleReal] = dFFactory.`var`(eVar.getToken,
-            new DoubleReal(-1d))
+          val eVarStr = eVar.getToken
+
+          //if(eVarStr != "wDf")
+          //stomp(-206, eVarStr)
+
+          val dVar: autodiff.Variable[DoubleReal] = dFFactory.`var`(eVarStr, new DoubleReal(0d))
 
           Some(dVar)
 
@@ -323,25 +346,27 @@ fastutil (http://fastutil.di.unimi.it)
     val tokens = tokensQueue.asScala
 
     tokens.zipWithIndex.foreach { case (token, index) => { // we convert the raw postfix expression into a nilgiri.autodiff expression.
-      // ...f(SomeMeasuredAtom)... becomes a DifferentialFunction "...phi(indexOfMeasuredAtom)..."
-      // (analogously for w(SomeMeasuredAtom))
+      // ...f(SomeMeasuredAtom)... becomes a DifferentialFunction "...freqxEliOfMeasuredUncertainAtom_..."
 
       token match {
 
-        case symbol: org.scijava.parse.Variable => { // this can be an actual variable or a function name (!)
+        case symbolInExpr: org.scijava.parse.Variable => { // this can be an actual variable or a function name (!)
 
-          val name = symbol.toString.replaceAllLiterally("ä", "_")
+          val name = unmangleMeasuredAtomName(if (satMode) symbolInExpr.toString.stripPrefix("v") else symbolInExpr.toString) //symbol.toString.replaceAllLiterally("ä", "_")
 
           if (measuredAtomsSet.contains(name)) {
 
-            val dConstFromMeasuredAtomIndex = dFFactory.`val`(new DoubleReal(measuredAtomIndex(name, measuredAtomsSeqSorted)))
-            // ^ a pseudo-real constant which is an index into measures atoms; these indices later need to be
-            // translated into (positive atom) elis.
+            tokenStack.push(generateMeasuredAtomVariableInCost(/*unmangleMeasuredAtomName*/ (name), dFFactory, aspifOrDIMACSParserResult, eliToVariableInCostFunctions))
 
-            tokenStack.push(dConstFromMeasuredAtomIndex)
+          } else {
 
-          } else
-            tokenStack.push(symbol) // the symbol is either an actual function name or a part of a nested predicate
+            //stomp(-203, name)
+
+            tokenStack.push(symbolInExpr) // the symbol is either an actual function name or a part of a nested predicate, or there is no eli for the
+            // symbol (in that case the symbol might be an undefined predicate), or the symbol is special variable "wDf" (moving target weight
+            // of a hypothesis parameter atom - deprecated!).
+
+          }
 
         }
 
@@ -433,11 +458,12 @@ fastutil (http://fastutil.di.unimi.it)
 
                   val fnName = eFnSymbol.toString
 
-                  if (fnName == "f") { // convert into phi(indexOfMeasuredUncertainAtom)
+                  if (fnName == "f") { // convert into variable freqx<EliOfMeasuredAtom>_
 
-                    // The argument is an index into the list of measured atoms (implies that all atoms in inner cost functions must be measured (but not necessarily parameter atoms))
+                    // The argument is an index into the list of measured atoms (implies that all atoms in inner cost functions must be measured (but not necessarily be parameter atoms!))
 
-                    tokenStack.push(dFFactory.phi(dArgs(0))) // a pseudo-real constant which is an index into measured atoms; these indices later need to be translated into (positive atom) elis.)
+                    //tokenStack.push(dFFactory.phi(dArgs(0))) // a pseudo-real constant which is an index into measured atoms; these indices later need to be translated into (positive atom) elis.)
+                    tokenStack.push(dArgs(0))
 
                   } else if (fnName == "sqrt")
                     tokenStack.push(dFFactory.sqrt(dArgs(0)))
@@ -473,13 +499,13 @@ fastutil (http://fastutil.di.unimi.it)
                   else {
 
                     // At this point, we know that the "function" with its arguments is likely an atom (in form of a predicate with arguments) instead
-                    // (since there are no other actual functions than f(...), w(...) and the built-in functions like sqrt(...)).
+                    // (since there are no other actual functions than f(...) and the built-in functions like sqrt(...)).
 
                     // Also, we know that the atom must be a measured atom, as these are the only ones allowed in
-                    // cost functions (see M.Nickles ILP'18 paper for difference between parameter and measured variables or literals.
+                    // cost functions (see M.Nickles ILP'18 paper for difference between parameter and measured variables or literals).
 
-                    // We convert the "function application" therefore into a constant whose "real" value is the index
-                    // into the list of measured atoms:
+                    // We convert the "function application" therefore into a variable which is also (via its name) an eli of its corresponding measured atom
+                    // (whose frequency in the sample the function f(measuredAtom) represents:
 
                     val measuredAtom = eFnSymbol + "(" + dArgs.reverse.map(d => {
 
@@ -493,9 +519,17 @@ fastutil (http://fastutil.di.unimi.it)
 
                     }).mkString(",") + ")"
 
-                    val dConst = dFFactory.`val`(new DoubleReal(measuredAtomIndex(measuredAtom, measuredAtomsSeqSorted)))
+                    val name = unmangleMeasuredAtomName(measuredAtom)
 
-                    tokenStack.push(dConst)
+                    if (measuredAtomsSet.contains(name))
+                      tokenStack.push(generateMeasuredAtomVariableInCost(name, dFFactory, aspifOrDIMACSParserResult, eliToVariableInCostFunctions))
+                    else {
+
+                      //stomp(-203, name)
+
+                      tokenStack.push(dFFactory.`val`(new DoubleReal(0d)) /*dFFactory.`var`(name, new DoubleReal(-1d))*/)
+
+                    }
 
                   }
 
@@ -515,7 +549,7 @@ fastutil (http://fastutil.di.unimi.it)
 
         case groupTag: org.scijava.parse.Group => { // "(number of things in brackets)", e.g. (but not only), arguments of a subsequent function tag <fn>
 
-          if (tokens(index + 1).toString == "<Fn>")
+          if (index < tokens.length - 1 && tokens(index + 1).toString == "<Fn>")
             tokenStack.push(groupTag)
           else if (groupTag.getArity != 1)
             stomp(-202)
@@ -529,6 +563,7 @@ fastutil (http://fastutil.di.unimi.it)
       }
 
     }
+
     }
 
     val result = tokenStack.pop()
@@ -553,38 +588,32 @@ fastutil (http://fastutil.di.unimi.it)
     * Reads input from file (if file name is given) or STDIN (in various alternative formats, with input typically generated by prasp2)
     *
     * @param fileNameOpt
-    * @param mse  see command line option -mse
+    * @param mse see command line option -mse
     * @return Option[InputData]
     */
-  def readInputData(fileNameOpt: Option[String], mse: Boolean = false): Option[InputData] = {
+  def readInputData(fileNameOpt: Either[Option[String], String], mse: Boolean): (InputData, Boolean) = {
 
     /* We receive the inner cost functions as plain text formulas which we need to convert
        to DifferentialFunction[DoubleReal] here.
 
-       There are three stages for each inner cost function:
-          1) as a string coming from prasp2 or the user, e.g., (0.5-f(v))^2
-          2) in autodiff format, with f(atom) replaced with phi(index_in_measured_atoms_seq),
-             e.g., (0.5-phi(3.0))^2, where 3.0 is actually an int (index)
-             (produced in this method)
-          3) in autodiff format, with phi(index) replaced with variable freqxEli_, where Eli
-             is the measured atom eli. E.g., (0.5-freqx5_)^2
+       There are two stages for each inner cost function:
+          1) as an incoming cost string, e.g., (0.5-f(v))^2, where the arguments v of function f are measured atoms
+          2) in autodiff format, with f(atom) everywhere replaced with variable freqx_(eli_of_v)
+
     */
 
     import java.nio.charset.StandardCharsets
-    import java.nio.file.Files
-    import java.nio.file.Paths
+    import java.nio.file.{Files, Paths}
 
     val inputStr: String = fileNameOpt match {
 
-      case Some(fileName) => {
-
-        val timer = System.nanoTime()
+      case Left(Some(fileName)) => {
 
         new String(Files.readAllBytes(Paths.get(fileName)), StandardCharsets.UTF_8)
 
       }
 
-      case None => {
+      case Left(None) => {
 
         val inStream: BufferedInputStream = new BufferedInputStream(System.in, 32768)
 
@@ -592,28 +621,66 @@ fastutil (http://fastutil.di.unimi.it)
 
       }
 
+      case Right(progStr) => progStr
+
     }
+
+    val satMode = !inputStr.startsWith("asp")
 
     if (inputStr.startsWith("asp ") || inputStr.startsWith("p cnf ") || inputStr.startsWith("c ")) { // we allow "c " as first line in DIMACS too, but not, e.g., "cx"
 
-      val posExtras = inputStr.indexOf("\npats ")
+      val posExtras = if (ignoreParamVariablesR) {
 
-      if (posExtras == -1)
-        Some(InputData(Some(inputStr.trim), None))
-      else {
+        stomp(-207)
+
+        -1
+
+      } else inputStr.indexOf("\npats ")
+
+      {
 
         val spanningProgramASPNormGroundAspif_OrDIMACSCNF = if (posExtras == -1) inputStr.trim else inputStr.substring(0, posExtras - 1).trim
 
+        val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult = if (!satMode)
+          AspifPlainParser.parseAspif(spanningProgramASPNormGroundAspif_OrDIMACSCNF, shiftAndUnfoldForDisjunctions = true, noOfUnfolds = noOfUnfolds)
+        else
+          DIMACPlainSparser.parseDIMACS(spanningProgramASPNormGroundAspif_OrDIMACSCNF)
+
+        val timerInputBNs = System.nanoTime()
+
+        val symbolsSet: Set[Pred] = aspifOrDIMACSParserResult.symbols.toSet
+
+        log("\notimer timerInputBNs: " + timerToElapsedMs(timerInputBNs) + " ms")
+
         val paramAtomsAndInnerCostsStr = if (posExtras == -1) "" else inputStr.substring(posExtras).trim
 
-        val paramAtomsAndInnerCostsLines: Array[String] = paramAtomsAndInnerCostsStr.lines.toArray
+        val paramAtomsAndInnerCostsLines: Array[String] = if (posExtras == -1) Array[String]() else paramAtomsAndInnerCostsStr.lines.toArray
 
-        val parameterAtomsSeq: Array[Pred] = paramAtomsAndInnerCostsLines.take(1).mkString.trim.split("\\s+").drop(1).distinct
+        val parameterAtomsSeq: Array[Pred] = (paramAtomsAndInnerCostsLines.take(1).mkString.trim.split("\\s+").drop(1) ++
+          aspifOrDIMACSParserResult.additionalUncertainAtomsInnerCostsStrs._1).distinct.filter(pa => {
 
-        val costLines: Array[String] = paramAtomsAndInnerCostsLines.filter(_.startsWith("cost ")).map(_.stripPrefix("cost ").trim)
+          val r = symbolsSet.contains(pa)
 
-        // we obtain the measured atoms from the cost function expressions (whereas "pats ..." is the list of parameter atoms - considered
-        // to be the same set as the measured atoms in delSAT for now, but might change in future versions):
+          if (!r)
+            stomp(-204, pa)
+
+          r
+
+        })
+
+        val eliToVariableInCostFunctions = mutable.HashMap[Int, Variable[DoubleReal]]()
+
+        val costLines: ArrayBuffer[String] = paramAtomsAndInnerCostsLines.filter(_.startsWith("cost ")).to[ArrayBuffer].map(_.stripPrefix("cost ").trim) ++
+          aspifOrDIMACSParserResult.additionalUncertainAtomsInnerCostsStrs._2
+
+        // (Remark: we can also process deprecated .opt files produced by prasp2 which contain [?] query lines, simply by
+        // ignoring these lines.)
+
+        // We now obtain the measured atoms from the cost function expressions. Note that not all measured atoms are necessarily also
+        // parameter atoms (pats), the two sets can even be disjoint.
+
+        // NB: in satMode, we require that each propositional variable in cost expressions is prefixed by letter "v". We keep this prefix only
+        // in org.scijava.parse expressions (but NOT in diff expressions or parameter or measured atoms sets).
 
         val measuredAtomsSet: mutable.HashSet[Pred] = mutable.HashSet[Pred]() ++ costLines.foldLeft(ArrayBuffer[Pred]()) {
 
@@ -649,7 +716,15 @@ fastutil (http://fastutil.di.unimi.it)
 
                 val arg: String = costLine.slice(s + 2, i)
 
-                mil.append(arg)
+                if (satMode) {
+
+                  if (arg(0) != 'v')
+                    stomp(-206, "Measured variables in cost expressions need to be prefixed by 'v' in SAT mode")
+
+                  mil.append(arg.stripPrefix("v"))
+
+                } else
+                  mil.append(arg)
 
                 is = s + 2
 
@@ -661,13 +736,54 @@ fastutil (http://fastutil.di.unimi.it)
             ms ++ mil
 
           }
-        }.toSet
 
-        val measuredAtomsSeqSorted = measuredAtomsSet.toArray.sorted
+        }.toSet.filter(pa => {
+
+          val r = symbolsSet.contains(pa)
+
+          if (!r)
+            stomp(-204, pa)
+
+          r
+
+        })
+
+        val oldCostLinesSize = costLines.length
+
+        val hypothesisParamAtoms = parameterAtomsSeq.filterNot(measuredAtomsSet.contains(_))
+
+        if (!hypothesisParamAtoms.isEmpty && autoGenerateCostLinesForHypotheses) {
+
+          hypothesisParamAtoms.map(hypothParamAtom => {
+
+            if (ensureParamAtomsAreMeasured)
+              measuredAtomsSet.add(hypothParamAtom)
+
+            // same effect as _cost_("(wDf-f(hypoth))^2").
+
+            val varName = if (satMode) "v" + hypothParamAtom else hypothParamAtom
+
+            costLines.append("(wDf-f(" + varName + "))^2")
+
+          })
+
+          if (verbose) {
+
+            println("Parameter atoms not part of cost expressions (hypothesis parameter atoms): " + hypothesisParamAtoms.mkString(" "))
+
+            println("Auto-generated cost expressions for hypothesis parameter atoms:\n" + costLines.drop(oldCostLinesSize).mkString("\n"))
+
+          }
+
+        }
+
+        val measuredAtomsSeq = measuredAtomsSet.toArray //.sorted
+
+        log("\notimer timerInputBNs A: " + timerToElapsedMs(timerInputBNs) + " ms")
 
         val innerCostExpressionInstancesPerUncertainAtom: Array[DifferentialFunction[DoubleReal]] = {
 
-          costLines.map(costLine => {
+          costLines.toArray.map(costLine => {
 
             val innerCostFunStr = costLine.stripPrefix("cost ").trim
 
@@ -685,26 +801,27 @@ fastutil (http://fastutil.di.unimi.it)
                 case e: Throwable => {
 
                   new PrintWriter("err") {
-                    write("Internal expression parse error for " + underscoreReplInner + "\n" + e); close
+                    write("Internal expression parse error for " + underscoreReplInner + "\n" + e);
+                    close
                   }
 
                   println("Internal expression parse error for " + underscoreReplInner + "\n" + e)
 
                   System.err.println("Internal expression parse error for " + underscoreReplInner + "\n" + e)
 
-
                   new util.LinkedList[Object]()
+
                 }
 
               }
 
-              val dfInnerCostExpression = convertToDfNEW(postfixTokens, measuredAtomsSeqSorted, measuredAtomsSet)
+              val dfInnerCostExpression = convertToDfNEW(postfixTokens, /*measuredAtomsSeqSorted, */ measuredAtomsSet, aspifOrDIMACSParserResult, eliToVariableInCostFunctions, satMode = satMode)
 
               dfInnerCostExpression
 
             } else {
 
-              val dFFactory = new diff.DifferentialFunctionFactoryStasp() //null /*missing until we deserialize in nablaSAT*/)
+              val dFFactory = new diff.DifferentialFunctionFactoryStasp() //null
 
               val dNumStr = innerCostFunStr.drop(1).takeWhile(c => c.isDigit || c == '.')
 
@@ -718,13 +835,25 @@ fastutil (http://fastutil.di.unimi.it)
 
               // (if you get a numerical format exception here, check first whether flag -mse is set and appropriate)
 
-              val weightedAtom = innerCostFunStr.drop(1).dropWhile(_ != '(').drop(1).dropRight(4)
+              val weightedAtomStrV = innerCostFunStr.drop(1).dropWhile(_ != '(').drop(1).dropRight(4)
 
-              val weightedAtomIndexDConst = dFFactory.`val`(new DoubleReal(measuredAtomIndex(weightedAtom, measuredAtomsSeqSorted)))
+              val weightedAtomStr = if (satMode) weightedAtomStrV.stripPrefix("v") else weightedAtomStrV
 
-              val phi = dFFactory.phi(weightedAtomIndexDConst)
+              val atomName = unmangleMeasuredAtomName(weightedAtomStr)
 
-              val innerMSEDTerm = weightDNum.minus(phi).pow(2)
+              val uncertAtomVar = if (measuredAtomsSet.contains(atomName))
+                generateMeasuredAtomVariableInCost(atomName, dFFactory, aspifOrDIMACSParserResult, eliToVariableInCostFunctions)
+              else {
+
+                //stomp(-203, atomName)
+
+                //dFFactory.`var`(atomName, new DoubleReal(-1d))
+
+                dFFactory.`val`(new DoubleReal(0d))
+
+              }
+
+              val innerMSEDTerm: DifferentialFunction[DoubleReal] = weightDNum.minus(uncertAtomVar /*phi*/).pow(2)
 
               innerMSEDTerm
 
@@ -734,8 +863,11 @@ fastutil (http://fastutil.di.unimi.it)
 
         }
 
-        Some(InputData(Some(spanningProgramASPNormGroundAspif_OrDIMACSCNF), Some(new UncertainAtomsSeprt(parameterAtomsSeq, measuredAtomsSeqSorted,
-          innerCostExpressionInstancesPerUncertainAtom, null))))
+        log("\notimer timerInputBNs B: " + timerToElapsedMs(timerInputBNs) + " ms")
+
+        (InputData(/*Some(spanningProgramASPNormGroundAspif_OrDIMACSCNF)*/ aspifOrDIMACSParserResult,
+          Some(new UncertainAtomsSeprt(parameterAtomsSeq, measuredAtomsSeq,
+            innerCostExpressionInstancesPerUncertainAtom, eliToVariableInCostFunctions))), satMode)
 
       }
 
@@ -743,7 +875,7 @@ fastutil (http://fastutil.di.unimi.it)
 
       stomp(-100)
 
-      None
+      (null, false)
 
     }
 
@@ -755,14 +887,12 @@ fastutil (http://fastutil.di.unimi.it)
     * @param inputData
     * @param noOfModels
     * @param thresholdOpt
-    * @param showaux
     * @param satMode
-    * @param additionalSolverArgs
     * @return Sample (bag of sampled models) in symbolic form and as list of (eli array, eli hash set). An eli is our internally used numerical representation
     *         of a literal (not identical to numerical literals in DIMACS or aspif!).
     */
   def invokeSampler(inputData: InputData, noOfModels: Int, thresholdOpt: Option[Double],
-                    showaux: Boolean, satMode: Boolean, additionalSolverArgs: mutable.HashMap[String, String]):
+                    satMode: Boolean /*, additionalSolverArgs: mutable.HashMap[String, String]*/):
   ((mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)]), AspifOrDIMACSPlainParserResult) = {
 
     if (noOfMinibenchmarkTrials > 1)
@@ -772,18 +902,11 @@ fastutil (http://fastutil.di.unimi.it)
 
     val timerInitNs = System.nanoTime()
 
-    assert(inputData.spanningProgramAspifOrDIMACSOpt.isDefined)
-
-    overrideSolverArgs(additionalSolverArgs)
-
-    val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult = if (!satMode)
-      AspifPlainParser.parseAspif(inputData.spanningProgramAspifOrDIMACSOpt.get, shiftAndUnfoldForDisjunctions = true, noOfUnfolds = noOfUnfolds)
-    else
-      DIMACPlainSparser.parseDIMACS(inputData.spanningProgramAspifOrDIMACSOpt.get)
+    //assert(inputData.spanningProgramAspifOrDIMACSOpt.isDefined)
 
     log("inittimer after Parse: " + timerToElapsedMs(timerInitNs) + " ms")
 
-    val prep: Preparation = new solving.Preparation(aspifOrDIMACSParserResult, inputData.costsOpt, satModeR = satMode,
+    val prep: Preparation = new solving.Preparation(inputData.aspifOrDIMACSPlainParserResult, inputData.costsOpt, satModeR = satMode,
       omitAtomNogoods = false)
 
     log("inittimer after Preparation: " + timerToElapsedMs(timerInitNs) + " ms")
@@ -825,7 +948,7 @@ fastutil (http://fastutil.di.unimi.it)
     if (noOfMinibenchmarkTrials > 1)
       println("\n@@@@@@ Average overall duration solver.sampleMulti: " + avgDuration + " ms\n")
 
-    (sampledModels, aspifOrDIMACSParserResult)
+    (sampledModels, inputData.aspifOrDIMACSPlainParserResult)
 
   }
 
@@ -844,8 +967,9 @@ fastutil (http://fastutil.di.unimi.it)
 
     try {
 
-      import com.sun.management.HotSpotDiagnosticMXBean
       import java.lang.management.ManagementFactory
+
+      import com.sun.management.HotSpotDiagnosticMXBean
 
       val hsDiag = ManagementFactory.getPlatformMXBean(classOf[HotSpotDiagnosticMXBean])
 
@@ -1025,30 +1149,27 @@ fastutil (http://fastutil.di.unimi.it)
 
     val mse = parsedArgsMap.contains('mse)
 
-    val inputData = if (parsedArgs.exists(_._1 == 'enforceReadingFromSTDIN) || !parsedArgs.exists(_._1 == 'inputFile))
-      readInputData(None, mse = mse).get  // we read from STDIN
+    overrideSolverArgs(additionalSolverArgs)
+
+    val (inputData: InputData, satMode) = if (parsedArgs.exists(_._1 == 'enforceReadingFromSTDIN) || !parsedArgs.exists(_._1 == 'inputFile))
+      readInputData(Left(None), mse = mse) // we read from STDIN
     else {
 
       val fileName = parsedArgsMap.get('inputFile).get.head
 
-      val inputDataOpt: Option[InputData] = readInputData(Some(fileName), mse = mse)
-
-      inputDataOpt.get
+      readInputData(Left(Some(fileName)), mse = mse)
 
     }
 
     log("\notimer inputData: " + timerToElapsedMs(timerOverallNs) + " ms")
 
-    val satMode = !inputData.spanningProgramAspifOrDIMACSOpt.get.startsWith("asp")
-
-    var (sampledModels: (mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)]),
+    val (sampledModels: (mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)]),
     parserResult: AspifOrDIMACSPlainParserResult) =
-      invokeSampler(inputData, noOfModels, thresholdOpt, showaux = showaux,
-        satMode = satMode, additionalSolverArgs = additionalSolverArgs)
+      invokeSampler(inputData, noOfModels, thresholdOpt, satMode = satMode)
 
     if (!sampledModels._1.isEmpty) {
 
-      val hideAuxPreds: Int = if(showaux) 4 else 5
+      val hideAuxPreds: Int = if (showaux) 4 else 5
 
       val sampledModelsWithSymbolsCleanedR: mutable.Seq[Array[Pred]] = if (hideAuxPreds == 4)
         sampledModels._1.map(_.filterNot(isLatentSymbolAuxAtom(_)))
@@ -1066,7 +1187,7 @@ fastutil (http://fastutil.di.unimi.it)
 
           val fullModelWithSymbols = symbolsSeq.map(symbol => if (model._2.contains(symbol.toInt - 1)) symbol else "-" + symbol)
 
-          if (enforceSanityChecks && satMode) {  // see further sanity checks in SolverMulti.scala
+          if (enforceSanityChecks && satMode) { // see further sanity checks in SolverMulti.scala
 
             if (satMode) println("Checking model against original DIMACS-CNF clauses...")
 
@@ -1127,7 +1248,8 @@ fastutil (http://fastutil.di.unimi.it)
 
       if (printAnswers)
         sampledModelsWithSymbolsCleaned.zipWithIndex.foreach { case (model, index) =>
-          System.out.println("Answer: " + (index + 1) + "\n" + model.mkString(" "))
+          System.out.println("Answer: " + (index + 1) + "\n" + model.mkString(" ")) // recall that in contrast to plain ASP solvers, the same
+          // sampled answer can be printed multiple times here.
         }
 
       System.out.println("SATISFIABLE") // this must be printed _directly_ after the list of answers (no empty line allowed in between)

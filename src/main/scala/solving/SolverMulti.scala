@@ -12,31 +12,25 @@
 package solving
 
 import java.lang.management.ManagementFactory
-
 import java.util
-import java.util.{Map, Optional}
 import java.util.concurrent._
-
-import sun.misc.Contended
+import java.util.{Map, Optional}
 
 import aspIOutils._
-
 import com.accelad.math.nilgiri.DoubleReal
-import com.accelad.math.nilgiri.autodiff.DifferentialFunction
-
-import sharedDefs._
+import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, Variable}
 import commandline.delSAT._
-
 import it.unimi.dsi.fastutil.ints._
 import it.unimi.dsi.fastutil.objects.ObjectArrayList
-
+import sharedDefs._
+import sun.misc.Contended
 import utils._
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 /**
-  * Main multimodel solver and model sampling class.
+  * Main multimodel solver and propositional model sampling class.
   *
   * TODO: more detailed API documentation
   *
@@ -102,123 +96,148 @@ class SolverMulti(prep: Preparation) {
 
   @inline def updateAtomsFreqs(mOpt: Option[IntOpenHashSet],
                                measuredAtomElis: Array[Eli],
-                               uncertainAtomEliToStatisticalProb: Array[Double],
-                               sampledModels /*after adding new model m*/ : ArrayBuffer[(Array[Eli], IntOpenHashSet)],
+                               sampledModels /*after adding new model mOpt*/ : ArrayBuffer[(Array[Eli], IntOpenHashSet)],
                                fromScratch: Boolean = false): Unit = {
 
-    assert(!fromScratch)
+    val newModelsCount: Double = sampledModels.length.toDouble
 
-    mOpt.foreach(m => {
+    if (fromScratch) {
 
-      val newModelsCount: Double = sampledModels.length.toDouble
+      var i = 0
 
-      if (measuredAtomElis.length > localSolverParallelThresh * 5) {
+      val il = measuredAtomElis.length
 
-        val tasks = new util.ArrayList[Runnable]()
+      while (i < il) {
 
-        val cdl = new CountDownLatch(2)
+        val measuredAtomEli: Eli = measuredAtomElis(i)
 
-        tasks.add(new Runnable() {
+        val measureAtomVar: Variable[DoubleReal] = eliToVariableInCostFunctions(measuredAtomEli)
 
-          override def run(): Unit = {
+        measureAtomVar.set(new DoubleReal(sampledModels.count(_._2.contains(measuredAtomEli)).toDouble / newModelsCount))
 
-            var i = 0
-
-            val il = measuredAtomElis.length / 2
-
-            while (i < il) {
-
-              val measuredAtomEli = measuredAtomElis(i)
-
-              uncertainAtomEliToStatisticalProb(measuredAtomEli) = (uncertainAtomEliToStatisticalProb(measuredAtomEli) * (newModelsCount - 1d) +
-                (if (m.contains(measuredAtomEli)) 1d else 0d)) / newModelsCount
-
-              i += 1
-
-            }
-
-            cdl.countDown()
-
-          }
-
-        })
-
-        tasks.add(new Runnable() {
-
-          override def run(): Unit = {
-
-            var i = measuredAtomElis.length / 2
-
-            val il = measuredAtomElis.length
-
-            while (i < il) {
-
-              val measuredAtomEli = measuredAtomElis(i)
-
-              uncertainAtomEliToStatisticalProb(measuredAtomEli) = (uncertainAtomEliToStatisticalProb(measuredAtomEli) * (newModelsCount - 1d) +
-                (if (m.contains(measuredAtomEli)) 1d else 0d)) / newModelsCount
-
-              i += 1
-
-            }
-
-            cdl.countDown()
-
-          }
-
-        })
-
-        uncertainAtomsUpdateExecutorService.execute(tasks.get(0))
-
-        uncertainAtomsUpdateExecutorService.execute(tasks.get(1))
-
-        cdl.await()
-
-      } else {
-
-        var i = 0
-
-        val il = measuredAtomElis.length
-
-        while (i < il) {
-
-          val measuredAtomEli = measuredAtomElis(i)
-
-          uncertainAtomEliToStatisticalProb(measuredAtomEli) = (uncertainAtomEliToStatisticalProb(measuredAtomEli) * (newModelsCount - 1d) +
-            (if (m.contains(measuredAtomEli)) 1d else 0d)) / newModelsCount
-
-          i += 1
-
-        }
+        i += 1
 
       }
 
-    })
+    } else {
+
+      assert(mOpt.isDefined)
+
+      mOpt.foreach(m => {
+
+        if (measuredAtomElis.length > localSolverParallelThresh * 5) {
+
+          val tasks = new util.ArrayList[Runnable]()
+
+          val cdl = new CountDownLatch(2)
+
+          tasks.add(new Runnable() {
+
+            override def run(): Unit = {
+
+              var i = 0
+
+              val il = measuredAtomElis.length / 2
+
+              while (i < il) {
+
+                val measuredAtomEli = measuredAtomElis(i)
+
+                val measureAtomVar = eliToVariableInCostFunctions(measuredAtomEli)
+
+                measureAtomVar.set(new DoubleReal((measureAtomVar.getReal * (newModelsCount - 1d) +
+                  (if (m.contains(measuredAtomEli)) 1d else 0d)) / newModelsCount))
+
+                i += 1
+
+              }
+
+              cdl.countDown()
+
+            }
+
+          })
+
+          tasks.add(new Runnable() {
+
+            override def run(): Unit = {
+
+              var i = measuredAtomElis.length / 2
+
+              val il = measuredAtomElis.length
+
+              while (i < il) {
+
+                val measuredAtomEli = measuredAtomElis(i)
+
+                val measureAtomVar = eliToVariableInCostFunctions(measuredAtomEli)
+
+                measureAtomVar.set(new DoubleReal((measureAtomVar.getReal * (newModelsCount - 1d) +
+                  (if (m.contains(measuredAtomEli)) 1d else 0d)) / newModelsCount))
+
+                i += 1
+
+              }
+
+              cdl.countDown()
+
+            }
+
+          })
+
+          uncertainAtomsUpdateExecutorService.execute(tasks.get(0))
+
+          uncertainAtomsUpdateExecutorService.execute(tasks.get(1))
+
+          cdl.await()
+
+        } else {
+
+          var i = 0
+
+          val il = measuredAtomElis.length
+
+          while (i < il) {
+
+            val measuredAtomEli = measuredAtomElis(i)
+
+            val measureAtomVar = eliToVariableInCostFunctions(measuredAtomEli)
+
+            measureAtomVar.set(new DoubleReal((measureAtomVar.getReal * (newModelsCount - 1d) +
+              (if (m.contains(measuredAtomEli)) 1d else 0d)) / newModelsCount))
+
+            i += 1
+
+          }
+
+        }
+
+      })
+
+    }
 
   }
 
   @inline def updateMeasuredAtomsFreqsAndComputeCost(mOpt: Option[IntOpenHashSet],
                                                      measuredAtomElis: Array[Eli],
-                                                     measuredAtomEliToStatisticalFreq: Array[Double],
                                                      sampledModels /*after adding new model m*/ : ArrayBuffer[(Array[Eli], IntOpenHashSet)],
                                                      costFctsInner: Array[DifferentialFunction[DoubleReal]],
                                                      fromScratch: Boolean = false,
                                                      computeCosts: Boolean = true,
                                                      partDerivativeComplete: Boolean,
-                                                     update_parameterAtomVarForParamEli_forPartDerivCompl: => Unit
+                                                     //update_parameterAtomVarForParamEli_forPartDerivCompl: => Unit
                                                     ):
   Option[(Double /*total cost*/ , Array[Double /*inner costs*/ ])] = {
 
-    // We firstly update the measured uncertainty atoms (which, for now, need to be identical with the parameter atoms):
+    // We update the current frequencies of the measured atoms (the values of the freqx variables in costs/cost derivatives):
 
     updateAtomsFreqs(mOpt,
       measuredAtomElis,
-      measuredAtomEliToStatisticalFreq,
       sampledModels,
       fromScratch)
 
-    if (partDerivativeComplete)
-      update_parameterAtomVarForParamEli_forPartDerivCompl
+    /*if (partDerivativeComplete)
+      update_parameterAtomVarForParamEli_forPartDerivCompl*/
 
     if (!computeCosts)
       None
@@ -227,12 +246,12 @@ class SolverMulti(prep: Preparation) {
 
   }
 
-  case class SampleMultiConf(//costsOpt: Option[UncertainAtomsSeprt],
-                             requestedNoOfModelsBelowThresholdOrAuto: Int,
-                             prep: Preparation,
-                             requestedNumberOfModels: Int /*-1: stopSolverThreads at minimum number of models required to reach threshold*/ ,
-                             threshold: Double,
-                             maxIt: Int);
+  case class SampleMultiConf(
+    requestedNoOfModelsBelowThresholdOrAuto: Int,
+    prep: Preparation,
+    requestedNumberOfModels: Int /*-1: stopSolverThreads at minimum number of models required to reach threshold*/ ,
+    threshold: Double,
+    maxIt: Int);
 
   @Contended val localSingleSamplerThreadPool = if (localSolverParallelThresh == localSolverParallelThreshMax) null.asInstanceOf[ThreadPoolExecutor] else
     new ThreadPoolExecutor(3, 3, 5, TimeUnit.SECONDS,
@@ -257,34 +276,203 @@ class SolverMulti(prep: Preparation) {
 
     import sampleMultiConf._
 
+    def printMeasuredEliFreqs = {
+
+      var i = 0
+
+      val il = measuredAtomsElis.length
+
+      while (i < il) {
+
+        val measuredAtomEli: Eli = measuredAtomsElis(i)
+
+        val measureAtomVar: Variable[DoubleReal] = eliToVariableInCostFunctions(measuredAtomEli)
+
+        println("   f(" + symbols(measuredAtomEli) + ") = " + new DoubleReal(sampledModels.count(_._2.contains(measuredAtomEli)).toDouble / sampledModels.length.toDouble))
+
+        i += 1
+
+      }
+
+    }
+
     var totalCost: Double = Double.MaxValue
 
     var it = 1
 
     val samplingTimer = System.nanoTime()
 
-    var prevModelSetOpt: Option[IntOpenHashSet] = None
+    var toleratedCostOfStoppedWeightLearning = -Double.MinPositiveValue
 
-    do { // outer sampling loop (where we sample answer sets or SAT models)
+    val finiteNumDiffOuterLoop = useNumericalFiniteDifferences
 
-      val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(prevModelSetOpt)
+    val stagnationTol = threshold / 1000d //0.001d
 
-      prevModelSetOpt = newModelOpt.map(_._2)
+    var oldTotalCost = Double.MaxValue
 
-      if (newModelOpt.isEmpty)
-        return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+    var costDifForStagn = Double.MaxValue
 
-      sampledModels.append(newModelOpt.get)
+    if (finiteNumDiffOuterLoop) { // we use finite differences (sort of discrete numerical differentiation) to approximate the partial
+      // derivatives. Mainly useful if automatic differentiation (i.e., nablaInner) cannot be used when there are parameter atoms which
+      // aren't measured atoms (i.e., don't appear in the cost function term), as it is the case for weight learning and Inductive Logic Programming.
 
-      totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
-        measuredAtomElis = measuredAtomsElis,
-        measuredAtomEliToStatisticalFreq,
-        sampledModels,
-        costFctsInner = costFctsInner,
-        computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-        partDerivativeComplete = true,
-        update_parameterAtomVarForParamEli_forPartDerivCompl = update_parameterAtomVarForParamEli_forPartDerivCompl
-      ).get._1
+      do {
+
+        val noOfModelsBeforeProbes = sampledModels.length
+
+        val useRandomDiffQuot = rngGlobal.nextDouble() < numFinDiffShuffleProb
+
+        val diffQuotsPerHypoth: Predef.Map[Eli, Double] = parameterLiteralElisArray.take(parameterLiteralElisArray.length / 2 /*<- i.e., positive literals only*/) /*hypothesisParamTargetWeightVariables*/ .map { case probingParamAtomEli => {
+
+          if (useRandomDiffQuot) {
+
+            log(" Random diffquot step in finiteNumDiffOuterLoop")
+
+            (probingParamAtomEli, rngGlobal.nextDouble())
+
+          } else {
+
+            log(" Probing for parameter (hypothesis) atom " + symbols(probingParamAtomEli) + "...")
+
+            log("  Probing for +" + symbols(probingParamAtomEli) + "...")
+
+            val rnOrderParamEli: Predef.Map[Integer, Double] = deficitOrderedUncertainLiteralsForJava.map((_, /*0d*/ rngGlobal.nextDouble())).toMap
+
+            val rnOrderParamEliMin = -1d //+ noise
+
+            val rnOrderParamEliMax = 1d //- noise
+
+            java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+
+              if (parameterLiteralEli == probingParamAtomEli)
+                rnOrderParamEliMin
+              else if (parameterLiteralEli == negateEli(probingParamAtomEli))
+                rnOrderParamEliMax
+              else
+                rnOrderParamEli(parameterLiteralEli) // 1d / deficitOrderedUncertainLiteralsForJava.indexOf(parameterLiteralEli).toDouble / deficitOrderedUncertainLiteralsForJava.length.toDouble // rngGlobal.nextGaussian() //+ 0.5 * 0.2
+
+            }))
+
+            val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
+
+            if (newModelOpt.isEmpty)
+              return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+
+            sampledModels.append(newModelOpt.get)
+
+            val costWithProbePlusH = updateMeasuredAtomsFreqsAndComputeCost(None,
+              measuredAtomElis = measuredAtomsElis,
+              sampledModels,
+              costFctsInner = costFctsInner,
+              fromScratch = true,
+              computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
+              partDerivativeComplete = true
+            ).get._1
+
+            sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
+
+            log("  Probing for -" + symbols(probingParamAtomEli) + "...")
+
+            java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+
+              if (parameterLiteralEli == probingParamAtomEli)
+                rnOrderParamEliMax
+              else if (parameterLiteralEli == negateEli(probingParamAtomEli))
+                rnOrderParamEliMin
+              else
+                rnOrderParamEli(parameterLiteralEli) // 1d / deficitOrderedUncertainLiteralsForJava.indexOf(parameterLiteralEli).toDouble / deficitOrderedUncertainLiteralsForJava.length.toDouble // rngGlobal.nextGaussian() //+ 0.5 * 0.2
+
+            }))
+
+            val newModelOptMinusH: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
+
+            if (newModelOptMinusH.isEmpty)
+              return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+
+            sampledModels.append(newModelOptMinusH.get)
+
+            val costWithProbeMinusH = updateMeasuredAtomsFreqsAndComputeCost(None,
+              measuredAtomElis = measuredAtomsElis,
+              sampledModels,
+              costFctsInner = costFctsInner,
+              fromScratch = true,
+              computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
+              partDerivativeComplete = true
+            ).get._1
+
+            sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
+
+            val diffQuot = (costWithProbePlusH - costWithProbeMinusH) // * noOfModelsBeforeProbes.toDouble
+            // NB: negative diffQuote increases(!) the likeliness that the respective parameter atom will be included in the next model.
+            // NB: since in the solver we only need to compare these "quotients", division by 2h is redundant.
+
+            log(" ==> diffQuot for param atom " + symbols(probingParamAtomEli) + " = " + diffQuot)
+
+            (probingParamAtomEli, diffQuot)
+
+          }
+
+        }
+        }.toMap
+
+        java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+
+          val x = diffQuotsPerHypoth.get(parameterLiteralEli)
+
+          x.getOrElse(-diffQuotsPerHypoth.get(negateEli(parameterLiteralEli)).getOrElse(0d))
+
+        }))
+
+        val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing()
+
+        if (newModelOpt.isEmpty)
+          return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+
+        sampledModels.append(newModelOpt.get)
+
+        totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
+          measuredAtomElis = measuredAtomsElis,
+          sampledModels,
+          costFctsInner = costFctsInner,
+          fromScratch = true,
+          computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
+          partDerivativeComplete = true,
+        ).get._1
+
+        costDifForStagn = Math.abs(oldTotalCost - totalCost)
+
+        oldTotalCost = totalCost
+
+        if (resetsNumericalOuterLoopOnStagnation > 0 && costDifForStagn < stagnationTol && totalCost > threshold) {
+
+          log("\n RESETTING \n\n")
+
+          sampledModels.clear()
+
+          oldTotalCost = Double.MaxValue
+
+          totalCost = oldTotalCost
+
+          resetsNumericalOuterLoopOnStagnation -= 1
+
+        }
+
+        if (showProgressStats) {
+
+          log("\nOuter-outer sampling iteration " + it + " (of max " + maxIt + ") complete. " +
+            "Current total cost: " + totalCost + " (threshold: " + threshold + ")\n")
+
+        }
+
+        it += 1
+
+      } while (it < maxIt && (requestedNumberOfModels == -1 && (totalCost.isNaN || totalCost > threshold + toleratedCostOfStoppedWeightLearning) ||
+        requestedNumberOfModels >= 0 && sampledModels.length < requestedNumberOfModels) && !(stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol))
+
+      if (stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol && totalCost > threshold)
+        stomp(-5011)
+
+    } else do { // outer-outer sampling loop for deductive inference (measured atoms = parameter atoms)
 
       if (!ignoreParamVariablesR) {
 
@@ -293,19 +481,59 @@ class SolverMulti(prep: Preparation) {
 
       }
 
+      val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing()
+
+      if (newModelOpt.isEmpty)
+        return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+
+      sampledModels.append(newModelOpt.get)
+
+      totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
+        measuredAtomElis = measuredAtomsElis,
+        sampledModels,
+        costFctsInner = costFctsInner,
+        fromScratch = !hypothesisParamTargetWeightVariables.isEmpty,
+        computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
+        partDerivativeComplete = true,
+      ).get._1
+
+      costDifForStagn = Math.abs(oldTotalCost - totalCost)
+
+      oldTotalCost = totalCost
+
       if (showProgressStats)
-        println("\nSampling iteration " + it + " (of max " + maxIt + ") complete. " +
-          "Current cost: " + totalCost + " (threshold: " + threshold + ")")
+        println("\nOuter-outer sampling iteration " + it + " (of max " + maxIt + ") complete. " +
+          "Current total cost: " + totalCost + " (threshold: " + threshold + ")")
+
+      //printMeasuredEliFreqs
 
       it += 1
 
-    } while (it < maxIt && (requestedNumberOfModels == -1 && totalCost > threshold ||
-      requestedNumberOfModels >= 0 && sampledModels.length < requestedNumberOfModels))
+    } while (it < maxIt && (requestedNumberOfModels == -1 && (totalCost.isNaN || totalCost > threshold + toleratedCostOfStoppedWeightLearning) ||
+      requestedNumberOfModels >= 0 && sampledModels.length < requestedNumberOfModels) && !(stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol))
+
+    if (stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol && totalCost > threshold)
+      stomp(-5011)
+
+    if (showProbsOfSymbols) {
+
+      val showFreqsOf = symbols.filterNot(_.contains("aux")).map(symbolToEli(_))
+
+      showFreqsOf.foreach(atomEli => {
+
+        val freqInModels = sampledModels.count(_._1.contains(atomEli)).toDouble / sampledModels.length.toDouble
+
+        println("Approximation: Pr(" + symbols(atomEli) + ") = " + freqInModels)
+
+      })
+
+
+    }
 
     if (totalCost < threshold)
-      println("\nSampling complete; specified threshold reached.\n" + sampledModels.length + " model(s) sampled (with replacement)\n")
+      println("\nSampling complete; specified threshold reached; cost reached: " + totalCost + "\n" + sampledModels.length + " model(s) sampled (with replacement)\n")
     else
-      stomp(-5008)
+      stomp(-5008, "\nCost reached: " + totalCost)
 
     println("Time for multi-model sampling: " + timerToElapsedMs(samplingTimer) + " ms\n")
 
@@ -334,17 +562,16 @@ class SolverMulti(prep: Preparation) {
                               prep: Preparation /*<-for debugging/crosschecks only*/ ,
                               arrangeEliPoolR: Int,
                               seed: Long,
-                              rndmBranchR: Float)
+                              rndmBranchR: Double)
 
   /** Samples a single model (answer set in case of ASP mode) using optionally multiple parallel solver threads which
     * compete against each other in discovering a model.
     * The model generated by this function consists of elis (literals represented as positive integers).
     *
     * @author Matthias Nickles
-    * @param prevModelSetOpt for possible future optimizations. If unknown, set to None.
     * @return Option[model as array of elis, model as hash set of elis] or None (UNSAT)
     */
-  def sampleSingleRacing(prevModelSetOpt: Option[IntOpenHashSet]): Option[(Array[Eli], IntOpenHashSet)] = {
+  def sampleSingleRacing(tempFacts: List[Eli] = Nil): Option[(Array[Eli], IntOpenHashSet)] = {
 
     @Contended @volatile var stopSolverThreads = false
 
@@ -403,11 +630,7 @@ class SolverMulti(prep: Preparation) {
 
         }
 
-        @inline def nextPosEli(): Eli = {
-
-          nextPosInt() / medAbs
-
-        }
+        @inline def nextPosEli(): Eli = nextPosInt() / medAbs
 
       }
 
@@ -429,11 +652,7 @@ class SolverMulti(prep: Preparation) {
         * Fast but low quality. Not thread-safe.
         *
         */
-      @inline def fastFloatRand: Float = {
-
-        fastIntRand.toFloat / 0x7FFF
-
-      }
+      @inline def fastFloatRand: Float = fastIntRand.toFloat / 0x7FFF
 
       @inline def nextFloatRngLocal(): Float = fastFloatRand
 
@@ -453,6 +672,8 @@ class SolverMulti(prep: Preparation) {
         freeEliSearchApproach == 3 || freeEliSearchApproach == 7
 
       val nogiToNogood: ObjectArrayList[IntArrayUnsafeS] = new ObjectArrayList(clarkNogoods)
+
+      val loopNogoods: ObjectArrayList[IntArrayUnsafeS] = if (emitClauses) new ObjectArrayList[IntArrayUnsafeS]() else null.asInstanceOf[ObjectArrayList[IntArrayUnsafeS]]
 
       @inline def primeUnassignedProbWithFalse(eli: Eli) =
         eliToNogisClark(eli).length.toFloat / nogiToNogood.size.toFloat * noOfPosElis
@@ -483,8 +704,6 @@ class SolverMulti(prep: Preparation) {
             (eliToNogisClark(eli).length + eliToNogisClark(negateEli(eli)).length) * (if (arrangeEliPool == 1) 1 else -1)
           else
             (eliToNogisClark(eli).length) * (if (arrangeEliPool == 1) 1 else -1)
-
-          //-eliToNogisClark(posEli).getContent.map(nogi => nogiToNogood.get(nogi)).count(_.sizev <= 2)
 
         }), aligned = true)
 
@@ -520,7 +739,7 @@ class SolverMulti(prep: Preparation) {
 
       val restartTriggerConf = restartTriggerConfR
 
-      val localSolverParallelThreshForUnitProp = localSolverParallelThresh
+      //val localSolverParallelThreshForUnitProp = localSolverParallelThresh
 
       val useNogisPerEliAsOrderForAbsEliPool = (arrangeEliPool == 1 || arrangeEliPool == 2) /*<- not the same, but the same principle*/ &&
         freeEliSearchApproach3or10
@@ -574,7 +793,7 @@ class SolverMulti(prep: Preparation) {
         if (useEliScoresAsOrderForAbsEliPool) // NB: if we don't do this, we still consider eli scores in findFreeEli if freeEliSearchApproach == 3
           new Int2BooleanRBTreeMap(priorityCompEliScoresForAbsEliPool /* <- issue: this comparator is "dynamic" (changes scores after insertion), which messes up key removal and slows down tree operations */) {
 
-            @inline def reassess(key: Int): Unit = {
+            @inline def reassess(key: Int): Unit = { // doesn't work with GraalVM/substratevm if compiled with Scala 2.12
 
               if (containsKey(key))
                 put(key, remove(key))
@@ -644,10 +863,10 @@ class SolverMulti(prep: Preparation) {
 
       resetAbsEliActi(clearUnassignedPool = false)
 
-      var someFreeEli1: Eli = rngLocalL.nextEli()
-      var someFreeEli2: Eli = rngLocalL.nextEli()
-      var someFreeEli3: Eli = rngLocalL.nextEli()
-      var someFreeEli4: Eli = rngLocalL.nextEli()
+      var someFreeEli1: Eli = rngLocalL.nextPosInt() / med // rngLocalL.nextEli()
+      var someFreeEli2: Eli = rngLocalL.nextPosInt() / med // rngLocalL.nextEli()
+      var someFreeEli3: Eli = rngLocalL.nextPosInt() / med // rngLocalL.nextEli()
+      var someFreeEli4: Eli = rngLocalL.nextPosInt() / med //  rngLocalL.nextEli()
 
       class ForceElisIndexedSet(randomizeAccess: Boolean) extends IndexedSet(noOfAllElis, rngLocalL) with ForceElis {
 
@@ -720,7 +939,7 @@ class SolverMulti(prep: Preparation) {
 
       }
 
-      val deficitOrderedUncertainLiteralsHalf = deficitOrderedUncertainLiteralsForJava.size / 2 // each variable appears twice, we only need their lowest ranked literals
+      val deficitOrderedUncertainLiteralsHalf = deficitOrderedUncertainLiteralsForJava.size / 2 // each variable appears twice (pos and neg polarity), we only need their lowest ranked literals
 
       val ignoreParamVariables = ignoreParamVariablesR || deficitOrderedUncertainLiteralsHalf == 0
 
@@ -763,7 +982,10 @@ class SolverMulti(prep: Preparation) {
 
       nogiToRemainder.ensureCapacity(nogiCapacityInit)
 
-      val useBurstableForceElis = !ignoreParamVariables || maxBurst != 0 && burstPlainElis
+      val useBurstableForceElis = false //!ignoreParamVariables || maxBurst != 0 && burstPlainElis
+      // TODO: true ^ currently not supported, occasionally leads to inconsistencies for reasons tbd.
+
+      assert(!useBurstableForceElis)
 
       val forceElis: ForceElis = if (noHeap) null else (if (!useBurstableForceElis) new ForceElisIndexedSet(randomizeAccess = true)
       else
@@ -1350,6 +1572,8 @@ class SolverMulti(prep: Preparation) {
         (triggerNogi: Nogi) => {
 
           triggerNogi < firstRecordedNogi || noOfConflictsTotal < 3000 || triggerNogi > nogiToNogood.size - (nogiToNogood.size - firstRecordedNogi) * -rndmIgnLearnedNogoodThresholdR
+          // Remark: there is no guarantee that the most recent x% contain any learned loop nogoods, but that's not an issue in practice, might just lead
+          // to some more restarts if -rndmIgnLearnedNogoodThresholdR is too small.
 
         }
 
@@ -1452,8 +1676,18 @@ class SolverMulti(prep: Preparation) {
 
         absEliScore.update(absEli, absEliScore.get(absEli) * eliScoreUpdateFact)
 
-        if (freeEliSearchApproach3or10)
-          unassignedAbsElisPool.reassess(absEli)
+        if (freeEliSearchApproach3or10) {
+
+          //unassignedAbsElisPool.reassess(absEli)
+
+          if (unassignedAbsElisPool.isInstanceOf[Int2BooleanRBTreeMap]) {
+
+            if (unassignedAbsElisPool.containsKey(absEli))
+              unassignedAbsElisPool.put(absEli, unassignedAbsElisPool.remove(absEli))
+
+          }
+
+        }
 
       }
 
@@ -1557,7 +1791,7 @@ class SolverMulti(prep: Preparation) {
 
             val orderOfSigma = sigmaOrder
 
-            //since current sigmaEli is not a decision literal, so there must have been some nogood which has "fired" sigmaEli:
+            // since current sigmaEli is not a decision literal, so there must have been some nogood which has "fired" sigmaEli:
 
             val candNogis = eliToNogis(sigmaNot).buffer
 
@@ -1953,11 +2187,21 @@ class SolverMulti(prep: Preparation) {
 
       var (r1, r2, r3, r4) = (-1f, -1f, -1f, -1f)
 
-      val rndEveryTrials = ((1000000000f * rndmBranch).toInt).max(10)
+      val rndEveryTrials = ((1000000000d * rndmBranch).toInt).max(1) // (remark: 1 has same effect as diversify=true)
+
+      log("rndEveryTrials = " + rndEveryTrials)
 
       var rndEveryTrialsIt = rndEveryTrials
 
       //println(""Time (ms) for singleSolver initialization:" + timerToElapsedMs(startSingleSolverInit))
+
+      tempFacts.foreach(tempFactEli => {
+
+        val factNogood = new IntArrayUnsafeS(Array(negateEli(tempFactEli)), aligned = false)
+
+        addNogood(factNogood)
+
+      })
 
       while (modelOpt == null && !stopSolverThreads) { // bounce-back loop; if program is tight or sat-mode, there is only a single iteration
 
@@ -2255,12 +2499,10 @@ class SolverMulti(prep: Preparation) {
 
           do {
 
-            val freeEliCand = rngLocalL.nextEli()
+            val freeEliCand = rngLocalL.nextPosInt() / med //rngLocalL.nextEli()
 
-            if (isNotAbsSetInPass(freeEliCand)) {
+            if (isNotAbsSetInPass(freeEliCand))
               return literally(freeEliCand)
-
-            }
 
           } while (true)
 
@@ -2482,7 +2724,7 @@ class SolverMulti(prep: Preparation) {
 
         val noOfPosElisPlus1 = noOfPosElis + 1
 
-        while (incompleteModuloConflict && !stopSolverThreads) { // inner loop  ----------------------------
+        while (incompleteModuloConflict && !stopSolverThreads) { // inner loop of solver ----------------------------
           // Behind this loop, we have a single supported model (as a truth assignments to elis)
 
           trials += 1
@@ -3350,7 +3592,7 @@ class SolverMulti(prep: Preparation) {
                   val tR = new Int2ObjectOpenHashMap[List[Eli]]() // this is ugly, but Java's HashMaps are in this case faster than Scala's (as of 2.12)
 
                   /*
-                  val dgEntries = dependencyGraph.entrySet.iterator
+                  val dgEntries = positiveDependencyGraph.entrySet.iterator
 
                   while (dgEntries.hasNext) {
 
@@ -3478,7 +3720,12 @@ class SolverMulti(prep: Preparation) {
 
                 newLoopNogoodUnsafe.setFromIntArray(newLoopNogood.toArray)
 
+                log("Adding loop nogood: " + newLoopNogoodUnsafe)
+
                 addNogood(newLoopNogoodUnsafe)
+
+                if (emitClauses)
+                  loopNogoods.add(newLoopNogoodUnsafe)
 
                 noOfGenLoopNogoods += 1
 
@@ -3490,9 +3737,7 @@ class SolverMulti(prep: Preparation) {
 
             }
 
-            log("#loop nogoods created: " + noOfGenLoopNogoods)
-
-            //log("No loop nogood triggers conflict, restarting...")
+            log("Restarting after addition of " + noOfGenLoopNogoods + " loop nogoods...\n")
 
             jumpBack(-1)
 
@@ -3513,6 +3758,45 @@ class SolverMulti(prep: Preparation) {
 
       }
 
+      emitClauses.synchronized {
+        if (emitClauses && !stopSolverThreads && !emittedClauses) {
+
+          emittedClauses = true
+
+          println("\nClauses (from completion + lazily discovered loop formulas), thread $" + threadNo + ":\n")
+
+          @inline def printClause(nogood: IntArrayUnsafeS): Unit = {
+
+            var i = 0
+
+            while (i < nogood.size) {
+
+              val eli = nogood.get(i)
+
+              val l = (if (isNegEli(eli)) negateNegEli(eli) + 1 else -(eli + 1)) + (if (i == nogood.size - 1) " 0" else " ")
+
+              print(l)
+
+              i += 1
+
+            }
+
+            println
+
+          }
+
+          println("p cnf " + noOfPosElis + " " + (clarkNogoods.length + loopNogoods.size))
+
+          clarkNogoods.foreach((nogood: IntArrayUnsafeS) => printClause(nogood))
+
+          loopNogoods.forEach((nogood: IntArrayUnsafeS) => printClause(nogood))
+
+          println
+
+        }
+
+      }
+
       modelOpt
 
     }
@@ -3527,7 +3811,7 @@ class SolverMulti(prep: Preparation) {
 
       println("#initial nogoods = " + clarkNogoods.length)
 
-      println("#Parameter atoms (probabilistic atoms in cost function): " + parameterAtomsElis.length)
+      println("#Parameter atoms: " + parameterAtomsElis.length)
 
       println
 
@@ -3544,8 +3828,7 @@ class SolverMulti(prep: Preparation) {
       val freeEliSearchApproach = freeEliSearchConfigsP(0)
 
       val singleSolverConf = SingleSolverConf(threadNo = 1,
-        //costsOpt = costsOpt,
-        dependencyGraph = dependencyGraph,
+        dependencyGraph = positiveDependencyGraph,
         progIsTight = progIsTight,
         freeEliSearchApproach = freeEliSearchApproach,
         restartTriggerConfR = (restartTriggerConfP._1, restartTriggerConfP._2.head, restartTriggerConfP._3.head),
@@ -3600,7 +3883,7 @@ class SolverMulti(prep: Preparation) {
 
           val (freeEliSearchApproachR: Int,
           prearrangeEliPoolR: Int,
-          rndmBranchR: Float,
+          rndmBranchR: Double,
           restartTriggerConf2: Int,
           restartTriggerConf3: Double,
           absEliActivFact: Float,
@@ -3610,7 +3893,7 @@ class SolverMulti(prep: Preparation) {
 
           val singleSolverConf = SingleSolverConf(threadNo = ci,
             //costsOpt = costsOpt,
-            dependencyGraph = dependencyGraph,
+            dependencyGraph = positiveDependencyGraph,
             progIsTight = progIsTight,
             freeEliSearchApproach = freeEliSearchApproachR,
             arrangeEliPoolR = prearrangeEliPoolR,

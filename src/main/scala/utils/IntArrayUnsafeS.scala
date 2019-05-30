@@ -13,24 +13,23 @@ package utils
 
 import it.unimi.dsi.fastutil.ints.IntArrayList
 
+/** This is not a general-purpose unsafe array class - designed for use in project delSAT only. */
 object IntArrayUnsafeS {
 
-  val alignment: Int = 128 //sharedDefs.unsafe.pageSize
+  val alignment: Int = 128 // sharedDefs.unsafe.pageSize
 
   val internalPaddingFact = 1 // multiple of actual alignment (see below)
 
-  //private[this] val unsafe: Unsafe = sharedDefs.unsafe  // (private [this] avoids use of getter method, but doesn't matter at runtime due to inlining)
-
-  val intArrayOffs = sharedDefs.unsafe.arrayBaseOffset(classOf[Array[Int]])
-
 }
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only! */
+/** This is not a general-purpose unsafe array class - designed for use in project delSAT only. */
 class IntArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
   import IntArrayUnsafeS._
 
-  import sharedDefs.unsafe
+  private[this] val unsafe = sharedDefs.unsafe
+
+  private[this] val intArrayOffs = sharedDefs.unsafe.arrayBaseOffset(classOf[Array[Int]])  // we put this here to ensure that scalac makes this a static field
 
   var isSorted = false
 

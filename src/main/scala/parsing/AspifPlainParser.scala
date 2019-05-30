@@ -1,15 +1,15 @@
 /**
-  * Parser for a subset of the ASP Intermediate Format (aspif) in delSAT. Not a general-purpose aspif parser -
-  * designated for use within delSAT only.
+  * Parser for a subset of the ASP Intermediate Format (ASPIF) in delSAT. Not a general-purpose ASPIF parser - designed for use within delSAT only.
   *
   * Copyright (c) 2018, 2019 Matthias Nickles
   *
   * THIS CODE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
   *
-  * aspif file format (of which we support a subset): see "A Tutorial on Hybrid Answer Set Solving with clingo",
-  * https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6
+  * ASPIF file format (of which we support a subset): see Appendix A in "A Tutorial on Hybrid Answer Set Solving with clingo",
+  * https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6 (https://www.cs.uni-potsdam.de/~torsten/hybris.pdf)
   *
-  * Currently directly supported by delSAT: Normal rules, #show entries (partially), disjunctions in heads via unfold/shift.  *
+  * Currently directly supported by delSAT: Normal rules, #show entries (partially), disjunctions in heads (via unfold/shift),
+  * filtering assumptions.
   * Use a preprocessor such as Clingo 5 (options --trans-ext=all --pre=aspif) or lp2normal to translate extended rules
   * (e.g., choice rules, weight rules...) to normal rules.
   *
@@ -17,12 +17,10 @@
 
 package parsing
 
+import aspIOutils._
 import commandline.delSAT
 import commandline.delSAT.{debug, log}
-
 import sharedDefs._
-
-import aspIOutils._
 
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Map, Set, mutable}
@@ -36,7 +34,7 @@ object AspifPlainParser {
 
   type AspifEli = Int
 
-  final case class AspifRule(headPosAtomsAspifElis: Set[AspifEli],
+  final case class AspifRule(headPosAtomsAspifElis: Set[AspifEli], // if you are tempted to replace Set with Array here: Don't.
                              headNegAtomsAspifElis: Set[AspifEli] /* for future extensions */ ,
                              bodyPosAtomsAspifElis: Set[AspifEli],
                              bodyNegAtomsAspifElis: Set[AspifEli],
@@ -75,6 +73,10 @@ object AspifPlainParser {
 
     val aspifExternalLinesB = new mutable.ArrayBuilder.ofRef[String]
 
+    val aspifFilteringAssumptionLinesB = new mutable.ArrayBuilder.ofRef[String]
+
+    var assumptionAspifLits = Seq[AspifEli]()
+
     var l = 1
 
     while (l < acll) {
@@ -88,7 +90,10 @@ object AspifPlainParser {
         else if (line(0) == '4')
           aspifNamedSymbolsLinesB.+=(line)
         else if (line(0) == '5')
-          aspifExternalLinesB.+=(line)
+          aspifExternalLinesB.+=(line) // NB: support for #external isn't implemented yet (TODO)
+        else if (line(0) == '6')
+          aspifFilteringAssumptionLinesB.+=(line)
+
       }
 
       l += 1
@@ -101,18 +106,20 @@ object AspifPlainParser {
 
     val aspifExternalLines = aspifExternalLinesB.result()
 
-    log("parsetimer 1: " + timerToElapsedMs(timerParserNs) + " ms")
+    val aspifFilteringAssumptionLines = aspifFilteringAssumptionLinesB.result()
 
-    if (aspifExternalLines.length + aspifRulesStrLines.length + aspifNamedSymbolsLines.length + 1 /*<- for the 0 at the end*/ + 1 /*first line*/ !=
+    if (aspifExternalLines.length + aspifRulesStrLines.length + aspifNamedSymbolsLines.length + aspifFilteringAssumptionLines.length + 1 /*<- for the 0 at the end*/ + 1 /*first line*/ !=
       aspifLines.length)
       delSAT.stomp(-102, "Unsupported line type(s) in aspif input data:\n " +
-        aspifLines.filter(line => !line.startsWith(" 1") && !line.startsWith("4 ") /*&& !line.startsWith("20")*/ && line.trim != "0").take(5).mkString("\n ") + "\n...")
+        aspifLines. /*filter(line => !line.startsWith(" 1") && !line.startsWith("4 ") /*&& !line.startsWith("20")*/ && line.trim != "0")/*.take(5)*/.*/ mkString("\n ") + "\n...")
 
     val aspifEliToSymbol = mutable.HashMap[AspifEli, String]()
 
-    var aspifRules: ArrayBuffer[AspifRule] = ArrayBuffer[AspifRule]()
+    log("parsetimer 1: " + timerToElapsedMs(timerParserNs) + " ms")
 
-    aspifRules.sizeHint(aspifRulesStrLines.length)
+    var aspifRules = mutable.ArrayBuffer[AspifRule]() // creating an empty mutable.ArrayBuffer is suprisingly costly, but faster alternatives like var List don't seem to pay off
+
+    //aspifRules.sizeHint(aspifRulesStrLines.length)
 
     log("parsetimer 2: " + timerToElapsedMs(timerParserNs) + " ms")
 
@@ -132,7 +139,7 @@ object AspifPlainParser {
       val newSymbol = aspifNamedSymbolsLineTokens(2)
 
       val newSymbolAspifEli: AspifEli = if (v3 == 0) {
-        // from an unconditioned (bodyless) #show statement; we currently need to add an auxiliar fact to "undo" this simplification:
+        // from an unconditioned (bodyless) #show statement (a way to write a symbolic fact); we currently need to add an auxiliar fact to "undo" this simplification:
 
         val aspifExtraShowEli = aspifExtraShowEliBoundary + extraShowAspifElitCount.getAndIncrement()
 
@@ -146,7 +153,7 @@ object AspifPlainParser {
       } else
         Integer.parseInt(aspifNamedSymbolsLineTokens(4))
 
-      /* Shouldn't occur, but we also check for possibly ambiguity cases like
+      /* Shouldn't occur, but we also check for possibly ambiguious cases like
             4 1 x 1 21
             4 1 x 1 22
          from #show x:y. (where y = literal 21)
@@ -178,7 +185,7 @@ object AspifPlainParser {
       val bodyStart = 3 + aspifRuleTokens2
 
       if (aspifRuleTokens(bodyStart) != "0" /*normal body indicator*/ )
-        delSAT.stomp(-102, "Non-normal rule detected. Consider preprocessing your program with, e.g., clingo --trans-ext=all or lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
+        delSAT.stomp(-102, "Unsupported type of rule detected. Consider preprocessing your program with, e.g., clingo --trans-ext=all --pre=aspif or lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
 
       if (!disjWarningShow && aspifRuleTokens2 > 1) {
 
@@ -190,7 +197,8 @@ object AspifPlainParser {
 
       val noOfGivenBodyAspifLits = Integer.parseInt(aspifRuleTokens(bodyStart + 1))
 
-      val (bodyGivenPosAspifLits, bodyGivenNegAspifLits) = aspifRuleTokens.drop(bodyStart + 2).take(noOfGivenBodyAspifLits).map(Integer.parseInt(_)).partition(_ >= 0)
+      val (bodyGivenPosAspifLits, bodyGivenNegAspifLits) = aspifRuleTokens.slice(bodyStart + 2, bodyStart + 2 + noOfGivenBodyAspifLits)
+        .map(Integer.parseInt(_)).partition(_ >= 0)
 
       val newAspifRule = if (aspifRuleTokens2 == 0) { // integrity constraint
 
@@ -210,13 +218,15 @@ object AspifPlainParser {
 
       }
 
+      //log("newAspifRule: " + newAspifRule)
+
       aspifRules.append(newAspifRule)
 
       Array(bodyGivenPosAspifLits, bodyGivenNegAspifLits.map(-_), newAspifRule.headPosAtomsAspifElis.toArray).foreach(lits => {
 
         lits.foreach(aspifEli => {
 
-          assert(aspifEli >= 0, "Error: Negative head literal found. Only normal rules are supported by DelSAT: " + newAspifRule)
+          assert(aspifEli >= 0, "Error: Negative head literal found (not yet supported by delSAT): " + newAspifRule)
 
           if (!aspifEliToSymbol.contains(aspifEli)) {
 
@@ -246,6 +256,22 @@ object AspifPlainParser {
     }
 
     log("parsetimer E1: " + timerToElapsedMs(timerParserNs) + " ms")
+
+    var ai = 0
+
+    val assll = aspifFilteringAssumptionLines.length
+
+    while (ai < assll) {
+
+      val assumptionLineToken = splitByRepChar(aspifFilteringAssumptionLines(ai).trim)
+
+      val assumptionLitsInLine = assumptionLineToken.drop(2).map(Integer.parseInt(_))
+
+      assumptionAspifLits ++= assumptionLitsInLine
+
+      ai += 1
+
+    }
 
     assert(shiftAndUnfoldForDisjunctions) // because we've disabled the non-disjunctive head checks in the aspif parser
 
@@ -334,17 +360,31 @@ object AspifPlainParser {
 
     val symbols: Array[String] = aspifEliToSymbol.values.toArray // needs to be the complete set of all symbols (before we can assign blits to rule bodies below)
 
-    val (rules, noOfPosBlits, emptyBodyBlit, symbolToEli) = aspifRulesToEliRules(symbols, aspifRules, Some(aspifEliToSymbol))
+    val (rules, noOfPosBlits, emptyBodyBlit, symbolToEli, additionalUncertainAtomsInnerCostsStrs, assumptionElis) = aspifRulesToEliRules(symbols, aspifRules, Some(aspifEliToSymbol), assumptionAspifLits)
 
-    AspifOrDIMACSPlainParserResult(symbols, Left(rules), noOfPosBlits, externalAtomElis = Seq() /*aspifExternalsElis*/ ,
-      emptyBodyBlit = emptyBodyBlit, directClauseNogoodsOpt = None, clauseTokensOpt = None, symbolToEliOpt = Some(symbolToEli))
+    AspifOrDIMACSPlainParserResult(symbols = symbols, rulesOrClauseNogoods = Left(rules), noOfPosBlits = noOfPosBlits, externalAtomElis = Seq(), assumptionElis = assumptionElis,
+      emptyBodyBlit = emptyBodyBlit, directClauseNogoodsOpt = None, clauseTokensOpt = None, symbolToEliOpt = Some(symbolToEli),
+      additionalUncertainAtomsInnerCostsStrs = additionalUncertainAtomsInnerCostsStrs)
 
   }
 
   def aspifRulesToEliRules(symbols: Array[String], aspifRules: ArrayBuffer[AspifRule],
-                           aspifEliToSymbolOpt: Option[mutable.HashMap[AspifEli, String]]): (ArrayBuffer[Rule], Int, Int, Predef.Map[String, AspifEli]) = {
+                           aspifEliToSymbolOpt: Option[mutable.HashMap[AspifEli, String]],
+                           assumptionAspifElis: Seq[AspifEli]): (ArrayBuffer[Rule], Int, Int, Predef.Map[String, AspifEli], (Array[String], Array[String]), Seq[Eli]) = {
 
     val rules = ArrayBuffer[Rule]()
+
+    val probFactBPrefix = probabilisticFactPrefix + "("
+
+    val patFactBPrefix = patFactPrefix + "("
+
+    val costFactBPrefix = costFactPrefix + "("
+
+    val probabilisticFacts = ArrayBuffer[(String, Double)]() // can be used as an alternative to declaring inner MSE costs. From these we'll generate MSE inner costs
+
+    val patsFromFacts = ArrayBuffer[String]() // can be used as an alternative to declaring parameter atoms using a "pats" line
+
+    val costsFromFacts = ArrayBuffer[String]() // can be used as an alternative to declaring an inner cost using a "cost" line
 
     //rules.sizeHint(aspifRulesStrLines.length)
 
@@ -356,16 +396,29 @@ object AspifPlainParser {
 
     // we assume blits (body elis) only for distinct bodies
 
+    log("parsetimer E2: " + timerToElapsedMs(timerParserNs) + " ms")
+
+
     val aspifRulesDistinctByBody0: Predef.Map[(Set[AspifEli], Set[AspifEli]), ArrayBuffer[AspifRule]] =
       aspifRules.groupBy(aspifRule => (aspifRule.bodyPosAtomsAspifElis /*NB: we must work with sets here to compare bodies correctly*/ ,
         aspifRule.bodyNegAtomsAspifElis))
 
+    log("parsetimer E2a: " + timerToElapsedMs(timerParserNs) + " ms")
+
+
     val aspifRulesDistinctByBody = aspifRulesDistinctByBody0.filter((tuple: ((Set[AspifEli], Set[AspifEli]), ArrayBuffer[AspifRule])) =>
       !omitSingletonBlits || tuple._1._1.size + tuple._1._2.size > 1 || tuple._1._1.size + tuple._1._2.size == 0 /*TODO: part == 0 is deprecated, remove after more tests*/)
 
+    log("parsetimer E2b: " + timerToElapsedMs(timerParserNs) + " ms")
+
     val distinctBodiesWithIndex = aspifRulesDistinctByBody.keySet.toArray.zipWithIndex
 
+    log("parsetimer E2c: " + timerToElapsedMs(timerParserNs) + " ms")
+
+
     val distinctBodiesToIndex: Map[(Set[AspifEli], Set[AspifEli]), Int] = distinctBodiesWithIndex.toMap
+
+    log("parsetimer E2d: " + timerToElapsedMs(timerParserNs) + " ms")
 
     var noOfRealBlits = distinctBodiesWithIndex.length
 
@@ -392,12 +445,12 @@ object AspifPlainParser {
         if (body._1.isEmpty && body._2.isEmpty) {
 
           if (emptyBodyBlit == -1)
-            emptyBodyBlit = blit  // we memorize this just to simplify nogoods later
+            emptyBodyBlit = blit // we memorize this just to simplify nogoods later
 
-          aspifRule.blit = emptyBodyBlit  // note: this is already a body eli, not an aspif-eli (original literal number)
+          aspifRule.blit = emptyBodyBlit // note: this is already a body eli, not an aspif-eli (original literal number)
 
         } else
-          aspifRule.blit = blit  // note: this is already a body eli, not an aspif-eli
+          aspifRule.blit = blit // note: this is already a body eli, not an aspif-eli
 
       }
 
@@ -405,7 +458,7 @@ object AspifPlainParser {
 
     }
 
-    log("parsetimer E2: " + timerToElapsedMs(timerParserNs) + " ms")
+    log("parsetimer E3: " + timerToElapsedMs(timerParserNs) + " ms")
 
     // Finally, we translate the rules with aspif-elis into rules with elis: (note: aspif-elis of negative literals are negative numbers, whereas elis of negative literals are positive numbers
     // (differently from, e.g., clingo/clasp and most other solvers))
@@ -413,8 +466,6 @@ object AspifPlainParser {
     val posNegEliBoundary = symbols.length + noOfRealBlits //+ auxSymbolsForSpanningCount.get /*per each given uncertain rule/fact, we later generate two rules*/
 
     @inline def isPosEli(eli: Eli) = eli < posNegEliBoundary
-
-    //@inline def isNegEli(eli: Eli) = eli >= posNegEliBoundary
 
     @inline def negateEli(eli: Eli): Eli = {
 
@@ -425,12 +476,27 @@ object AspifPlainParser {
 
     }
 
-    var symbolToEli: Predef.Map[String, AspifEli] = symbols.zipWithIndex.toMap  // TODO: optimize this line
+    var symbolToEli: Predef.Map[String, AspifEli] = symbols.zipWithIndex.toMap // TODO: optimize this
 
     @inline def positiveAspifEliToPositiveEli(aspifEli: AspifEli): Eli = if (aspifEliToSymbolOpt.isDefined)
       symbolToEli(aspifEliToSymbolOpt.get.get(aspifEli).get)
     else
       aspifEli - 1
+
+    @inline def negativeAspifEliToNegativeEli(negAspifEli: AspifEli): Eli = negateEli(positiveAspifEliToPositiveEli(-negAspifEli))
+
+    /*
+    @inline def enhAspifArrayBy(elis: Array[Eli], eli: Eli) = {
+
+      val copied = new Array[Eli](elis.length + 1)
+
+      System.arraycopy(elis, 0, copied, 1, elis.length)
+
+      copied(elis.length) = eli
+
+      copied
+
+    }*/
 
     var aspifRulei = 0
 
@@ -442,7 +508,7 @@ object AspifPlainParser {
 
       //log("aspifRule: " + aspifRule.toString)
 
-      val rule = Rule(headAtomsElis = (aspifRule.headPosAtomsAspifElis.map(posAspifEli => {
+      val rule = Rule(headAtomsElis = /*headAtomsElis*/ (aspifRule.headPosAtomsAspifElis.map(posAspifEli => {
 
         assert(posAspifEli > 0)
 
@@ -453,7 +519,7 @@ object AspifPlainParser {
 
           assert(negAspifEli < 0)
 
-          negateEli(positiveAspifEliToPositiveEli(-negAspifEli))
+          negativeAspifEliToNegativeEli(negAspifEli)
 
         })).toArray,
 
@@ -470,7 +536,7 @@ object AspifPlainParser {
 
           assert(negativeAspifEli < 0)
 
-          negateEli(positiveAspifEliToPositiveEli(-negativeAspifEli))
+          negativeAspifEliToNegativeEli(negativeAspifEli)
 
         }).toArray,
 
@@ -501,7 +567,58 @@ object AspifPlainParser {
 
         })
 
+      //log("parsetimer E4: " + timerToElapsedMs(timerParserNs) + " ms")
+
+
       assert(rule.headAtomsElis.length <= 1)
+
+      if (rule.bodyNegAtomsElis.length == 0 && rule.bodyPosAtomsElis.length == 0 && rule.headAtomsElis.length == 1) {
+
+        if (symbols(rule.headAtomsElis.head).startsWith(probFactBPrefix)) {
+
+          val probFact = symbols(rule.headAtomsElis.head)
+
+          //println("Encountered probability definition fact in aspif input: " + probFact)
+
+          var pfs = probFact.stripPrefix(probFactBPrefix)
+
+          val givenProbabilityStr = pfs.reverse.takeWhile(_ != ',').reverse.stripSuffix(")")
+
+          if (givenProbabilityStr != "\"?\"") {
+
+            val reifiedFact = pfs.dropRight(givenProbabilityStr.length + 2).trim
+
+            val givenProbability = givenProbabilityStr.toDouble / probabilisticFactProbDivider
+
+            //println("   parsed as Pr(" + reifiedFact + ") = " + givenProbability)
+
+            probabilisticFacts.append((reifiedFact, givenProbability))
+
+          }
+
+        } else if (symbols(rule.headAtomsElis.head).startsWith(patFactBPrefix)) {
+
+          val patFact = symbols(rule.headAtomsElis.head)
+
+          //println("Encountered parameter atom definition fact in aspif input: " + patFact)
+
+          var pat = patFact.stripPrefix(patFactBPrefix).stripSuffix(")").trim.stripPrefix("\"").stripSuffix("\"").trim
+
+          patsFromFacts.append(pat)
+
+        } else if (symbols(rule.headAtomsElis.head).startsWith(costFactBPrefix)) {
+
+          val costFact = symbols(rule.headAtomsElis.head)
+
+          //println("Encountered cost definition fact in aspif input: " + costFact)
+
+          var cost = costFact.stripPrefix(costFactBPrefix).stripSuffix(")").trim.stripPrefix("\"").stripSuffix("\"").trim
+
+          costsFromFacts.append(cost)
+
+        }
+
+      }
 
       rules.append(rule)
 
@@ -509,10 +626,47 @@ object AspifPlainParser {
 
     }
 
+    log("parsetimer E5: " + timerToElapsedMs(timerParserNs) + " ms")
+
+
+    val assumptionElis = assumptionAspifElis.map(aspifEli =>
+      if (aspifEli >= 0)
+        positiveAspifEliToPositiveEli(aspifEli)
+      else
+        negativeAspifEliToNegativeEli(aspifEli))
+
     if (delSAT.verbose)
       println("Parsing time: " + timerToElapsedMs(timerParserNs) + " ms")
 
-    (rules, noOfRealBlits, emptyBodyBlit, symbolToEli)
+    val additionalUncertainAtomsInnerCostsStrs: (Array[String], Array[String]) = if (ignoreParamVariablesR) (Array[String](), Array[String]()) else {
+
+      import java.text.DecimalFormat
+      import java.text.DecimalFormatSymbols
+      import java.util.Locale
+
+      val dFormat = new DecimalFormat("0", DecimalFormatSymbols.getInstance(Locale.ENGLISH)) // we need this to avoid unparsable scientific notation in double string literals
+
+      dFormat.setMaximumFractionDigits(340)
+
+      (probabilisticFacts.toArray.unzip._1 ++ patsFromFacts, probabilisticFacts.toArray.map((atomAndWeight: (String, Double)) => {
+
+        //  we generate inner costs of the MSE type per each uncertain atom fact, e.g., (0.4-f(atom))^2
+
+        "(" + dFormat.format(atomAndWeight._2) + "-f(" + atomAndWeight._1 + "))^2"
+
+      }) ++ costsFromFacts)
+
+    }
+
+    if (delSAT.verbose) {
+
+      println("Parameter atoms defined using _pr_ or _pat_ facts:\n" + additionalUncertainAtomsInnerCostsStrs._1.mkString(" "))
+
+      println("Costs defined using _pr_ or _pat_ or _cost_ facts:\n" + additionalUncertainAtomsInnerCostsStrs._2.mkString("\n"))
+
+    }
+
+    (rules, noOfRealBlits, emptyBodyBlit, symbolToEli, additionalUncertainAtomsInnerCostsStrs, assumptionElis)
 
   }
 

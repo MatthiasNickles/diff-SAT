@@ -11,23 +11,26 @@
 
 package solving
 
+import java.io.PrintWriter
+import java.util
+
 import aspIOutils._
 import com.accelad.math.nilgiri.DoubleReal
-import com.accelad.math.nilgiri.autodiff.{AbstractBinaryFunction, AbstractUnaryFunction, DifferentialFunction, Variable}
+import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, PolynomialTerm, Sum, Variable}
 import commandline.delSAT
 import commandline.delSAT._
-import it.unimi.dsi.fastutil.ints.{Int2ObjectOpenHashMap, IntOpenHashSet, IntSet}
-import it.unimi.dsi.fastutil.objects.ObjectArrayList
 import diff.UncertainAtomsSeprt
+import it.unimi.dsi.fastutil.ints.{Int2ObjectMap, Int2ObjectOpenHashMap, IntOpenHashSet, IntSet}
+import it.unimi.dsi.fastutil.objects.ObjectArrayList
+//import org.graphstream.graph.Node
 import sharedDefs._
-import sun.misc.Contended
 import utils.IntArrayUnsafeS
 
 import scala.annotation.tailrec
-import scala.collection.{Iterator, Seq, mutable}
 import scala.collection.mutable.ArrayBuffer
-import scala.concurrent.{Await, Future}
+import scala.collection.{Iterator, Seq, mutable}
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 
 /**
   * Various preparation steps before actual solving and sampling starts.
@@ -38,7 +41,7 @@ import scala.concurrent.duration.Duration
 class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
                   costsOpt: Option[UncertainAtomsSeprt],
                   satModeR: Boolean,
-                  omitAtomNogoods: Boolean/*for testing purposes only*/) {
+                  omitAtomNogoods: Boolean /*for testing purposes only*/) {
 
   assert(!omitAtomNogoods)
 
@@ -143,7 +146,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
     negBlitToPosBodyElis = bpbes
 
-    val cngs = if (aspifOrDIMACSParserResult.directClauseNogoodsOpt.isDefined) {
+    val cngs2 = if (aspifOrDIMACSParserResult.directClauseNogoodsOpt.isDefined) {
 
       if (verbose)
         println("#extra nogoods from pseudo-rules (in addition to direct clauses nogoods): " + cngs1.length)
@@ -152,7 +155,14 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
     } else cngs1
 
-    cngs
+    val cngs3 = cngs2 ++ aspifOrDIMACSParserResult.assumptionElis.map(aEli =>
+      new IntArrayUnsafeS(Array(negateEli(aEli)), aligned = false) // if aEli is positive, this corresponds to constraint
+      // :- not aEli.
+      // if aEli is a negative literal, this corresponds to :- negate(aEli), i.e., the same.
+
+    )
+
+    cngs3
 
   }
 
@@ -217,7 +227,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
         val elimPosAtoms = new IntOpenHashSet()
 
-        var pnNogood = Array.ofDim[Eli](8192)
+        //var pnNogood = Array.ofDim[Eli](8192)
 
         val removedNogoodsPerAtom = mutable.TreeMap[Eli /*atom eli*/ , ArrayBuffer[IntArrayUnsafeS]]()
 
@@ -282,7 +292,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
                               //sampledModels.sizeHint(pNogood.length + nNogood.length - 2)
 
-                              pncLits += /*(nNogood.toArray ++ pNogood.toArray).distinct.length*/ nNogood.size() + pNogood.size()
+                              pncLits += nNogood.size() + pNogood.size()
 
                               var ik = pNogood.size() - 1
 
@@ -589,6 +599,12 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   val clarkNogoods: Array[IntArrayUnsafeS] = if (!initCleanUpArrangeClarkNogoods) clarkNogoods2 else {
 
+    val ab = new mutable.ArrayBuilder.ofRef[IntArrayUnsafeS]
+
+    val seen = new mutable.HashSet[IntArrayUnsafeS]()
+
+    var isDifferent = false
+
     clarkNogoods2.foreach(
 
       ng => {
@@ -597,145 +613,235 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
         ng.isSorted = true
 
+        if (seen.add(ng))
+          ab += ng
+        else
+          isDifferent = true
+
       })
 
-
-    val r = clarkNogoods2 //.sortBy(_.size)  // rearrangements can have a significant impact but there is no known specific
-    // arrangement which works best without worsening other cases. Often, the original arrangement works best (unless clauses were purposefully scrambled).
-
-    /* r.foreach(
-
-      ng => {
-
-        ng.isSorted = false
-
-      })  */
-
-    r
+    if (isDifferent)
+      ab.result
+    else
+      clarkNogoods2
 
   }
 
-  val dependencyGraph: Int2ObjectOpenHashMap[List[Eli]] = if (satMode) new Int2ObjectOpenHashMap[List[Eli]]() else rulesOpt.map(rules =>
-    computeDependencyGraph(rules, noOfPosAtomElis)).getOrElse(new Int2ObjectOpenHashMap[List[Eli]]())
+  val positiveDependencyGraph: Int2ObjectOpenHashMap[List[Eli]] = if (satMode) new Int2ObjectOpenHashMap[List[Eli]]() else rulesOpt.map(rules => {
 
-  val progIsTight: Boolean = if (satMode) true else isAcyclic(dependencyGraph)
+    if (debug) {
+
+      println("Rules extracted from aspif:\n")
+
+      println(rules.map(_.toString(this)).mkString("\n"))
+
+      println("-----------\n")
+
+    }
+
+    computeDependencyGraph(rules, noOfPosAtomElis)
+
+  }).getOrElse(new Int2ObjectOpenHashMap[List[Eli]]())
+
+  val progIsTight: Boolean = if (satMode) true else isAcyclic(positiveDependencyGraph)
 
   if (!satMode) (if (progIsTight && verbose) println("\nProgram is tight") else if (verbose) println("\nProgram is not tight"))
 
-  val costFctsInnerWithPossMeasuredElis = mutable.HashMap[Eli, DifferentialFunction[DoubleReal]]() //ArrayBuffer[(DifferentialFunction[DoubleReal], Eli /*measured*/ )]()
-  //Note ^: the mapping ->innerCost is needed only for the simplified MSE case (where we use simplified derivation formulas, see further below)
+  val displayDepGraph = false
 
-  val nablasInner /*partial derivatives of the inner cost functions*/ : Array[DifferentialFunction[DoubleReal]] =
+  if (displayDepGraph) { // for debugging purposes
+
+    val emitDepGraphPosNeg = true
+
+    val reverseDepGraph = false
+
+    val showEdgeLabels = true
+
+    val showNotAsEdgeLabelOnly = true
+
+    val showNegEdgesInRed = true
+
+    assert(!satMode)
+
+    val dependencyGraph: Int2ObjectOpenHashMap[List[Eli]] = rulesOpt.map(rules => {
+
+      computeDependencyGraph(rules, noOfPosAtomElis, positiveDepGraph = false)
+
+    }).getOrElse(new Int2ObjectOpenHashMap[List[Eli]]())
+
+    val nodesForDot = ArrayBuffer[String]()
+
+    val edgesForDot = ArrayBuffer[String]()
+
+    def eliToStr(eli: Eli) = (if (isPosEli(eli)) symbols(eli) else "not " + symbols(negateNegEli(eli)))
+
+    val nodesAsElis: IntSet = dependencyGraph.keySet
+
+    val nit = nodesAsElis.iterator
+
+    while (nit.hasNext) { // all rule heads (must be positive, negative heads should have already been translated away by this point)
+
+      val nodeEli = nit.nextInt()
+
+      assert(isPosEli(nodeEli), "Error: negative head elis in aspif not supported")
+
+      val nodeStr = nodeEli.toString
+
+      nodesForDot.append(nodeStr + " [label=\"" + symbols(nodeEli) + "\"]")
+
+      println("Node added for eli: " + nodeStr)
+
+    }
+
+    val dges = dependencyGraph.int2ObjectEntrySet
+
+    val dgesit = dges.iterator
+
+    while (dgesit.hasNext) {
+
+      val dge: Int2ObjectMap.Entry[List[Eli]] = dgesit.next()
+
+      val parentNodeEli = dge.getIntKey
+
+      println("parentNodeEli: " + parentNodeEli + "(" + symbols(parentNodeEli) + ")")
+
+      print("   descendants: ")
+
+      val descendantElis: Seq[Eli] = dge.getValue
+
+      val deit = descendantElis.iterator
+
+      while (deit.hasNext) {
+
+        val descendantEli = deit.next()
+
+        print(descendantEli + "(" + eliToStr(descendantEli) + "), ")
+
+        val edgeStr = symbols(parentNodeEli) + (if (reverseDepGraph) "<-" else "->") + eliToStr(descendantEli)
+
+        val edgeForDot = (if (reverseDepGraph) toAbsEli(descendantEli) + " -> " + parentNodeEli else parentNodeEli + " -> " + toAbsEli(descendantEli)) +
+          (if (showEdgeLabels) " [label=\"" + (if (showNotAsEdgeLabelOnly) (if (isNegEli(descendantEli)) "not" else "") else edgeStr) + "\"]" else "") + (if (showNegEdgesInRed && isNegEli(descendantEli)) " [color=red]" else "")
+        // NB: Mathematica doesn't show red color or other style attriibutes for edges imported from DOT (but parses these into Graph format!)
+
+        edgesForDot.append(edgeForDot)
+
+        //println("toAbsEli(descendantEli): " + toAbsEli(descendantEli))
+
+      }
+
+      println
+
+    }
+
+    if (emitDepGraphPosNeg) {
+
+      println("Writing depGraphPosNeg to .dot file (open with, e.g., GraphViz)")
+
+      val dotGraphStr = "digraph dependencyGraphPosNeg {\n" + nodesForDot.mkString("\n") + "\n" + edgesForDot.mkString("\n") + "\n}"
+
+      new PrintWriter("depGraphPosNeg.dot") {
+
+        write(dotGraphStr)
+
+        close
+
+      }
+
+      sys.exit(0)
+
+    }
+
+    readChar()
+
+    sys.exit(0)
+
+  }
+
+  val costFctsInnerWithPossMeasuredElis = mutable.HashMap[Eli, DifferentialFunction[DoubleReal]]()
+  // Note ^: we always need the values (i.e., the set of all inner cost functions) in the above hashMap, but the actual mapping eli->innerCost is needed only for the simplified MSE case (where we use simplified derivation formulas, see further below)
+
+  val nablasInner /*partial derivatives of the inner cost functions wrt. parameter atoms (as freqx variables)*/ : Array[DifferentialFunction[DoubleReal]] =
     Array.fill[DifferentialFunction[DoubleReal]](symbols.length /*if we could place
           the uncertain atoms at the beginning of symbols, we could keep this array smaller, but this would require costly re-ordering operations
           in aspifParse() */)(null.asInstanceOf[DifferentialFunction[DoubleReal]])
 
   val dFFactory = new diff.DifferentialFunctionFactoryStasp()
 
-  @Contended
-  val parameterAtomVarForParamAtomEli_forPartDerivCompl = mutable.HashMap[Int, Variable[DoubleReal]]()
+  val eliToVariableInCostFunctions: mutable.Map[Eli, Variable[DoubleReal]] = costsOpt.map(_.eliToVariableInCostFunctions).getOrElse(mutable.HashMap[Int, Variable[DoubleReal]]())
+  // ^ for each measured eli, the corresponding autodiff.Variable within the inner cost. We can only differentiate wrt. parameter elis which are contained in this map.
 
-  val symbolToEli: Predef.Map[String, Eli] = if(aspifOrDIMACSParserResult.symbolToEliOpt.isDefined && aspifOrDIMACSParserResult.symbols.length == symbols.length && !variableOrNogoodElimConfig._5) aspifOrDIMACSParserResult.symbolToEliOpt.get else symbols.zipWithIndex.toMap
+  val symbolToEli: Predef.Map[String, Eli] = if (aspifOrDIMACSParserResult.symbolToEliOpt.isDefined && aspifOrDIMACSParserResult.symbols.length == symbols.length && !variableOrNogoodElimConfig._5) aspifOrDIMACSParserResult.symbolToEliOpt.get else symbols.zipWithIndex.toMap
 
   val parameterAtomsElis0 /*(from  the "pats" line)*/ : Array[Eli] = costsOpt.map(_.parameterAtomsSeq).map(pmasg =>
     pmasg.map(pred => symbolToEli(pred))).getOrElse(Array[Eli]())
 
   @inline def measuredAtomNameInCostFnToSymbol(n: String): String = if (satMode) n.stripPrefix("v") else n
 
-  @inline def translateDiffFunMeasuredAtomIndex2PosEli(index: Int): Eli = {
+  val measuredAtomsElis /*(from within the cost functions)*/ : Array[Eli] = costsOpt.map(_.measuredAtomsSeq).map(_.map((vn: Pred) =>
+    symbolToEli(measuredAtomNameInCostFnToSymbol(vn)))).getOrElse(Array[Eli]())
 
-    if (index < 0)
-      stomp(-5003)
+  // NB: if a measured atom isn't (and shouldn't be made) a parameter atom, e.g., for learning the weight of a hypothesis, we can't _directly_
+  // differentiate the cost wrt. a parameter atom (that is, the variable which represents its frequency), we cannot
+  // influence the cost _directly_ by adding/omitting parameter atoms in models (see switch useNumericalFiniteDifferences).
+  // In that case, we might still be able to influence the cost (i.e., the measured atom frequencies) indirectly via the parameter atoms.
+  // NB: In case of weight learning, the parameter atoms are the hypotheses whose weights
+  // we are looking for, and the measured atoms are the learning examples whose weights we are maximizing by influencing the hypotheses weights.
 
-    symbolToEli(measuredAtomNameInCostFnToSymbol(costsOpt.get.measuredAtomsSeq(index)))
-
-  }
-
-  val measuredAtomsElis /*(from within the cost functions)*/ : Array[Eli] = costsOpt.map(_.measuredAtomsSeq).map(_.map(vn => symbolToEli(measuredAtomNameInCostFnToSymbol(vn)))).getOrElse(Array[Eli]())
-
-  // NB: currently in delSAT "measured atoms" = "parameter atoms". No current use for distinct "measured atoms" yet (since this version doesn't support, e.g., cost backtracking), we simply assume here that
-  // they are identical with the parameter atoms. Weight learning (parameter estimation) will occur on the level of the caller of delSAT, so there
-  // is currently no need for measured atoms within delSAT itself.
+  val hypothesisParamTargetWeightVariables = ArrayBuffer[(Eli, /*current target weight of hypothesis:*/ Variable[DoubleReal])]()
 
   setCostFctsInner
 
   def setCostFctsInner = {
 
-    costsOpt.foreach(inputDataCostFunBased => {
+    costsOpt.foreach((inputDataCostFunBased: UncertainAtomsSeprt) => {
 
-      inputDataCostFunBased.innerCostExpressionInstances.foreach(costFunInner => {
+      inputDataCostFunBased.innerCostExpressionInstances.foreach((costFunInner: DifferentialFunction[DoubleReal]) => {
 
-        var possibleMeasuredEli = -1
+        val cStr = costFunInner.toString
 
-        @inline def translateMeasuredAtomIndices(fn: DifferentialFunction[DoubleReal], noPhi: Boolean): DifferentialFunction[DoubleReal] = {
-          // If we've generated the differentiable functions outside delSAT,
-          // then the index in phi(index) is originally not an atom but an index within inputDataCostFunBasedOpt.get.measuredAtomsSeqSorted
+        val i = cStr.indexOf("freqx")
 
-          def setViaReflection(ref: AnyRef, fieldName: String, value: AnyRef) = {
+        if (i != -1) {
 
-            val f = ref.getClass.getSuperclass.getDeclaredField(fieldName)
+          val possibleMeasuredEli: Int = cStr.substring(i + 5).takeWhile(_ != '_').toInt
 
-            f.setAccessible(true)
+          costFctsInnerWithPossMeasuredElis.put(possibleMeasuredEli, costFunInner)
 
-            f.set(ref, value.asInstanceOf[AnyRef])
+          log("costFctsInner: " + costFunInner)
+
+          if (cStr.contains("wDf")) { // deprecated; remove after more tests
+
+            val hypothesisMovingTargetWeightVar = costFunInner.asInstanceOf[PolynomialTerm[DoubleReal]].arg.asInstanceOf[Sum[DoubleReal]].larg.asInstanceOf[Variable[DoubleReal]]
+
+            hypothesisParamTargetWeightVariables.append((possibleMeasuredEli, hypothesisMovingTargetWeightVar))
 
           }
 
-          if (fn.toString.startsWith("phi(")) {
+        } else {
 
-            val eli = translateDiffFunMeasuredAtomIndex2PosEli(fn.asInstanceOf[AbstractUnaryFunction[DoubleReal]].arg().getReal.toInt)
+          stomp(-205, {
 
-            if (possibleMeasuredEli == -1)
-              possibleMeasuredEli = eli
-            else
-              possibleMeasuredEli = -1
+            costFunInner match {
 
-            val varName = if (noPhi) "freqx" + eli + "_" else "ua"
+              case pt: PolynomialTerm[DoubleReal] => {
 
-            val translatedArg = dFFactory.`var`(varName /*TODO: "ua" is hardcoded in various places*/ ,
-              new DoubleReal(if (noPhi) -1d /*dummy,  will later be updated with measured frequency*/ else eli.toDouble))
+                // toString of PolynomialTerm might be confusing as it omits *, so, e.g., 1*0.0^2 appears as 10.0^2, so we use this little hack:
 
-            if (noPhi) {
+                val scale = pt.getFormula(new util.ArrayList[Variable[DoubleReal]]()).drop(2).takeWhile(_ != '*').trim.toLong
 
-              parameterAtomVarForParamAtomEli_forPartDerivCompl.put(eli, translatedArg)
+                val exp = pt.getFormula(new util.ArrayList[Variable[DoubleReal]]()).dropRight(1).reverse.takeWhile(_ != ',').reverse.toInt
 
-              translatedArg // we replace the phi(atom) with a new variable freqx<Eli>_, e.g., freqx726_
+                scale + "(" + pt.arg + ")^" + exp
 
-            } else {
+              }
 
-              setViaReflection(fn.asInstanceOf[AbstractUnaryFunction[DoubleReal]], "m_x", translatedArg)
-
-              fn
+              case t => t.toString
 
             }
 
-          } else if (fn.isInstanceOf[AbstractUnaryFunction[DoubleReal]]) {
-
-            setViaReflection(fn.asInstanceOf[AbstractUnaryFunction[DoubleReal]], "m_x", translateMeasuredAtomIndices(fn.asInstanceOf[AbstractUnaryFunction[DoubleReal]].arg(), noPhi))
-
-            fn
-
-          } else if (fn.isInstanceOf[AbstractBinaryFunction[DoubleReal]]) {
-
-            setViaReflection(fn.asInstanceOf[AbstractBinaryFunction[DoubleReal]], "m_x1", translateMeasuredAtomIndices(fn.asInstanceOf[AbstractBinaryFunction[DoubleReal]].larg(), noPhi))
-
-            setViaReflection(fn.asInstanceOf[AbstractBinaryFunction[DoubleReal]], "m_x2", translateMeasuredAtomIndices(fn.asInstanceOf[AbstractBinaryFunction[DoubleReal]].rarg(), noPhi))
-
-            fn
-
-          } else
-            fn
+          }) // this happens when a measured atom is undefined and f(ma) had been replaced with 0
 
         }
-
-        log("Original costFunInner (prior argument index->eli translation): " + costFunInner)
-
-        val costFunInnerWithElis: DifferentialFunction[DoubleReal] = translateMeasuredAtomIndices(costFunInner, noPhi = true /*partDerivComplete*/)
-
-        costFctsInnerWithPossMeasuredElis.put(possibleMeasuredEli, costFunInnerWithElis) //Note: the mapping ->innerCost is needed
-        // only for the simplified MSE case (where we use simplified derivation formulas, see further below)
-
-        log("Translated costFctsInner(measuredAtomEli): " + costFunInnerWithElis)
 
       })
 
@@ -743,7 +849,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   }
 
-  log("\npreptimer 2.1: " + timerToElapsedMs(timerPrepNs) + " ms\n")
+  //log("\npreptimer 2.1: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
   @inline def findInnerCostFunForParameterAtom(parameterAtomEli: Eli): Option[DifferentialFunction[DoubleReal]] = {
 
@@ -754,9 +860,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
   log("\npreptimer 3: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
   //@Contended
-  val parameterAtomsElis = parameterAtomsElis0.filter(parameterAtomVarForParamAtomEli_forPartDerivCompl.contains(_))
-  // ^the above ensures we only keep parameter atoms which occur as measured atoms in cost formulas (TODO: remove as soon as
-  // delSAT supports disjoint param vs. measured)
+  val parameterAtomsElis = parameterAtomsElis0 //.filter(eliToVariableInCostFunctions.contains(_))
 
   val innerCostFunForParamAtomEli = if (ignoreParamVariablesR || partDerivComplete) mutable.Map[Eli, Option[DifferentialFunction[DoubleReal]]]() else
     mutable.HashMap[Eli, Option[DifferentialFunction[DoubleReal]]]().++(parameterAtomsElis.map(eli => {
@@ -775,30 +879,40 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
     costFctsInner.reduceLeft((reduct: DifferentialFunction[DoubleReal], addendum: DifferentialFunction[DoubleReal])
     => reduct.plus(addendum)).div(n)
 
-  if (!ignoreParamVariablesR)
-    parameterAtomsElis.foreach(parameterAtomEli => { // this probably only makes sense if parameter atoms == measured atoms...!
+  if (!ignoreParamVariablesR && !useNumericalFiniteDifferences)
+    parameterAtomsElis.foreach(parameterAtomEli => {
 
-      val parameterAtomVar: Variable[DoubleReal] = parameterAtomVarForParamAtomEli_forPartDerivCompl(parameterAtomEli)
+      if (eliToVariableInCostFunctions.contains(parameterAtomEli)) {
 
-      if (partDerivComplete) { // see M. Nickles: PLP'18 paper; use with non-MSE cost functions (more general but slower)
+        val parameterAtomVar: Variable[DoubleReal] = eliToVariableInCostFunctions(parameterAtomEli)
 
-        nablasInner(parameterAtomEli) = totalCostFun_forPartDerivCompl.diff(parameterAtomVar)
+        if (partDerivComplete) { // see M. Nickles: PLP'18 paper; use with non-MSE cost functions (more general but slower)
 
-      } else { // faster, less general. For simple MSE-style (and some others?) cost functions. See M. Nickles: ILP'18 paper.
+          nablasInner(parameterAtomEli) = totalCostFun_forPartDerivCompl.diff(parameterAtomVar)
 
-        val innerCostFun: DifferentialFunction[DoubleReal] = innerCostFunForParamAtomEli /*findInnerCostFunForParameterAtom*/ (parameterAtomEli).getOrElse {
+        } else { // faster, less general. For simple MSE-style (and some others?) cost functions. See M. Nickles: ILP'18 paper.
 
-          stomp(-5003)
+          val innerCostFun: DifferentialFunction[DoubleReal] = innerCostFunForParamAtomEli(parameterAtomEli).getOrElse {
 
-          costFctsInner(0)
+            stomp(-5003)
+
+            costFctsInner(0)
+
+          }
+
+          nablasInner(parameterAtomEli) = innerCostFun.diff(parameterAtomVar)
 
         }
 
-        nablasInner(parameterAtomEli) = innerCostFun.diff(parameterAtomVar)
+        log("   part derivative wrt parameter atom " + symbols(parameterAtomEli) + ": " + nablasInner(parameterAtomEli))
+
+      } else { // deprecated
+
+        assert(false)
+
+        null
 
       }
-
-      log("nablasInner for parameter atom " + /*symbols*/ (parameterAtomEli) + ": " + nablasInner(parameterAtomEli))
 
     })
 
@@ -810,15 +924,41 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   val parameterLiteralElis: IntArrayUnsafeS = new IntArrayUnsafeS(parameterLiteralElisArray, aligned = true)
 
+  if (verbose) {
+
+    println("Measured atoms (after adding parameter atoms not occurring in cost): " + measuredAtomsElis.map(symbols(_)).mkString(" "))
+
+    println("Parameter atoms: " + parameterAtomsElisSet.map(symbols(_)).mkString(" "))
+
+  }
+
   @inline def deficitByDeriv(parameterLiteralEli: Eli): Double = {
 
-    // Assumes that in a step directly preceding the re-sorting, the variables in the nablaInner have been
+    // Assumes that in a step directly preceding the re-sorting, the freqx variables in the nablaInner have been
     // updated to measuredAtomEliToStatisticalFreq!
 
-    (if (isPosAtomEli(parameterLiteralEli))
-      nablasInner(parameterLiteralEli).getReal
+    val r = if (isPosAtomEli(parameterLiteralEli)) {
+
+      if (nablasInner(parameterLiteralEli) != null) {
+
+        nablasInner(parameterLiteralEli).getReal
+
+      } else
+        0d
+
+    } else {
+
+      if (nablasInner(negateNegEli(parameterLiteralEli)) != null)
+        -nablasInner(negateNegEli(parameterLiteralEli)).getReal
+      else
+        0d
+
+    }
+
+    if (r.isNaN)
+      0.5d - rngGlobal.nextDouble()
     else
-      -nablasInner(negateNegEli(parameterLiteralEli)).getReal)
+      r
 
   }
 
@@ -831,22 +971,8 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   var deficitOrderedUncertainLiteralsForJava: Array[Integer] = parameterLiteralElisArray.map(new Integer(_))
 
-  var measuredAtomEliToStatisticalFreq: Array[Double] = Array.ofDim[Double](symbols.length)
-
-  @inline def update_parameterAtomVarForParamEli_forPartDerivCompl: Unit = {
-
-    // we update the values of the parameter variables in the partial derivatives with the latest measured frequencies:
-
-    parameterAtomsElis.foreach(paramAtomEli => {
-
-      val freq = measuredAtomEliToStatisticalFreq(paramAtomEli) // so this only works if measured = parameter atoms (but we distinguish them,
-      // for future extensions, e.g., with the cost-backtracking algo from the ILP'18 paper)
-
-      parameterAtomVarForParamAtomEli_forPartDerivCompl(paramAtomEli).set(new DoubleReal(freq))
-
-    })
-
-  }
+  if (shuffleRandomVariables)
+    shuffleArray(deficitOrderedUncertainLiteralsForJava, new java.util.SplittableRandom())
 
   val ruliformNogiToNegBlits = new Int2ObjectOpenHashMap[Array[Eli /*negative blit*/ ]]() // only needed for non-tight ASP programs
 
@@ -1095,7 +1221,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
             }
 
-            Some(s1s2/*.distinct*/)
+            Some(s1s2 /*.distinct*/)
 
           } else
             None
@@ -1243,7 +1369,8 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   }
 
-  def computeDependencyGraph(rules: ArrayBuffer[Rule], noOfAllPosAtomElis: Int): Int2ObjectOpenHashMap[List[Eli]] = {
+  def computeDependencyGraph(rules: ArrayBuffer[Rule], noOfAllPosAtomElis: Int, positiveDepGraph: Boolean = true):
+  Int2ObjectOpenHashMap[List[Eli]] /*adjacency list*/ = {
 
     var graphInit = new Int2ObjectOpenHashMap[List[Eli]]()
 
@@ -1251,7 +1378,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
     while (jj < rules.length) {
 
-      val rule = rules(jj)
+      val rule: Rule = rules(jj)
 
       if (!rule.headAtomsElis.isEmpty) {
 
@@ -1260,7 +1387,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
         if (!isPosEli(headEli))
           stomp(-5004, rule.toString)
 
-        val successorNodes: Array[Eli] = rule.bodyPosAtomsElis
+        val successorNodes: Array[Eli] = if (positiveDepGraph) rule.bodyPosAtomsElis else rule.bodyPosAtomsElis.union(rule.bodyNegAtomsElis)
 
         val succsOfPosHeadEli = {
 
@@ -1279,7 +1406,7 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
         successorNodes.foreach(succEli => {
 
-          graphInit.put(headEli, succsOfPosHeadEli.:+(succEli))
+          graphInit.put(headEli, graphInit.get(headEli) /*succsOfPosHeadEli*/ .:+(succEli))
 
         })
       }

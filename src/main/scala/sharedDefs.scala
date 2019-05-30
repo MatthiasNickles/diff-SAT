@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2019 Matthias Nickles
+  * Copyright (c) 2018,2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -10,28 +10,39 @@
   */
 
 import commandline.delSAT
-
+import solving.Preparation
 import sun.misc.Unsafe
-
 import utils.{IntArrayUnsafeS, XORShift32}
 
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ArrayBuilder}
-
 import scala.reflect.ClassTag
 
-package object sharedDefs { // Last fine version (all tests passed, fast coins/smoker/graphs benchmarks): 6th Feb 2019 6pm
+package object sharedDefs {
 
-  // ================== Solver settings. From the delSAT commandline, most of these can be set using
-  // --solverarg "paramName" "paramValue"
-  // Each --solverarg sets only a single parameter. If the param value is a Seq (that is, each solver thread uses
-  // one of the seq elements as parameter), list the element values separated by space characters.
-  // For additional command line options defined elsewhere, see delSAT --help
+  /* ================== Solver settings ==================
+
+   From the delSAT commandline, most of these can be set using
+   --solverarg "paramName" "paramValue"
+   Each --solverarg sets only a single parameter. If the param value is a Seq (that is, each solver thread uses
+   one of the seq elements as parameter), list the element values separated by space characters.
+   For additional command line options defined elsewhere, see delSAT --help
+
+  Remark (see README.md for details):
+    For standard (deductive-probabilistic MSE-style) inference problems, run delSAT with arguments -mse --solverarg "partDerivComplete" "false"
+    For non-MSE style inference where all parameter atoms are measured atoms, use --solverarg "partDerivComplete" "true"
+    For induction/abduction-style or mixed inference, use --solverarg "useNumericalFiniteDifferences" "true"
+  */
 
   var showProgressStats: Boolean = true // deactivate progress statistics using --solverarg "showProgressStats" "false"
 
   var diversify: Boolean = false // if true, multi solver aims at generating diverse models (i.e., models which are largely different from each other).
   // Might slow down solver. Might override other settings. NB: Doesn't ensure near-uniform sampling! Also, distribution-aware sampling still takes place if parameter atoms are present.
+
+  var useNumericalFiniteDifferences: Boolean = false // if true, a discrete form of numerical differentiation is used instead of symbolic or automatic differentiation
+  // is used to compute the partial derivatives wrt. parameter atoms.
+  // Slower and less accurate (you might need to increase the cost threshold with -t), but necessary if a parameter atom variable is
+  // not part of the cost function term (or symbolic/automatic differentiation wrt some parameter atom variable isn't possible for some other reason).
 
   var partDerivComplete: Boolean = false // false: variant of ILP'18 approach (less general, use with MSE-style inner cost expressions),
   // true: variant of PLP'18 approach (more general)
@@ -41,11 +52,12 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
   // With a limited number of solver threads, values earlier in sequences get higher priority to be used by a solver thread.
   // Duplicate values allowed in Seqs. Number of values in Seq can be smaller than number of solver threads.
 
-  var maxCompetingSolverThreadsR: Int =  -1 // for parallel portfolio solving with competing solver instances (number of threads not guaranteed)
+  var maxCompetingSolverThreadsR: Int = -1 // for parallel portfolio solving with competing solver instances (number of threads not guaranteed)
   // Keep in mind that the machine might decrease maximum core frequencies with more cores being utilized.
   // -x sets number of solver threads in dependency of number of cores, problem size and other factors. For small
   // problems with number of positive literals (ri.e., in case of SAT: #variables) smaller -x (with x < 0), only a single solver thread is launched.
   // NB: delSAT also spawns some parallelism from within individual solver threads, so normally no all cores should be occupied by solvers.
+  // Commandline: --solverarg maxCompetingSolverThreadsR n
 
   var restartTriggerConfP: (Int, Seq[Int], Seq[Double]) = (2 /*0=no restarts, 1=fixed interval, 2=geometric, 3=Luby sequence*/ ,
     Seq(/*8,32*/ 16) /*initial no of conflicts before restarts*/ ,
@@ -66,8 +78,10 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
   var arrangeEliPoolP: Seq[Int] = Seq(0, 1) // per solver thread; 0=off, 1=upwards, 2=downwards, 3=shuffle, 4=reshuffle at each restart, 5=(0,1,2,3 or 4 picked at random).
   // Arranges branching eli pool (for free eli search) by number of nogoods containing the eli (relevant where the freeEliSearchApproach chooses from a sequence of elis)
 
-  var rndmBranchP: Seq[Float] = Seq(1e-6f) // per solver thread. Very sensitive parameter! Lower(!) x <=> higher frequency (as a heuristical weight, not a probability) of selecting the
-  // next branching posEli randomly.
+  var rndmBranchP: Seq[Double] = Seq(1e-6d) //Seq(1e-6f) // per solver thread. Very sensitive parameter! Lower(!) positive x <=> higher frequency (as a
+  // heuristical weight, not a probability) of selecting the next branching posEli randomly. Higher amount of random branching decisions
+  // means higher models entropy (useful for, e.g., weight learning) but slower solving (computing individual models takes more time).
+  // Also see parameter "diversify" (which has the same effect as rndmBranch = Double.MinPositiveValue).
 
   var noHeapP: Seq[Int] = Seq(1, 0) // per solver thread; 0/1 off/on. "On" omits the intermediate heap data structure for
   // BCP (unit propagations) and makes assignments directly and recursively. "Off" uses heap-based Boolean Constraint Propagation (BCP).
@@ -142,19 +156,48 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
 
   var maxApproachSwitchesPerSolverThread: Int = Int.MaxValue // maximum number of switches per solver thread if slowThreadAction = 3
 
+  var emitClauses: Boolean = false // if true, after solving clauses corresponding to clark nogoods and any loop nogoods are printed. Observe that
+  // this doesn't emit an equivalent theory in case the ASP program isn't tight since the set of loop nogoods isn't complete. However,
+  // if the emitted clauses are used with a SAT solver and the resulting model is an answer set (checkable in P time), it is an answer
+  // set of the original answer set program.
+
+  var stopSamplingWhenCostStagnates: Boolean = false // if true, we stop sampling if the total cost doesn't significantly change anymore (useful
+  // mostly for learning weights. However, in deductive-probabilistic and mixed scenarios, cost stagnation before reaching the threshold can
+  // also indicate that the input is inconsistent (no solution exists)).
+
+  @volatile var emittedClauses = false
+
   // ================== Internal settings:
 
-  val useCounters: Boolean = true  // use nogood literal assignment counters instead of head/tail list-like approach
+  @deprecated var ensureParamAtomsAreMeasured: Boolean = false // if true, every parameter atom which isn't already a measured atom will
+  // be made a measured atom (that's only useful if the weight of the parameter atom needs to be _directly_ controlled during sampling.)
+  // Normally, autoGenerateCostLinesForHypotheses should be set to true in that case too.
 
-  val levelledRestarts: Boolean = false
+  @deprecated var autoGenerateCostLinesForHypotheses: Boolean = false // generates an inner MSE cost function for each parameter atom which isn't
+  // part of any cost, that is, for hypothesis parameter atoms. The generated inner costs are required because for hypotheses and
+  // the older numerical diff approach, we needed a (changing, "moving") target probability (computed using an "outer" gradient descent).
+  // true requires that ensureParamAtomsAreMeasured is also true.
 
-  val initiallyResolveSingletonNogoods: Boolean = false
+  var resetsNumericalOuterLoopOnStagnation: Int = 10 // for useNumericalFiniteDifferences; if > 0, bag of samples models is cleared if
+  // there are no significant cost improvements although the threshold has not been reached yet, in order to escape a local minimum.
+  // Decremented after each reset.
 
-  val initCleanUpArrangeClarkNogoods: Boolean = true // leave at true
+  var numFinDiffShuffleProb: Double = 0.005d //0.005d  // used with useNumericalFiniteDifferences to avoid getting stuck in a local minimum. But
+  // if this value is too large, nontermination (because of non-convergence to _any_ minimum) can occur.
 
-  val omitSingletonBlits: Boolean = true // leave at true
+  var useCounters: Boolean = true // use nogood literal assignment counters instead of head/tail list-like approach
 
-  val defaultThreshold: Double = 0.01d // default cost function threshold. Lower value = more accurate results. Change as appropriate for problem and cost function(s)
+  var levelledRestarts: Boolean = false
+
+  var shuffleRandomVariables: Boolean = true
+
+  var initiallyResolveSingletonNogoods: Boolean = false
+
+  var initCleanUpArrangeClarkNogoods: Boolean = true // leave at true
+
+  var omitSingletonBlits: Boolean = true // leave at true
+
+  var defaultThreshold: Double = 0.01d // default cost function threshold. Lower value = more accurate results. Change as appropriate for problem and cost function(s)
   // To set the threshold, it is recommended to use console argument -t instead of changing this default.
 
   var absEliScoreInitVal: Float = 1.01f
@@ -165,15 +208,27 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
 
   var reviseScoreFact: Float = 0.6f // <= 1f; 1f = no rescaling
 
-  val scaleScoreUpdateFactOutOfRange: Float = 1.01f // factor for scaling eliScoreUpdateFact up/down in case the activity sum falls out of range
+  var scaleScoreUpdateFactOutOfRange: Float = 1.01f // factor for scaling eliScoreUpdateFact up/down in case the activity sum falls out of range
 
-  val singleLineProgress = true  // show progress (see above) at a fixed position in the console (doesn't work with Linux)
+  var singleLineProgress: Boolean = true // show progress (see above) at a fixed position in the console (doesn't work with Linux)
 
   var globalPassCache: Boolean = true
 
   var primeUnassigned: Boolean = true // always assumed false if globalPassCache = true
 
   var rearrangeEliPoolOnRestart: Boolean = false
+
+  var probabilisticFactPrefix: String = "_pr_"
+
+  var patFactPrefix: String = "_pat_"
+
+  var costFactPrefix: String = "_cost_"
+
+  var probabilisticFactProbDivider: Int = 10000 // since our solver (like most ASP solvers) doesn't support floating point numbers, we divide integers
+
+  val showProbsOfSymbols: Boolean = false  // shows the approx. probabilities of all non-auxiliary symbols after sampling (useful for debugging)
+
+  //NB: these default setting are overridden in Prob-LP's setSolverSettingDefaults()
 
   checkSettings
 
@@ -183,7 +238,8 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
 
     if (!(
       seedP == Seq(-1) || !diversify
-      ) || variableOrNogoodElimConfig._5)
+      ) || variableOrNogoodElimConfig._5 ||
+      (autoGenerateCostLinesForHypotheses && !ensureParamAtomsAreMeasured))
       delSAT.stomp(-5006)
 
   }
@@ -220,7 +276,7 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
 
         case ("restartTriggerConfPe", Array(v1, v2, v3)) => restartTriggerConfP = (v1.toInt, Seq(v2.toInt), Seq(v3.toDouble))
 
-        case ("rndmBranchP", Array(v@_*)) => rndmBranchP = v.map(_.toFloat)
+        case ("rndmBranchP", Array(v@_*)) => rndmBranchP = v.map(_.toDouble)
 
         case ("noHeapP", Array(v@_*)) => noHeapP = v.map(_.toInt)
 
@@ -235,6 +291,14 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
         case ("primeUnassigned", Array(v1)) => primeUnassigned = v1.toBoolean
 
         case ("rearrangeEliPoolOnRestart", Array(v1)) => rearrangeEliPoolOnRestart = v1.toBoolean
+
+        case ("autoGenerateCostLinesForHypotheses", Array(v1)) => autoGenerateCostLinesForHypotheses = v1.toBoolean
+
+        case ("probabilisticFactPrefix", Array(v1)) => probabilisticFactPrefix = v1.toString
+
+        case ("patFactPrefix", Array(v1)) => patFactPrefix = v1.toString
+
+        case ("costFactPrefix", Array(v1)) => costFactPrefix = v1.toString
 
         case ("maxBurstR", Array(v1)) => maxBurstR = v1.toInt
 
@@ -270,6 +334,16 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
 
         case ("maxSamplingIterations", Array(v1)) => maxSamplingIterations = v1.toInt
 
+        case ("emitClauses", Array(v1)) => emitClauses = v1.toBoolean
+
+        case ("shuffleRandomVariables", Array(v1)) => shuffleRandomVariables = v1.toBoolean
+
+        case ("useNumericalFiniteDifferences", Array(v1)) => useNumericalFiniteDifferences = v1.toBoolean
+
+        case ("numFinDiffShuffleProb", Array(v1)) => numFinDiffShuffleProb = v1.toDouble
+
+        case ("stopSamplingWhenCostStagnates", Array(v1)) => stopSamplingWhenCostStagnates = v1.toBoolean
+
         case (arg: String, Array(v1)) => delSAT.stomp(-1, "--solverarg " + arg + " " + v1)
 
       }
@@ -291,7 +365,28 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
   final case class Rule(headAtomsElis: Array[Eli],
                         bodyPosAtomsElis: Array[Eli],
                         bodyNegAtomsElis: Array[Eli],
-                        blit: Eli /*note: if omitSingletonBlits, this is an ordinary (non body) eli if there's just one body literal*/) {}
+                        blit: Eli /*note: if omitSingletonBlits, this is an ordinary (non body) eli if there's just one body literal*/) {
+
+    def toString(context: Preparation): String = {
+
+      import context._
+
+      assert(headAtomsElis.forall(isPosEli(_)))
+      assert(headAtomsElis.length == 1) // delSAT supports disjunctive rules, but by this point they are transformed already (also :- constraints)
+
+      if (bodyNegAtomsElis.isEmpty && bodyPosAtomsElis.isEmpty)
+        symbols(headAtomsElis.head) + "."
+      else {
+
+        symbols(headAtomsElis.head) + " :- " + bodyPosAtomsElis.map(symbols(_)).mkString(", ") +
+          ((if (bodyNegAtomsElis.isEmpty || bodyPosAtomsElis.isEmpty) "" else ", ") + bodyNegAtomsElis.map(nEli => "not " + symbols(negateNegEli(nEli))).mkString(", ")) + "."
+
+      }
+
+    }
+
+
+  }
 
   val newAspifEliOffsets = 5000000
 
@@ -314,11 +409,16 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
                                                     /*from aspif:*/ ArrayBuffer[Rule],
                                                     /*from DIMACS:*/ Array[IntArrayUnsafeS]],
                                                   noOfPosBlits: Int,
-                                                  externalAtomElis: Seq[Eli], // for aspif only
+                                                  externalAtomElis: Seq[Eli], // for aspif only - TODO: #external not implemented yet
+                                                  assumptionElis: Seq[Eli], // filtering assumptions
                                                   emptyBodyBlit: Int = -1,
                                                   directClauseNogoodsOpt: Option[Array[IntArrayUnsafeS]] = None /*for debugging/crosschecks*/ ,
                                                   clauseTokensOpt: Option[Array[Array[Int]]],
-                                                  symbolToEliOpt: Option[Predef.Map[String, Eli]]
+                                                  symbolToEliOpt: Option[Predef.Map[String, Eli]],
+                                                  additionalUncertainAtomsInnerCostsStrs: (Array[String], Array[String]) //additionalUncertainAtomsSeprtOpt: Option[UncertainAtomsSeprt]
+                                                  // ^ we allow probabilistic parameter atoms to be
+                                                  // stated as ASP facts too in the aspif, in addition to those provided using "pats" and "cost" lines.
+                                                  // They are treated as MSE inner cost functions.
                                                  ) {}
 
   type RandomGen = java.util.SplittableRandom
@@ -773,6 +873,5 @@ package object sharedDefs { // Last fine version (all tests passed, fast coins/s
     31 - Integer.numberOfLeadingZeros(x)
 
   }
-
 
 }

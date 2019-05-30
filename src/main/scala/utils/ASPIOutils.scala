@@ -105,13 +105,21 @@ package object aspIOutils {
 
     val sl = s.length
 
+    var inStr = false
+
     while (i < sl) {
 
-      if (s.charAt(i) == delim1 || s.charAt(i) == delim2) {
+      if(s.charAt(i) == '\"' && (i == 0 || s.charAt(i - 1) != '\\' || (i > 1 && s.charAt(i - 2) == '\\'))) {
+
+        inStr = !inStr
+
+        i += 1
+
+      } else if (!inStr && s.charAt(i) == delim1 || s.charAt(i) == delim2) {
 
         ll.+=(s.substring(index, i))
 
-        i = i + 1
+        i += 1
 
         while (s.charAt(i) == delim1 || s.charAt(i) == delim2) { // e.g., "token1  token2" gives ["token1", "token2"], not ["token1", " ", "token2"]
 
@@ -130,7 +138,9 @@ package object aspIOutils {
     if (s.last != delim1 && s.last != delim2)
       ll.+=(s.substring(index))
 
-    ll.result()
+    val r = ll.result()
+
+    r
 
   }
 

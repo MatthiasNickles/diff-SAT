@@ -13,6 +13,7 @@ package utils
 
 import sun.misc.Unsafe
 
+/** This is not a general-purpose unsafe class - designed for use in project delSAT only! */
 object FloatArrayUnsafeS {
 
   var unsafe: Unsafe = null
