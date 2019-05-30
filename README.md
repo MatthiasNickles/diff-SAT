@@ -2,7 +2,7 @@
 
 0.4.0  
 
-Major changes:
+Major changes compared to previous version:
 - Simplified usage; support for parameter atom and cost function specification using special logical predicates
 - Support for distinct sets of parameter atoms and measured atoms, enabling preliminary support for inductive/abductive inference.
 
@@ -37,7 +37,7 @@ _Differentiable Answer Set Programming_ (see "References" for details).
 delSAT can be used for plain SAT and Answer Set solving too, but has a wider range of use cases. For example: 
 
 - Associating differentiable cost functions (representing, e.g., probabilistic weights) with rules or individual Boolean variables.
-  This way, delSAT can be used as a "hybrid" inference engine which makes use of symbolic (e.g., logical, graph or other relational) 
+  This way, delSAT can be used as a "hybrid" inference engine which makes use of symbolic/logical, graph or other relational 
   knowledge as well as probabilistic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
   programming approaches, delSAT doesn't require any independence assumptions or other restrictions for random variables.
 
@@ -219,7 +219,7 @@ delSAT needs to be called with `--solverarg partDerivComplete true` and without 
 Any input logic program needs to be normalized and grounded into ASPIF format before sending it to delSAT. For this, 
 [Clingo](https://potassco.org/clingo/) can be used as a grounder (observe the required `--trans-ext=all` argument): 
     
-    clingo myProbLogicProg.lp --trans-ext=all --pre=ASPIF > myDelSATInputFile.ASPIF
+    clingo myProbLogicProg.lp --trans-ext=all --pre=aspif > myDelSATInputFile.aspif
 
 (Observe that Clingo is used here only to generate the proper ASPIF ground form from the input program; delSAT itself doesn't require Clingo 
 or any other external Answer set, SAT or SMT solver.)  
@@ -339,7 +339,7 @@ using, e.g., Clingo's (https://potassco.org/clingo/) preprocessing and grounding
 
 Example grounder call using [Clingo](https://potassco.org/clingo/) (observe the required `--trans-ext=all` argument): 
     
-    clingo myLogicProg.lp --trans-ext=all --pre=ASPIF > myDelSATInputFile.ASPIF
+    clingo myLogicProg.lp --trans-ext=all --pre=aspif > myDelSATInputFile.aspif
 
 (Observe that Clingo is only used to generate the proper ground form of the input program; delSAT itself doesn't require Clingo or any other external Answer set, SAT or SMT solver.)
  
