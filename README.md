@@ -175,7 +175,7 @@ Some examples are provided in the next sections.
 
 By default, delSAT stops when the specified cost threshold has been reached. The threshold is set with command line argument `-t` (default: 0.01).  
 With switch `--solverarg stopSamplingWhenCostStagnates true` sampling stops when the cost function value doesn't improve significantly anymore.
-This is useful in cases where the theoretical cost minimum isn't zero (i.e., there is actually no solution), but with this switch delSAT also becomes more easily stuck in a local minimum.
+This is useful in cases where the theoretical cost minimum isn't known or not zero, but with this switch delSAT also becomes more easily stuck in a local minimum.
 
 ##### Declaring cost functions and parameter atoms in a logic program #####
 
