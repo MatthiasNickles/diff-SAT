@@ -156,7 +156,7 @@ For deductive probabilistic inference, the set of measured atoms and the set of 
 the most efficient situtation. If the two sets aren't identical (as in weight learning, a form of inductive inference), delSAT currently uses a 
 finite difference method to approximate the partial derivatives wrt. to the parameter atoms (this
 might change in future versions). The latter approach needs to be activated by the user with command line switch `--solverarg useNumericalFiniteDifferences true`  
-Of course, if there are parameter atoms which aren't measured atoms, the cost function still needs to depend indirectly from the parameter atoms, as
+Of course, if there are parameter atoms which aren't measured atoms (i.e., don't appear in the cost function term), the cost function result still needs to depend indirectly from the parameter atoms, as
 otherwise searching the parameter space (numerical values of parameter variables) wouldn't have any effect on the loss.  
 
 It is possible to provide multiple cost functions in the input. These are combined into a single cost function 
