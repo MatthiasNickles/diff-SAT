@@ -371,15 +371,15 @@ the input to delSAT is similar to the normal representation format used for PSAT
 so consistent PSAT problem instances are in principle feedable into delSAT in order to sample satisfying probabilistic models. However, note that 
 PSAT is a different problem and delSAT doesn't check the satisfiability of probability assignments (except for the Boolean 
 satisfiability of "hard" clauses), at least not directly (see remarks about termination and non-termination further below).  
-Also note that delSAT's semantics is different from SSAT (Stochastic Boolean Satisfiability).
+Also note that delSAT's semantics and purpose is different from SSAT (Stochastic Boolean Satisfiability).
 
 - While in principle usable with any kind of differentiable cost function(s), MSE-style costs receive optimized treatment with 
 command line switch -mse. With that switch, list the instantiated inner MSE terms (of form (wi-f(vari))^2) 
 individually instead of providing a single long MSE formula. delSAT minimizes then the expression (innerCost1+...+innerCostN)/n.
 
 - delSAT is not (or only remotely) related to SGDB (Stochastic Gradient Descent Branching Heuristic, in Jia Hui Liang: 
-Machine Learning for SAT Solvers, 2018). Whereas SGDB provides a branching heuristics for finding decision variables which maximize 
-the probability of creating partial assignments leading to _conflicts_ (and thus improve regular SAT solving performance), 
+Machine Learning for SAT Solvers, 2018). Whereas SGDB provides a branching heuristics for finding decision variables which increase 
+the likeliness of creating partial assignments leading to _conflicts_ (inconsistent partial assignments) and thus improve regular SAT solving performance, 
 delSAT's gradient descent-style branching heuristics aims at minimizing a user-defined loss function.
 
 - For certain cost functions, you might need to provide switch --solverarg "partDerivComplete" "true" which activates a 
