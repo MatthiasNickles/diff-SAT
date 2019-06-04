@@ -28,18 +28,18 @@ Major changes compared to previous version:
 
 #### Synopsis ####
 
-delSAT ("&#8711;SAT") is a probabilistic Answer Set and SAT solver targeted at sampling, probabilistic inference and multimodel optimization. 
+delSAT is a probabilistic Answer Set and SAT solver targeted at _multimodel_ optimization, probabilistic inference and sampling. It is named after the del (aka nabla) operator &#8711;. 
 
 It uses automatic differentiation and a form of gradient descent to find an optimal multiset of models, given a 
-user-defined cost function (loss function) over weighted variables - using an approach called _Differentiable Satisfiability_ respectively 
-_Differentiable Answer Set Programming_ (see "References" for details). 
+user-defined cost function (loss function, multimodel objective function) over weighted variables - using an approach called _Differentiable Satisfiability_ respectively 
+_Differentiable Answer Set Programming_ (&#8706;SAT/ASP) - see "References" for details. 
 
 delSAT can be used for plain SAT and Answer Set solving too, but has a wider range of use cases. For example: 
 
-- Associating differentiable cost functions (representing, e.g., probabilistic weights) with rules or individual Boolean variables.
+- Associating differentiable cost functions (representing, e.g., smooth probabilistic weights) with rules, formulas or individual Boolean variables.
   This way, delSAT can be used as a "hybrid" inference engine which makes use of symbolic/logical, graph or other relational 
-  knowledge as well as probabilistic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
-  programming approaches, delSAT doesn't require any independence assumptions or other restrictions for random variables.
+  knowledge as well as probabilistic/subsymbolic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
+  approaches, delSAT doesn't require any independence assumptions or other restrictions for random variables.
 
 - Distribution-aware sampling of models (answer sets or satisfying truth assignments) 
    
@@ -56,7 +56,7 @@ a complete solver, based on CDNL (Conflict-Driven Nogood Learning, which is itse
 delSAT's output is a _sample_ (or UNSAT). A sample is here a multiset (bag) of sampled models, i.e., answer sets 
 (aka stable models) or satisfying truth assignments (aka witnesses) of the input propositional formula or answer set program.  
 
-The generated sample minimizes a user-defined arbitrary differentiable cost function down to a user-specified threshold. The threshold allows 
+The generated sample minimizes a user-defined arbitrary differentiable cost function down to a user-specified threshold or until the cost doesn't change anymore. The threshold allows 
 to trade-off accuracy against speed. 
 
 Such a sample is called a _multi-solution_ (or just _solution_ if there is no ambiguity) of the given cost function and the 
@@ -153,9 +153,11 @@ declared in the input. The set of measured atoms is implicitly given as the set 
 See examples further below.  
 
 For deductive probabilistic inference, the set of measured atoms and the set of parameter atoms are _identical_. This is
-the most efficient situtation. If the two sets aren't identical (as in weight learning), delSAT currently needs to use a 
-discretized form of numerical differentiation to approximate the partial derivatives wrt. to the parameter atoms (this
-might change in future versions). The latter approach needs to be activated by the user with command line switch `--solverarg useNumericalFiniteDifferences true`
+the most efficient situtation. If the two sets aren't identical (as in weight learning, a form of inductive inference), delSAT currently uses a 
+finite difference method to approximate the partial derivatives wrt. to the parameter atoms (this
+might change in future versions). The latter approach needs to be activated by the user with command line switch `--solverarg useNumericalFiniteDifferences true`  
+Of course, if there are parameter atoms which aren't measured atoms, the cost function still needs to depend indirectly from the parameter atoms, as
+otherwise searching the parameter space (numerical values of parameter variables) wouldn't have any effect on the loss.  
 
 It is possible to provide multiple cost functions in the input. These are combined into a single cost function 
 as a normalized sum.  
@@ -185,11 +187,12 @@ as cost/parameter atom definitions only if they appear as facts (at least after 
 
 - Fact `_pat_(a).` declares that atom `a` is a parameter atom. Multiple such facts can be stated.
 
-- Fact `_cost_(L).` declares that `L` is a term which defines a cost function (or a summand of the overall cost function in case multiple such
-cost facts are provided).  
+- Fact `_cost_("L").` declares that `L` is a term which defines a cost function (or a summand of the overall cost function in case multiple such
+cost facts are provided). The term needs to be provided as a string literal. 
 
 - Fact `_pr_(a, p).` declares that the probability of atom `a` is `p`/10000 (/10000 is required since standard ASP cannot directly deal with 
-fractions or real numbers). `_pr_(a, p)` is syntactic sugar for `_cost_((p/10000-f(a))^2)` and `_pat_(a)`.  Multiple `_pr_` facts can be provided.
+fractions or real numbers). `_pr_(a, p)` is syntactic sugar for `_cost_((p/10000-f(a))^2)` and `_pat_(a)`.  The divisor can be changed (see sharedDefs.scala). 
+Multiple `_pr_` facts can be provided.
 
 If of these only `_pr_` facts are provided (i.e., the problem is purely deductive-probabilistic), it is recommended to use delSAT
 with command line switch `-mse` which activates optimized handling of costs which have the form of inner MSE (Mean Squared Error) terms.  
@@ -221,11 +224,19 @@ Any input logic program needs to be normalized and grounded into ASPIF format be
     
     clingo myProbLogicProg.lp --trans-ext=all --pre=aspif > myDelSATInputFile.aspif
 
-(Observe that Clingo is used here only to generate the proper ASPIF ground form from the input program; delSAT itself doesn't require Clingo 
-or any other external Answer set, SAT or SMT solver.)  
+Observe that Clingo is used here only to generate the proper ASPIF ground form from the input program; delSAT itself doesn't require Clingo 
+or any other external Answer set, SAT or SMT solver.
 
-Probabilities can also be attached to entire rules; how this can be done is explained in the second document linked under [References](#references). (More tbw.)  
- 
+Probabilities (or more generally: parameter or measured variables) can also be associated with entire rules; how this can be done is explained in more detail in the second document linked under [References](#references). 
+The basic syntax pattern for probabilistic rules is  
+
+    aux:- l1, l2, ..., not h.
+    h :- l1, l2, ..., not aux.
+    _pr_(aux, 10000-pr).
+    
+where `pr` is the desired probability (multiplied with 10000) of rule `h :- l1, l2, ...` and the `l1` etc are literals.
+     
+Measured and parameter atoms don't need to overlap, as shown in the following logic program.  
 Example (2):  
 
     _pat_(h).
@@ -236,15 +247,15 @@ Example (2):
     e2 :- h.
     e3 :- h.
     
-    _cost_("1 - ((f(e1) * f(e2) * f(e3)))").
+    _cost_("1 - (f(e1) * f(e2) * f(e3))").
 
-With the code above, delSAT shall search for a probability of atom `h` such that the probabilities of atoms `e` 
-are maximized (the solution is a single model in this case).  
+With the code above, delSAT shall search for a probability of atom `h` (a _hypothesis_) such that the probabilities of example atoms `e`i 
+are maximized.  
 
 Here, the set of parameter atoms {`h`} is different from the set of measured atoms {`e1`, `e2`, `e3`}, so switch 
 `--solverarg useNumericalFiniteDifferences true` is required (this might change in a future version of delSAT).  
 
-More tbw.
+[More tbw.]
 
 ##### Declaring cost functions and parameter atoms on DIMACS or ASPIF level #####
 
@@ -353,7 +364,7 @@ might require a preceeding preprocessing and grounding step as explained above.
 - For using First-Order Logic (FOL) syntax (under stable model semantics) with delSAT, preprocess your first-order formulas using a tool such as [fol2asp](https://github.com/MatthiasNickles/fol2asp) or [F2LP](http://reasoning.eas.asu.edu/f2lp/).
 
 - delSAT is not a solver for (weighted) Max-SAT or Min-SAT, nor for finding individually optimal models or an optimality ranking of 
-individual models (soft constraints might be supported in a future version).
+individual models (these problem categories might be supported in a future version).
 
 - In the case where the costs express probabilities of propositional variables (or, by straightforward extension, formulas, as in PSAT), 
 the input to delSAT is similar to the normal representation format used for PSAT (probabilistic satisfiability problem) instances, 
@@ -385,8 +396,10 @@ case an increase of the threshold (specified with command line argument -t) shou
 probabilistic independence among random variables using option maxBurstR (see sharedDefs.scala) 
 
 - delSAT is not designed as a tool for sampling from the _uniform_ (or a near-uniform) distribution over models, but it supports model set diversification 
-with --solverarg "diversify" "true", and delSAT can also be used with arbitary discrete probabiltities (including uniform ones) associated with individual models 
+with `--solverarg diversify true`, and delSAT can also be used with arbitary discrete probabiltities (including uniform ones) associated with individual models 
 using suitable cost functions.
+
+- To increase the entropy of the sample, try 1) increasing the number of models in the sample and/or 2) switch `--solverarg diversify true` 
 
 - delSAT never guarantees that the models it prints are different from each other, as sampling is with replacement (so the resulting lists of
 answer sets or propositional models are not duplicate free enumerations as those returned by, e.g., MiniSat, clingo/clasp or smodels). 
