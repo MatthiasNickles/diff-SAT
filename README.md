@@ -32,7 +32,7 @@ delSAT is a probabilistic Answer Set and SAT solver targeted at _multimodel_ opt
 
 It uses automatic differentiation and a form of gradient descent to find an optimal multiset of models, given a 
 user-defined cost function (loss function, multimodel objective function) over weighted variables - using an approach called _Differentiable Satisfiability_ respectively 
-_Differentiable Answer Set Programming_ (&#8706;SAT/ASP) - see "References" for details. 
+_Differentiable Answer Set Programming_ (&#8706;SAT/ASP) - see [References](#references) for details. 
 
 delSAT can be used for plain SAT and Answer Set solving too, but has a wider range of use cases. For example: 
 
