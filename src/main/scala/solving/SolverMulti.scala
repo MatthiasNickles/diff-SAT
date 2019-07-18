@@ -631,7 +631,7 @@ class SolverMulti(prep: Preparation) {
 
         val freqInModels = sampledModels.count(_._1.contains(atomEli)).toDouble / sampledModels.length.toDouble
 
-        println("Pr(" + symbols(atomEli) + ") \u2248 " + freqInModels)
+        println("Pr(" + symbols(atomEli) + ") =(approx.) " + freqInModels)
 
       })
 
