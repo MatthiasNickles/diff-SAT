@@ -433,17 +433,18 @@ are subsituted by unweighted clauses which define the parameter variables which 
 
 ##### Performing ad hoc queries #####
 
-delSAT is just a solver and doesn't contain a query tool. However, there are three ways built into delSAT to do simple queries.   
+delSAT is just a solver and doesn't contain a query tool. However, there are three ways built into delSAT for performing simple queries.   
 
 Firstly, with switch `--solverarg showProbsOfSymbols true` delSAT prints the probabilities of all symbols (ground atoms) in the program,
 by summing up the probabilities (frequencies) of those models in the sample which contain the respective atom.  
 
-Secondly, Scala variable `addHocQueries` can be used to specify conjunctive queries in source code file `sharedDefs.scala`.   
+Secondly, Scala variables `addHocConjunctiveQueries` and `addHocDisjunctiveQueries` can be used to specify conjunctive or disjunctive queries, 
+see source code file `sharedDefs.scala`.   
 
 Thirdly, `_eval_("term","?")` is a pseudo-predicate which, if stated as a fact in the input program, makes delSAT instantiate `"?"` with
 the numerial value of the given term. The term has the same syntax as the terms in cost functions.   
 
-A simple example: The following probabilistic logic program specifies a conditional probability Pr(p|q) = 0.4 and uses _eval_ to let delSAT 
+A simple example: The following probabilistic logic program specifies a conditional probability Pr(p|q) = 0.4 and uses `_eval_` to let delSAT 
 (after grounding the program to ASPIF format) print the actual conditional probability (multiplied with 1000) achieved by sampling (ideally `_eval_("f(num)/f(q)",4000)`, with accuracy depending on threshold, e.g., `-t 0.001`).  
 
 Example (8):
