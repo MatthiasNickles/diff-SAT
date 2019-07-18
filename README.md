@@ -163,7 +163,7 @@ Input is accepted in various alternative forms:
 
 - ASPIF format with a list of parameter atoms and cost function terms appended to the ASPIF part
 
-Logic programs need to be normalized and grounded into ASPIF format before sending it to delSAT. For this, 
+Logic programs need to be normalized and grounded into ASPIF format before sending them to delSAT. For this, 
 [Clingo](https://potassco.org/clingo/) can be used as a grounder (observe the required `--trans-ext=all` argument): 
     
     clingo myProbLogicProg.lp --trans-ext=all --pre=aspif > myDelSATInputFile.aspif
