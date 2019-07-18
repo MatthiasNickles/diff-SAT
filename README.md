@@ -1,6 +1,5 @@
 ### Latest releases, changelog ###
 
-<sub>
 0.4.1
 
 - Support for clauses annotated with probabilities in DIMACS CNF (Probabilistic CNF)
@@ -19,9 +18,6 @@
 - Support for distinct sets of parameter atoms and measured atoms, enabling preliminary support for inductive/abductive inference.
 
 See [CHANGELOG.md](CHANGELOG.md) for details.
-
-</sub>
-
 
 ### delSAT ###
 
