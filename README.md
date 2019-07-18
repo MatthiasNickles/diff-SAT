@@ -47,8 +47,7 @@ delSAT uses an approach called _Differentiable Satisfiability_ respectively _Dif
 means SAT or ASP solving using automatic differentiation and a form of gradient descent to find an optimal multiset of models (interpretations), given a 
 user-defined cost function (loss function, multimodel objective function) over weighted Boolean variables (see [References](#references) for details). 
 
-Answer Set Programming (ASP) is a form of logic programming (with Prolog/Datalog-like syntax) mainly targeted at complex combinatorial search problems and relational knowledge representation. It is 
-closely related to SAT, constraint programming and Satisfiability Modulo Theories (SMT).  
+[Answer set programming](https://www.cs.utexas.edu/users/vl/papers/wiasp.pdf) is a form of logic programming, with a syntax similar to Prolog and Datalog. It is mainly oriented towards difficult (primarily NP-hard) combinatorial search problems and relational knowledge representation. ASP is closely related to SAT, constraint programming and Satisfiability Modulo Theories (SMT).  
 
 delSAT can be used for plain SAT and Answer Set solving too, but has a wider range of use cases. For example: 
 
@@ -66,7 +65,6 @@ delSAT can be used for plain SAT and Answer Set solving too, but has a wider ran
 
 The non-probabilistic part of the solver algorithm is, like the ASP and SAT solver clasp (https://github.com/potassco/clasp), 
 a complete solver, based on CDNL (Conflict-Driven Nogood Learning, which is itself based on CDCL (Conflict-Driven Clause Learning)).  
-[Answer set programming](https://www.cs.utexas.edu/users/vl/papers/wiasp.pdf) is a form of logic programming, with a syntax similar to Prolog, oriented towards difficult (primarily NP-hard) search problems. 
 
 #### Introduction ####
 
