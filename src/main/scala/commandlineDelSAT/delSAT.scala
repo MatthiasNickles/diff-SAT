@@ -224,7 +224,7 @@ fastutil (http://fastutil.di.unimi.it)
 
     -5002 -> ("assureIsTight=true; This will lead to non-termination or wrong results if the ASP program isn't tight.", WARNING),
 
-    -5003 -> ("Inner cost function(s) might not work with current approach to differentiation.\n Consider either argument\n --solverarg \"partDerivComplete\" \"true\" (if parameter atoms are measured)\n or --solverarg \"useNumFiniteDiff\" \"true\" (each without argument -mse).", WARNING),
+    -5003 -> ("Inner cost function(s) might not work with current approach to differentiation.\n Consider removing -mse (if present) and adding argument --solverarg partDerivComplete true", WARNING),
 
     -5004 -> ("Unsupported type of rule", ERROR),
 
