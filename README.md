@@ -33,7 +33,7 @@ See [CHANGELOG.md](CHANGELOG.md) for details.
 
 - [Miscellanea](#miscellanea)
 
-- [Author contact details](#author-contact-details)
+- [Author contact details, feedback](#author-contact-details)
 
 - [delSAT Copyright & License](#delsat-copyright--license)
 
@@ -526,7 +526,8 @@ using suitable cost functions.
 - To increase the entropy of the sample, increase the number of models in the sample using parameter `-n`. To further increase the sample entropy, switch `--solverarg diversify true` can be used, but it slows down sampling.
 To *de*crease models entropy, use switch `--solverarg diversifyLight false` with `-n -1`.
 
-- every individual model returned by delSAT is a precise model of the input clauses or rules, that is, not different from a model returned 
+- every individual model returned by delSAT is a precise model of the input clauses or rules (except in PCNF, where the weighted clauses are 
+syntactic sugar and are replaced with other clauses), that is, not different from a model returned 
 by a conventional SAT or ASP solver. Uncertainty is modelled only on the level of multiple models by identifying models with possible worlds 
 and their frequencies in the sample with possible world probabilities.  
 
