@@ -1,18 +1,19 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2019 Matthias Nickles
+  * Copyright (c) 2018,2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  * This code is licensed under MIT License (see file LICENSE for details)
   *
   */
 
 import java.io._
 
-import scala.collection.{Set, mutable}
+import sharedDefs.evalFactPrefix
 
+import scala.collection.{Set, mutable}
 import scala.language.postfixOps
 
 package object aspIOutils {
@@ -141,6 +142,22 @@ package object aspIOutils {
     val r = ll.result()
 
     r
+
+  }
+
+  def splitEvalSymbol(sym: Pred) = {
+
+    //val isTermQuoted = sym.startsWith(evalFactPrefix + "(\"")
+
+    val endOfTermIndex = sym.indexOf(",\"?\"")
+
+    // note that the term can be quoted or not
+
+    val term = sym.take(endOfTermIndex).stripPrefix(evalFactPrefix).dropWhile(c => c == '(' || c == '\"').stripSuffix("\"").replaceAll("\\s", "")
+
+    val remainder = sym.drop(endOfTermIndex + 4)
+
+    (term, remainder)
 
   }
 

@@ -5,11 +5,13 @@
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  * This code is licensed under MIT License (see file LICENSE for details)
   *
   */
 
-import commandline.delSAT
+import com.accelad.math.nilgiri.DoubleReal
+import com.accelad.math.nilgiri.autodiff.DifferentialFunction
+import commandlineDelSAT.delSAT
 import solving.Preparation
 import sun.misc.Unsafe
 import utils.{IntArrayUnsafeS, XORShift32}
@@ -22,42 +24,65 @@ package object sharedDefs {
 
   /* ================== Solver settings ==================
 
-   From the delSAT commandline, most of these can be set using
+   From the delSAT commandline, most of the default settings below can be changed using
    --solverarg "paramName" "paramValue"
+
+   Example: --solverarg maxSolverThreadsR 2
+
    Each --solverarg sets only a single parameter. If the param value is a Seq (that is, each solver thread uses
    one of the seq elements as parameter), list the element values separated by space characters.
-   For additional command line options defined elsewhere, see delSAT --help
 
-  Remark (see README.md for details):
-    For standard (deductive-probabilistic MSE-style) inference problems, run delSAT with arguments -mse --solverarg "partDerivComplete" "false"
-    For non-MSE style inference where all parameter atoms are measured atoms, use --solverarg "partDerivComplete" "true"
-    For induction/abduction-style or mixed inference, use --solverarg "useNumericalFiniteDifferences" "true"
+   Example: --solverarg freeEliSearchConfigsP "5 3 0 3 3 7"
+
+  For further commandline options (e.g., -n for specifying the size of the sample and -t to specify the accuracy threshold),
+  see delSAT --help
+
+  Remark (see user documentation for details):
+    For standard (deductive-probabilistic MSE-style) inference problems, it is recommended to run delSAT with arguments
+    -mse --solverarg "partDerivComplete" "false"
+    For non-MSE deduction-style inference where all parameter atoms are measured atoms, omit -mse and use --solverarg "partDerivComplete" "true"
   */
 
-  var showProgressStats: Boolean = true // deactivate progress statistics using --solverarg "showProgressStats" "false"
+  var showProgressStats: Boolean = true // switch off progress statistics using --solverarg showProgressStats false
 
   var diversify: Boolean = false // if true, multi solver aims at generating diverse models (i.e., models which are largely different from each other).
   // Might slow down solver. Might override other settings. NB: Doesn't ensure near-uniform sampling! Also, distribution-aware sampling still takes place if parameter atoms are present.
 
-  var useNumericalFiniteDifferences: Boolean = false // if true, a discrete form of numerical differentiation is used instead of symbolic or automatic differentiation
+  var diversifyLight: Boolean = true // similar but less pronounced effect compared with diversify, faster.
+
+  var allowNumFiniteDiff: Boolean = true // if true (=default since 0.4.1), a discrete form of numerical differentiation is used instead of symbolic or automatic differentiation
   // is used to compute the partial derivatives wrt. parameter atoms.
   // Slower and less accurate (you might need to increase the cost threshold with -t), but necessary if a parameter atom variable is
   // not part of the cost function term (or symbolic/automatic differentiation wrt some parameter atom variable isn't possible for some other reason).
 
-  var partDerivComplete: Boolean = false // false: variant of ILP'18 approach (less general, use with MSE-style inner cost expressions),
-  // true: variant of PLP'18 approach (more general)
+  var mixedScenario: Boolean = true // if true, even with allowNumFiniteDiff=true, autom. or symbol. differentiation is
+  // used where possible (i.e., for those parameter variables which are measured). With false, a purely numerical differentiation
+  // approach is used. True is typically - but not always! - much faster than false.
 
-  // Those of the following settings which end with "...P" are for parallel portfolio solving (see maxCompetingSolverThreadsR) - each
+  var partDerivComplete: Boolean = false // false: variant of ILP'18 approach (less general, use with MSE-style inner cost expressions),
+  // true: variant of PLP'18 approach (more general). Some non-MSE-style problems can only be solved with true here.
+
+  // Those of the following settings which end with "...P" are for parallel portfolio solving (see maxSolverThreadsR) - each
   // solver thread is assigned a combination of values from the respective Seq(...) sequences.
   // With a limited number of solver threads, values earlier in sequences get higher priority to be used by a solver thread.
   // Duplicate values allowed in Seqs. Number of values in Seq can be smaller than number of solver threads.
 
-  var maxCompetingSolverThreadsR: Int = -1 // for parallel portfolio solving with competing solver instances (number of threads not guaranteed)
+  var maxSolverThreadsR: Int = -1 // for parallel portfolio solving with competing solver instances (number of threads not guaranteed)
   // Keep in mind that the machine might decrease maximum core frequencies with more cores being utilized.
   // -x sets number of solver threads in dependency of number of cores, problem size and other factors. For small
   // problems with number of positive literals (ri.e., in case of SAT: #variables) smaller -x (with x < 0), only a single solver thread is launched.
   // NB: delSAT also spawns some parallelism from within individual solver threads, so normally no all cores should be occupied by solvers.
-  // Commandline: --solverarg maxCompetingSolverThreadsR n
+  // Commandline: --solverarg maxSolverThreadsR n
+
+  var stopSamplingOnStagnation: Boolean = false // if true, we stop sampling if the total cost doesn't significantly change anymore and
+  // at least the requested number of models (switch -n) have been generated. Useful mostly for learning weights. However, in
+  // deductive-probabilistic and mixed scenarios, cost stagnation before reaching the threshold can
+  // also indicate that the input is inconsistent (no solution exists)).
+
+  var innerCostReductFun = (r: DifferentialFunction[DoubleReal], x: DifferentialFunction[DoubleReal]) =>
+    new com.accelad.math.nilgiri.autodiff.Sum[DoubleReal](r, x) // if multiple cost terms are specified, this function is used to combine (reduce) them
+  // to a single total cost, after also dividing by the number of inner cost functions.
+  // Try, e.g., Product instead of Sum if the inner costs are terms referring only to example facts which are mutually probabilistically independent.
 
   var restartTriggerConfP: (Int, Seq[Int], Seq[Double]) = (2 /*0=no restarts, 1=fixed interval, 2=geometric, 3=Luby sequence*/ ,
     Seq(/*8,32*/ 16) /*initial no of conflicts before restarts*/ ,
@@ -65,11 +90,11 @@ package object sharedDefs {
   // ^ On the commandline, specify like this (no sequences allowed then): --solverarg "restartTriggerConf" "3 32 32"
 
   var freeEliSearchConfigsP: Seq[Int] = Seq(8, 3) // 0<= item <=11; parallel free eli search (branching) parameter configurations if
-  // maxCompetingSolverThreadsR != 0.
+  // maxSolverThreadsR != 0.
   // Sequence order determines priority. If there is just one portfolio solver thread (see below), head of tuple is used.
   // Duplicates allowed.
   // On the commandline, use like this: --solverarg "freeEliSearchConfigsP" "5 3 0 3 3 7" (observe that this doesn't specify the
-  // number of solver threads which has to be set using maxCompetingSolverThreadsR)
+  // number of solver threads which has to be set using maxSolverThreadsR)
 
   var seedP: Seq[Long] = Seq(-1l) // seed for random number generator in respective solver thread. Values != -1 cannot be used with diversify (see below).
 
@@ -106,7 +131,11 @@ package object sharedDefs {
   var localSolverParallelThresh: Int = 150 // = localSolverParallelThreshMax: off.
   // Used (with various factors and conditions, see code) as #items threshold for loop parallelization in various places (TODO: auto).
 
-  // ================== Experimental settings (use with care, may not work as expected):
+  var ignoreCostsWithUndefMeasuredAtoms: Boolean = false // if true, inner costs which contain undefined measured atoms are replaced with
+  // 0. However, an undefined measured atoms is likely undefined by mistake, so adding a spanning rule for it is normally better.
+
+  // ------ Experimental solver settings (most of these can also be set with --solverarg, if they are var's).
+  // Use with care, may not work as expected:
 
   var maxBurstR: Int = 0 //-5000 // If x>0, the x highest ranked unassigned parameter literals (random variables) are assigned in one go, which can
   // improve optimization performance if many parameter literals are probabilistically independent from each other. If x<0, the actual maxBurst will
@@ -161,28 +190,36 @@ package object sharedDefs {
   // if the emitted clauses are used with a SAT solver and the resulting model is an answer set (checkable in P time), it is an answer
   // set of the original answer set program.
 
-  var stopSamplingWhenCostStagnates: Boolean = false // if true, we stop sampling if the total cost doesn't significantly change anymore (useful
-  // mostly for learning weights. However, in deductive-probabilistic and mixed scenarios, cost stagnation before reaching the threshold can
-  // also indicate that the input is inconsistent (no solution exists)).
+  val stopAfterNModels: Boolean = false // if true, we stop sampling after the (using -n) specified number of models have been reached even if
+  // the accuracy threshold or cost stagnation has not been reached yet.
+
+  var stagnationTolDiv: Double = 100d  // the threshold used to determine whether there is cost stagnation is calculated as accuracy threshold / stagnationTolDiv
+
+  var enforceStopWhenSampleSizeReached: Boolean = false // with true and -n <n> with n > 0, sampling stops when the specified number of models has
+  // been reached even if the cost minimum has not been reached up to the given threshold.
 
   @volatile var emittedClauses = false
 
-  // ================== Internal settings:
+  // ------ Internal solver settings (most of these can also be set with --solverarg, if they are var's).
+  // Should normally not changed:
 
-  @deprecated var ensureParamAtomsAreMeasured: Boolean = false // if true, every parameter atom which isn't already a measured atom will
-  // be made a measured atom (that's only useful if the weight of the parameter atom needs to be _directly_ controlled during sampling.)
+  @deprecated var ensureParamAtomsAreMeasured: Boolean = false // Deprecated; if true, every parameter atom which isn't already a measured atom will
+  // be made a measured atom. That's only useful if the weight of the parameter atom needs to be _directly_ controlled during sampling.
   // Normally, autoGenerateCostLinesForHypotheses should be set to true in that case too.
 
-  @deprecated var autoGenerateCostLinesForHypotheses: Boolean = false // generates an inner MSE cost function for each parameter atom which isn't
+  @deprecated var autoGenerateCostLinesForHypotheses: Boolean = false // Deprecated; generates an inner MSE cost function for each parameter atom which isn't
   // part of any cost, that is, for hypothesis parameter atoms. The generated inner costs are required because for hypotheses and
   // the older numerical diff approach, we needed a (changing, "moving") target probability (computed using an "outer" gradient descent).
   // true requires that ensureParamAtomsAreMeasured is also true.
 
-  var resetsNumericalOuterLoopOnStagnation: Int = 10 // for useNumericalFiniteDifferences; if > 0, bag of samples models is cleared if
+  var ignoreParamIfNotMeasured: Boolean = false // if true, parameter atoms which aren't also measured atoms are ignored. Works
+  // only with allowNumFiniteDiff=true.
+
+  var resetsNumericalOuterLoopOnStagnation: Int = 10 // for allowNumFiniteDiff; if > 0, bag of samples models is cleared if
   // there are no significant cost improvements although the threshold has not been reached yet, in order to escape a local minimum.
   // Decremented after each reset.
 
-  var numFinDiffShuffleProb: Double = 0.005d //0.005d  // used with useNumericalFiniteDifferences to avoid getting stuck in a local minimum. But
+  var numFinDiffShuffleProb: Double = 0.0005d   // used with allowNumFiniteDiff to avoid getting stuck in a local minimum. But
   // if this value is too large, nontermination (because of non-convergence to _any_ minimum) can occur.
 
   var useCounters: Boolean = true // use nogood literal assignment counters instead of head/tail list-like approach
@@ -210,7 +247,7 @@ package object sharedDefs {
 
   var scaleScoreUpdateFactOutOfRange: Float = 1.01f // factor for scaling eliScoreUpdateFact up/down in case the activity sum falls out of range
 
-  var singleLineProgress: Boolean = true // show progress (see above) at a fixed position in the console (doesn't work with Linux)
+  var singleLineProgress: Boolean = true // show progress (see above) at a fixed position in the console (doesn't work with most Linux terminals)
 
   var globalPassCache: Boolean = true
 
@@ -224,9 +261,28 @@ package object sharedDefs {
 
   var costFactPrefix: String = "_cost_"
 
+  var evalFactPrefix: String = "_eval_"
+
   var probabilisticFactProbDivider: Int = 10000 // since our solver (like most ASP solvers) doesn't support floating point numbers, we divide integers
 
-  val showProbsOfSymbols: Boolean = false  // shows the approx. probabilities of all non-auxiliary symbols after sampling (useful for debugging)
+  var showProbsOfSymbols: Boolean = false // shows the approx. probabilities of all non-auxiliary symbols after sampling (useful for debugging)
+
+  var suppressAnswers: Boolean = false // if true, the resulting models aren't printed (useful if number of sampled models is large)
+
+  val addHocConjunctiveQueries: Seq[Seq[String]] = Seq() // note that this works only for symbols defined in rules - if x is an undefined predicate (or _eval_),
+  // addHocQueries cannot be used to deduce Pr(x) = 0.
+  /* Example: Seq( // conjunctions c of atoms whose marginal probabilities Pr(c) should be printed after sampling
+    Seq("flip(1)", "head(1)"),
+    Seq("flip(2)", "head(2)"),
+    Seq("flip(3)", "head(3)")
+    )
+    */
+
+  val addHocDisjunctiveQueries: Seq[Seq[String]] = Seq()  // analogous to addHocConjunctiveQueries, but each element is a clause (disjunction of literals)
+    /*Example (SAT mode): Seq(
+    Seq("1", "-2", "3"),
+    Seq("-1", "3")
+    ) */
 
   //NB: these default setting are overridden in Prob-LP's setSolverSettingDefaults()
 
@@ -239,10 +295,17 @@ package object sharedDefs {
     if (!(
       seedP == Seq(-1) || !diversify
       ) || variableOrNogoodElimConfig._5 ||
-      (autoGenerateCostLinesForHypotheses && !ensureParamAtomsAreMeasured))
+      (autoGenerateCostLinesForHypotheses && !ensureParamAtomsAreMeasured)) {
+
+      //System.out.println(seedP + "," + diversify + "," + variableOrNogoodElimConfig._5 + "," + autoGenerateCostLinesForHypotheses + ", " + ensureParamAtomsAreMeasured)
+
       delSAT.stomp(-5006)
 
+    }
+
   }
+
+  // ================== ================== ================== ================== ================== ================== ================== ==================
 
   val unsafeRefl = classOf[Unsafe].getDeclaredField("theUnsafe")
 
@@ -268,7 +331,7 @@ package object sharedDefs {
 
         case ("partDerivComplete", Array(v1)) => partDerivComplete = v1.toBoolean
 
-        case ("maxCompetingSolverThreadsR", Array(v1)) => maxCompetingSolverThreadsR = v1.toInt
+        case ("maxSolverThreadsR", Array(v1)) => maxSolverThreadsR = v1.toInt
 
         case ("freeEliSearchConfigsP", Array(v@_*)) => freeEliSearchConfigsP = v.map(_.toInt)
 
@@ -320,6 +383,8 @@ package object sharedDefs {
 
         case ("localSolverParallelThresh", Array(v1)) => localSolverParallelThresh = v1.toInt
 
+        case ("resetsNumericalOuterLoopOnStagnation", Array(v1)) => resetsNumericalOuterLoopOnStagnation = v1.toInt
+
         case ("ignoreParamVariablesR", Array(v1)) => ignoreParamVariablesR = v1.toBoolean
 
         case ("noOfUnfolds", Array(v1)) => noOfUnfolds = v1.toInt
@@ -338,11 +403,29 @@ package object sharedDefs {
 
         case ("shuffleRandomVariables", Array(v1)) => shuffleRandomVariables = v1.toBoolean
 
-        case ("useNumericalFiniteDifferences", Array(v1)) => useNumericalFiniteDifferences = v1.toBoolean
+        case ("allowNumFiniteDiff", Array(v1)) => allowNumFiniteDiff = v1.toBoolean
 
         case ("numFinDiffShuffleProb", Array(v1)) => numFinDiffShuffleProb = v1.toDouble
 
-        case ("stopSamplingWhenCostStagnates", Array(v1)) => stopSamplingWhenCostStagnates = v1.toBoolean
+        case ("stopSamplingOnStagnation", Array(v1)) => stopSamplingOnStagnation = v1.toBoolean
+
+        case ("stopAfterNModels", Array(v1)) => stopSamplingOnStagnation = v1.toBoolean
+
+        case ("mixedScenario", Array(v1)) => mixedScenario = v1.toBoolean
+
+        case ("ignoreCostsWithUndefMeasuredAtoms", Array(v1)) => ignoreCostsWithUndefMeasuredAtoms = v1.toBoolean
+
+        case ("showProbsOfSymbols", Array(v1)) => showProbsOfSymbols = v1.toBoolean
+
+        case ("suppressAnswers", Array(v1)) => suppressAnswers = v1.toBoolean
+
+        case ("diversifyLight", Array(v1)) => diversifyLight = v1.toBoolean
+
+        case ("ignoreParamIfNotMeasured", Array(v1)) => ignoreParamIfNotMeasured = v1.toBoolean
+
+        case ("stagnationTolDiv", Array(v1)) => stagnationTolDiv = v1.toDouble
+
+        case ("enforceStopWhenSampleSizeReached", Array(v1)) => enforceStopWhenSampleSizeReached = v1.toBoolean
 
         case (arg: String, Array(v1)) => delSAT.stomp(-1, "--solverarg " + arg + " " + v1)
 
@@ -372,7 +455,7 @@ package object sharedDefs {
       import context._
 
       assert(headAtomsElis.forall(isPosEli(_)))
-      assert(headAtomsElis.length == 1) // delSAT supports disjunctive rules, but by this point they are transformed already (also :- constraints)
+      assert(headAtomsElis.length == 1) // delSAT supports disjunctive rules, but by this point they are transformed (normalized) already (also any :- constraints)
 
       if (bodyNegAtomsElis.isEmpty && bodyPosAtomsElis.isEmpty)
         symbols(headAtomsElis.head) + "."
@@ -384,7 +467,6 @@ package object sharedDefs {
       }
 
     }
-
 
   }
 
@@ -415,7 +497,7 @@ package object sharedDefs {
                                                   directClauseNogoodsOpt: Option[Array[IntArrayUnsafeS]] = None /*for debugging/crosschecks*/ ,
                                                   clauseTokensOpt: Option[Array[Array[Int]]],
                                                   symbolToEliOpt: Option[Predef.Map[String, Eli]],
-                                                  additionalUncertainAtomsInnerCostsStrs: (Array[String], Array[String]) //additionalUncertainAtomsSeprtOpt: Option[UncertainAtomsSeprt]
+                                                  additionalUncertainAtomsInnerCostsStrs: (Array[String], Array[String], Array[String] /*<-original _eval_ terms*/ ) //additionalUncertainAtomsSeprtOpt: Option[UncertainAtomsSeprt]
                                                   // ^ we allow probabilistic parameter atoms to be
                                                   // stated as ASP facts too in the aspif, in addition to those provided using "pats" and "cost" lines.
                                                   // They are treated as MSE inner cost functions.
@@ -424,6 +506,58 @@ package object sharedDefs {
   type RandomGen = java.util.SplittableRandom
 
   val rngGlobal: java.util.Random = new XORShift32() // Not normally to be used. Also not thread-safe. We use different random number generators within the solver threads.
+
+  val rngGlobalRG = new java.util.SplittableRandom()
+
+  @inline def shuffleArray[A](array: mutable.Seq[A], rg: RandomGen, to: Int = -1): Unit = { // plain Fisher-Yates shuffle on init of array
+
+    if (to < 0 && array.length >= 16384)
+      shuffleArrayBlocked[A](array, rg)
+    else {
+
+      val l = if (to < 0) array.length - 1 else to
+
+      var i = l
+
+      while (i > 0) {
+
+        val j = rg.nextInt(i + 1)
+
+        val temp = array(j)
+
+        array(j) = array(i)
+
+        array(i) = temp
+
+        i -= 1
+
+      }
+
+    }
+
+  }
+
+  @inline def shuffleArrayUnsafe(array: IntArrayUnsafeS, rg: /*java.util.Random*/ RandomGen, to: Long = -1): Unit = { // plain Fisher-Yates shuffle
+
+    val l = if (to < 0l) array.sizev - 1 else to
+
+    var i: Long = l
+
+    while (i > 0l) {
+
+      val j = rg.nextInt(i.toInt + 1)
+
+      val temp = array.get(j)
+
+      array.update(j, array.get(i))
+
+      array.update(i, temp)
+
+      i -= 1
+
+    }
+
+  }
 
   @inline def shuffleArrayBlocked[A](arr: mutable.Seq[A], rg: RandomGen): Unit = { // Blocked Fisher-Yates shuffle
     // (method code based on public domain code from https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog)
@@ -475,56 +609,6 @@ package object sharedDefs {
     while (i > 1) {
 
       swap(i - 1, rg.nextInt(i))
-
-      i -= 1
-
-    }
-
-  }
-
-  @inline def shuffleArray[A](array: mutable.Seq[A], rg: RandomGen, to: Int = -1): Unit = { // plain Fisher-Yates shuffle on init of array
-
-    if (to < 0 && array.length >= 16384)
-      shuffleArrayBlocked[A](array, rg)
-    else {
-
-      val l = if (to < 0) array.length - 1 else to
-
-      var i = l
-
-      while (i > 0) {
-
-        val j = rg.nextInt(i + 1)
-
-        val temp = array(j)
-
-        array(j) = array(i)
-
-        array(i) = temp
-
-        i -= 1
-
-      }
-
-    }
-
-  }
-
-  @inline def shuffleArrayUnsafe(array: IntArrayUnsafeS, rg: /*java.util.Random*/ RandomGen, to: Long = -1): Unit = { // plain Fisher-Yates shuffle
-
-    val l = if (to < 0l) array.sizev - 1 else to
-
-    var i: Long = l
-
-    while (i > 0l) {
-
-      val j = rg.nextInt(i.toInt + 1)
-
-      val temp = array.get(j)
-
-      array.update(j, array.get(i))
-
-      array.update(i, temp)
 
       i -= 1
 
@@ -685,7 +769,6 @@ package object sharedDefs {
       l = buffer.length
 
     }
-
 
   }
 

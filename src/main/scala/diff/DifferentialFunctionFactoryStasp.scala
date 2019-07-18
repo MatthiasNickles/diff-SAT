@@ -1,11 +1,11 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2019 Matthias Nickles
+  * Copyright (c) 2018,2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  * This code is licensed under MIT License (see file LICENSE for details)
   *
   */
 

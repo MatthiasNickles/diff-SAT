@@ -1,11 +1,11 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2019 Matthias Nickles
+  * Copyright (c) 2018,2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  * This code is licensed under MIT License (see file LICENSE for details)
   *
   */
 
@@ -13,7 +13,6 @@ package utils
 
 import it.unimi.dsi.fastutil.ints.IntArrayList
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only. */
 object IntArrayUnsafeS {
 
   val alignment: Int = 128 // sharedDefs.unsafe.pageSize

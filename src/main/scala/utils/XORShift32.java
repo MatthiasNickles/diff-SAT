@@ -1,3 +1,14 @@
+/**
+ * delSAT
+ *
+ * Copyright (c) 2018,2019 Matthias Nickles
+ *
+ * matthiasDOTnicklesATgmxDOTnet
+ *
+ * This code is licensed under MIT License (see file LICENSE for details)
+ *
+ */
+
 package utils;
 
 import java.util.Optional;

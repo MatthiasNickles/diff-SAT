@@ -1,15 +1,18 @@
-/*
- * Parser for DIMACS-CNF in delSAT. Not a general-purpose DIMACS-CNF parser - designed for use within delSAT only.
- *
- * Copyright (c) 2018, 2019 Matthias Nickles.
- *
- * THIS CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
- *
- */
+/**
+  * delSAT
+  *
+  * Copyright (c) 2018,2019 Matthias Nickles
+  *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * This code is licensed under MIT License (see file LICENSE for details)
+  *
+  */
 
 package parsing
 
-import commandline.delSAT
+import aspIOutils.Pred
+import commandlineDelSAT.delSAT
 import it.unimi.dsi.fastutil.ints.IntArrayList
 import sharedDefs._
 import utils.IntArrayUnsafeS
@@ -18,7 +21,10 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 /**
+  * Parser for DIMACS-CNF and PCNF (probabilistic CNF). Not a general-purpose DIMACS-CNF parser - designed for use within delSAT only. Work in progress.
+  *
   * @author Matthias Nickles
+  *
   */
 object DIMACPlainSparser {
 
@@ -26,7 +32,7 @@ object DIMACPlainSparser {
 
     val dimacsParseTimerNs = System.nanoTime()
 
-    val headerStartIt: Option[Eli] = "(\\A|\\n)\\s*p\\s+cnf\\s+".r.findFirstMatchIn(dimacs_CNF_Pr).map(_.start)
+    val headerStartIt: Option[Eli] = "(\\A|\\n)\\s*p\\s+p?cnf\\s+".r.findFirstMatchIn(dimacs_CNF_Pr).map(_.start)
 
     if (headerStartIt.isEmpty)
       delSAT.stomp(-100)
@@ -37,70 +43,28 @@ object DIMACPlainSparser {
 
     val hStr = hStr0.dropWhile(!_.isDigit).trim
 
+    val probabilisticCNF = hStr0.contains("pcnf")
+
     val noOfVarsR = hStr.takeWhile(_.isDigit).toInt
 
-    val noOfVars = noOfVarsR // we could simplify some operation if we would use next2Pow(noOfVarsR) or next2Pow(noOfVarsR * 2) / 2, but
+    var noOfVars = noOfVarsR // TODO: we might simplify some operation if we would use next2Pow(noOfVarsR) or next2Pow(noOfVarsR * 2) / 2, but
     // this would not necessarily be faster.
 
-    val noOfClauses = hStr.dropWhile(_.isDigit).trim.takeWhile(_.isDigit).toInt
+    var noOfClauses = hStr.dropWhile(_.isDigit).trim.takeWhile(_.isDigit).toInt // not considering yet probabilistic clauses as these will be replaced by extra clauses
 
     val headerEnd = dimacs_CNF_Pr.indexOf("\n", headerStart + 1)
-
-    val s = /*Example: """
-      12 345 -5  -76 0
-        -40  33 -2  1   0
-      8 0
-       1 2 77
-      -234 9  0
-      0
-    """*/ if (headerEnd == -1) "" else dimacs_CNF_Pr.substring(headerEnd)
-
-    val symbols = (1 to noOfVars).map(_.toString).to[ArrayBuffer]
-
-    val noOfPosAtomElis = symbols.length
 
     val genBodyLitsFromSATClauses: Double = 0d // TODO; must leave 0d for now. Experimentally generates pseudo-"body literals" (blits) in SAT mode, for x% of all
     // variables. If 1d, we completely replace the original clause nogoods with an equivalent theory using blits.
     // Can easily blow up space.
 
-    val clauses = Array.ofDim[Array[Int]](noOfClauses)
-
-    val extraNogoods = ArrayBuffer[IntArrayUnsafeS]()
-
-    val headTokensForExtraNogoods: mutable.Set[Int] = if (genBodyLitsFromSATClauses == 1d)
-      ((-noOfVars to -1) ++ (1 to noOfVars)).to[mutable.Set]
-    else if (genBodyLitsFromSATClauses > 0d) { // TODO: genBodyLitsFromSATClauses > 0 not properly working yet (test e.g. with 0.5 and hanoi5)
-
-      assert(false, "Internal error")
-
-      Seq.fill((noOfVars.toDouble * genBodyLitsFromSATClauses).toInt)({
-
-        val rvar = rngGlobal.nextInt(noOfVars) + 1
-
-        if (rngGlobal.nextBoolean())
-          rvar
-        else
-          -rvar
-
-      }).to[mutable.HashSet]
-    } else
-      mutable.HashSet[Int]()
-
-    val minClauseLengthForExtraNogoods = 0
-
-    var noOfBlits = 0 // unfortunately we need to determine this value before we can start generating nogoods
-
-    val directClauseNogoods = Array.ofDim[IntArrayUnsafeS](noOfClauses) // for debugging purposes only
-
-    var clauseInc = 0
-
-    delSAT.log("dimacsParseTimerNs 0: " + timerToElapsedMs(dimacsParseTimerNs) + " ms")
-
-    val llc = new IntArrayList(128)
+    var s = if (headerEnd == -1) "" else dimacs_CNF_Pr.substring(headerEnd)
 
     var i = 0
 
-    val sl = s.length
+    var sl = s.length
+
+    val llc = new IntArrayList(1024)
 
     @inline def skipSpaceAndComment = {
 
@@ -119,6 +83,177 @@ object DIMACPlainSparser {
 
     }
 
+    val extraClausesFromProbClauses = ArrayBuffer[IntArrayList]() // generated clauses from desugared probabilistically weighted clauses.
+    // Observe that these extra clauses replace the weighted clauses.
+
+    val patsFromProbabilisticClauses = ArrayBuffer[Pred]()
+
+    val costsFromProbabilisticClauses = ArrayBuffer[String]()  // format cost (probability-f(vx))^2
+
+    if (probabilisticCNF) { // first pass desugars any probabilistic clauses ------------------------------------------
+
+      assert(genBodyLitsFromSATClauses == 0d)
+
+      // we need to amend s (removal of weighted clauses), noOfClauses, noOfVars.
+      // Later, add nogoods from generated clauses and add generated clauses to directClauseNogoods. Also, _pat_ and _cost_.
+
+      skipSpaceAndComment
+
+      var index = i
+
+      var isWeightedClause = false
+
+      var weight = ""
+
+      while (i < sl) {
+
+        var isWeight = false
+
+        while (i < sl && s(i) > ' ') {
+
+          if (s(i) == '.')
+            isWeight = true
+
+          i += 1
+
+        }
+
+        var intVal = 0
+
+        if (isWeight) {
+
+          isWeightedClause = true
+
+          weight = s.substring(index, i)
+
+          if(weight(0) == '.')
+            weight = "0" + weight  // (otherwise the resulting cost function couldn't be parsed)
+
+        } else {
+
+          var mult = if (s(index) == '-') {
+
+            index += 1
+
+            -1
+
+          } else 1
+
+          var il = i
+
+          do {
+
+            il -= 1
+
+            intVal += (s(il) - '0') * mult
+
+            mult *= 10
+
+          } while (il > index)
+
+        }
+
+        if (intVal == 0 && !isWeight) { // end of clause
+
+          if (isWeightedClause) {
+
+            noOfVars += 1
+
+            val clauseHandleVar = noOfVars
+
+            patsFromProbabilisticClauses.append(noOfVars.toString)
+
+            costsFromProbabilisticClauses.append("(" + weight + "-f(v" + noOfVars + "))^2")
+
+            val extraClauseA = llc.clone  // first value is 0 (the intValue 0 which was added instead of the weight)
+
+            extraClauseA.set(0, -clauseHandleVar)
+
+            val extraClausesB = Array.ofDim[IntArrayList](llc.size - 1)
+
+            var k = 1
+
+            while (k < llc.size) {
+
+              val extraClauseB = new IntArrayList(2)
+
+              extraClauseB.add(clauseHandleVar)
+
+              extraClauseB.add(-llc.getInt(k))
+
+              extraClausesB(k - 1) = extraClauseB
+
+              k += 1
+
+            }
+
+            extraClausesFromProbClauses.append(extraClauseA)
+
+            extraClausesFromProbClauses.appendAll(extraClausesB)
+
+            noOfClauses += extraClausesB.length + 1/*extraClauseA*/ - 1/*the annotated clause*/
+
+            isWeightedClause = false
+
+            weight = ""
+
+          }
+
+          llc.clear()
+
+        } else
+          llc.add(intVal)
+
+        skipSpaceAndComment
+
+        index = i
+
+      }
+
+    } // -------------------------------------------------------------------------------------------------------------
+
+    val symbols = (1 to noOfVars).map(_.toString).to[ArrayBuffer]
+
+    var noOfPosAtomElis = symbols.length
+
+    val clausesForChecks = Array.ofDim[Array[Int]](noOfClauses) // for debugging purposes and the optional blit generation only
+
+    val extraNogoodsForBlits = ArrayBuffer[IntArrayUnsafeS]()
+
+    val headTokensForExtraNogoods: mutable.Set[Int] /*for genBodyLitsFromSATClauses only*/ = if (genBodyLitsFromSATClauses == 1d)
+      ((-noOfVars to -1) ++ (1 to noOfVars)).to[mutable.Set]
+    else if (genBodyLitsFromSATClauses > 0d) { // TODO: genBodyLitsFromSATClauses > 0 not properly working yet (test e.g. with 0.5 and hanoi5)
+
+      assert(false, "Internal error")
+
+      Seq.fill((noOfVars.toDouble * genBodyLitsFromSATClauses).toInt)({
+
+        val rvar = rngGlobal.nextInt(noOfVars) + 1
+
+        if (rngGlobal.nextBoolean())
+          rvar
+        else
+          -rvar
+
+      }).to[mutable.HashSet]
+
+    } else
+      mutable.HashSet[Int]()
+
+    val minClauseLengthForExtraNogoods = 0 // for genBodyLitsFromSATClauses only*
+
+    var noOfBlits = 0 // for genBodyLitsFromSATClauses only; unfortunately we need to determine this value before we can start generating nogoods
+
+    val directClauseNogoods = Array.ofDim[IntArrayUnsafeS](noOfClauses)
+
+    var clauseInc = 0
+
+    delSAT.log("dimacsParseTimerNs 0: " + timerToElapsedMs(dimacsParseTimerNs) + " ms")
+
+    i = 0
+
+    sl = s.length
+
     skipSpaceAndComment
 
     var index = i
@@ -128,71 +263,105 @@ object DIMACPlainSparser {
     else
       eli - noOfPosAtomElis
 
-    while (i < sl) {
+    @inline def generateClauseNogood(llc: IntArrayList, clauseNogoodIndex: Int) = {
 
-      while (i < sl && s(i) > ' ')
+      if(clauseInc >= noOfClauses)
+        delSAT.stomp(-100, "Wrong number of clauses specified in header")
+
+      directClauseNogoods(clauseInc) = new IntArrayUnsafeS(llc.size(), aligned = false)
+
+      var i = 0
+
+      while (i < llc.size) {
+
+        val token = llc.getInt(i)
+
+        directClauseNogoods(clauseNogoodIndex).update(i, if (token < 0) (-token) - 1 else negateEliWithoutBlis(token - 1))
+
         i += 1
 
-      var intVal = 0
+      }
 
-      var mult = if (s(index) == '-') {
+    }
 
-        index += 1
+    var ignoreClause = false
 
-        -1
+    // Second pass (or first pass in case there have been no weighted clauses):
 
-      } else 1
+    while (i < sl) {
 
-      var il = i
+      while (i < sl && s(i) > ' ') {
 
-      do {
+        if(s(i) == '.') {  // we are inside a weighted clause. Ignore.
 
-        il -= 1
+          ignoreClause = true
 
-        intVal += (s(il) - '0') * mult
-
-        mult *= 10
-
-      } while (il > index)
-
-      if (intVal == 0) {
-
-        if (genBodyLitsFromSATClauses > 0d || delSAT.enforceSanityChecks) {
-
-          clauses(clauseInc) = llc.toIntArray
-
-          lazy val noOfHeadsForPseudoRule = clauses(clauseInc).count(headTokensForExtraNogoods.contains(_))
-
-          if (genBodyLitsFromSATClauses > 0d && clauses(clauseInc).length >= minClauseLengthForExtraNogoods &&
-            noOfHeadsForPseudoRule > 0)  // TODO: genBodyLitsFromSATClauses is experimental; not fully tested yet
-            noOfBlits += noOfHeadsForPseudoRule
+          while(i < sl-1 && !(s(i) == '0' && s(i-1).isWhitespace && s(i+1).isWhitespace))
+            i += 1
 
         }
 
-        if (genBodyLitsFromSATClauses == 0d) { // this branch works only if there are not blits:
+        i += 1
 
-          directClauseNogoods(clauseInc) = new IntArrayUnsafeS(llc.size(), aligned = false)
+      }
 
-          var i = 0
+      if(!ignoreClause) {
 
-          while (i < llc.size) {
+        var intVal = 0
 
-            val token = llc.getInt(i)
+        var mult = if (s(index) == '-') {
 
-            directClauseNogoods(clauseInc).update(i, if (token < 0) (-token) - 1 else negateEliWithoutBlis(token - 1))
+          index += 1
 
-            i += 1
+          -1
+
+        } else 1
+
+        var il = i
+
+        do {
+
+          il -= 1
+
+          intVal += (s(il) - '0') * mult
+
+          mult *= 10
+
+        } while (il > index)
+
+        if (intVal == 0) { // end of clause
+
+          {
+
+            if (genBodyLitsFromSATClauses > 0d || delSAT.enforceSanityChecks) {
+
+              clausesForChecks(clauseInc) = llc.toIntArray // we use this just for a debugging-related check after solving
+
+              lazy val noOfHeadsForPseudoRule = clausesForChecks(clauseInc).count(headTokensForExtraNogoods.contains(_))
+
+              if (genBodyLitsFromSATClauses > 0d && clausesForChecks(clauseInc).length >= minClauseLengthForExtraNogoods &&
+                noOfHeadsForPseudoRule > 0) // TODO: genBodyLitsFromSATClauses is experimental; not fully tested yet
+                noOfBlits += noOfHeadsForPseudoRule
+
+            }
+
+            if (genBodyLitsFromSATClauses == 0d) { // this branch works only if there aren't any blits:
+
+              generateClauseNogood(llc = llc, clauseNogoodIndex = clauseInc)
+
+            }
+
+            clauseInc += 1
 
           }
 
-        }
+          llc.clear()
 
-        clauseInc += 1
-
-        llc.clear()
+        } else
+          llc.add(intVal)
 
       } else
-        llc.add(intVal)
+        ignoreClause = false
 
       skipSpaceAndComment
 
@@ -200,14 +369,27 @@ object DIMACPlainSparser {
 
     }
 
-    if(!directClauseNogoods.isEmpty && directClauseNogoods.last == null)
+    extraClausesFromProbClauses.foreach((clause: IntArrayList) => {
+
+      generateClauseNogood(llc = clause, clauseNogoodIndex = clauseInc)
+
+      if(delSAT.enforceSanityChecks)
+        clausesForChecks(clauseInc) = clause.toIntArray // we use this just for a debugging-related check after solving
+
+      clauseInc += 1
+
+    })
+
+    if (!directClauseNogoods.isEmpty && directClauseNogoods.last == null)
       delSAT.stomp(-100, "Fewer than the specified number of clauses found in DIMACS file")
 
     if (genBodyLitsFromSATClauses > 0d) { // in case we generate body literals (blits, experimental) we need a second pass:
 
+      assert(!probabilisticCNF)
+
       // TODO: genBodyLitsFromSATClauses is experimental; not fully tested yet
 
-      val posNegEliBoundary = noOfPosAtomElis + noOfBlits
+      val posNegEliBoundary = noOfPosAtomElis + noOfBlits // not necessarily the final boundary
 
       @inline def isPosEli(eli: Eli) = eli < posNegEliBoundary
 
@@ -226,22 +408,22 @@ object DIMACPlainSparser {
 
       while (i < clauseInc) {
 
-        val nogood = clauses(i).map(tokenToNegatedEli(_))
+        val nogood = clausesForChecks(i).map(tokenToNegatedEli(_))
 
         directClauseNogoods(i) = new IntArrayUnsafeS(nogood, aligned = false)
 
         if (nogood.length >= minClauseLengthForExtraNogoods) { // Experimentally and optionally (inactive by default), we generate further nogoods
           // (besides the directClauseNogoods) which define or contain body literals. For
           // approach to nogoods with body literals see Gebser et al: Conflict-Driven Answer Set Solving (and also see
-          // analogous code in Preparation.scala for nogood generation from real (ASP) rules)
+          // analogous code in Preparation.scala for nogood generation from ASP rules)
 
-          val headTokensForPseudoRules = clauses(i).filter(headTokensForExtraNogoods.contains(_))
+          val headTokensForPseudoRules = clausesForChecks(i).filter(headTokensForExtraNogoods.contains(_))
 
           headTokensForPseudoRules.map(headToken => {
 
             val headEli: Eli = tokenToEli(headToken)
 
-            val bodyElisNegated: Array[Eli] = clauses(i).filterNot(_ == headEli).map(token => negateEli(tokenToEli(token)))
+            val bodyElisNegated: Array[Eli] = clausesForChecks(i).filterNot(_ == headEli).map(token => negateEli(tokenToEli(token)))
 
             val blitEli = currentBlit
 
@@ -253,11 +435,11 @@ object DIMACPlainSparser {
 
             val deltaBeta = new IntArrayUnsafeS(bodyElisNegated.:+(negateEli(blitEli)), aligned = false)
 
-            extraNogoods ++= bigDeltaBeta
+            extraNogoodsForBlits ++= bigDeltaBeta
 
-            extraNogoods += deltaBeta
+            extraNogoodsForBlits += deltaBeta
 
-            extraNogoods += new IntArrayUnsafeS(Array(negateEli(headEli), blitEli), aligned = false)
+            extraNogoodsForBlits += new IntArrayUnsafeS(Array(negateEli(headEli), blitEli), aligned = false)
 
           })
 
@@ -273,29 +455,29 @@ object DIMACPlainSparser {
 
     assert(noOfClauses == directClauseNogoods.length)
 
-    assert(noOfClauses == clauses.length)
+    assert(noOfClauses == clausesForChecks.length)
 
     if (delSAT.verbose)
       println("Parsing time: " + timerToElapsedMs(dimacsParseTimerNs) + " ms")
 
     {
 
-      if (extraNogoods.isEmpty)
+      if (extraNogoodsForBlits.isEmpty)
         AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
           rulesOrClauseNogoods = Right(directClauseNogoods),
           noOfPosBlits = noOfBlits,
           externalAtomElis = Seq(),
           assumptionElis = Seq(),
           directClauseNogoodsOpt = Some(directClauseNogoods.clone() /*otherwise this would get modified in-place*/),
-          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /* we retain these just for debugging (cross-check) purposes */,
+          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clausesForChecks) else None /* we retain these just for debugging (cross-check) purposes */ ,
           symbolToEliOpt = None,
-          additionalUncertainAtomsInnerCostsStrs = (Array[String](), Array[String]()))
+          additionalUncertainAtomsInnerCostsStrs = (patsFromProbabilisticClauses.toArray, costsFromProbabilisticClauses.toArray, Array[String]()))
       else {
 
         if (delSAT.verbose)
-          println("#extra nogoods with blits generated: " + extraNogoods.length)
+          println("#extra nogoods with blits generated: " + extraNogoodsForBlits.length)
 
-        val fullClauseNogoods = if (genBodyLitsFromSATClauses == 1d) extraNogoods.toArray else (extraNogoods ++ directClauseNogoods).toArray
+        val fullClauseNogoods = if (genBodyLitsFromSATClauses == 1d) extraNogoodsForBlits.toArray else (extraNogoodsForBlits ++ directClauseNogoods).toArray
 
         AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,
           rulesOrClauseNogoods = Right(fullClauseNogoods),
@@ -303,9 +485,9 @@ object DIMACPlainSparser {
           externalAtomElis = Seq(),
           assumptionElis = Seq(),
           directClauseNogoodsOpt = Some(fullClauseNogoods.clone() /*otherwise this would get modified in-place*/),
-          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clauses) else None /*we retain these just for debugging (cross-check) purposes*/,
+          clauseTokensOpt = if (delSAT.enforceSanityChecks) Some(clausesForChecks) else None /*we retain these just for debugging (cross-check) purposes*/ ,
           symbolToEliOpt = None,
-          additionalUncertainAtomsInnerCostsStrs = (Array[String](), Array[String]()))
+          additionalUncertainAtomsInnerCostsStrs = (patsFromProbabilisticClauses.toArray, costsFromProbabilisticClauses.toArray, Array[String]()))
 
       }
 

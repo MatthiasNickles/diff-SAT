@@ -1,11 +1,11 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2019 Matthias Nickles
+  * Copyright (c) 2018,2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  * This code is licensed under MIT License (see file LICENSE for details).
   *
   */
 
@@ -19,10 +19,10 @@ import java.util.{Map, Optional}
 import aspIOutils._
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, Variable}
-import commandline.delSAT._
+import commandlineDelSAT.delSAT._
 import it.unimi.dsi.fastutil.ints._
 import it.unimi.dsi.fastutil.objects.ObjectArrayList
-import sharedDefs._
+import sharedDefs.{allowNumFiniteDiff, _}
 import sun.misc.Contended
 import utils._
 
@@ -45,7 +45,8 @@ class SolverMulti(prep: Preparation) {
     * Computes both the total cost and all inner costs (the sub-costs which add up to the total cost).
     * Call only after updating the measured atom frequencies.
     *
-    * Notice that this function does not update the costs with the current counts of measured atoms in the sample.
+    * Notice that this function does _not_ update the costs with the current counts of measured atoms in the sample, so
+    * before calling this function it needs to be ensured that the values of the measured variables are up-to-date.
     *
     * @param costFctsInner
     * @return (total cost (=sum of inner costs), array of inner costs)
@@ -83,10 +84,10 @@ class SolverMulti(prep: Preparation) {
 
   val uncertainAtomsUpdateExecutorService = new ThreadPoolExecutor(2, 2, 3, TimeUnit.SECONDS, new LinkedBlockingQueue[Runnable])
 
-  var maxCompetingSolverThreads = (if (maxCompetingSolverThreadsR < 0) (if (noOfPosElis < -maxCompetingSolverThreadsR)
+  var maxCompetingSolverThreads = (if (maxSolverThreadsR < 0) (if (noOfPosElis < -maxSolverThreadsR)
     1
   else
-    Math.ceil(Runtime.getRuntime().availableProcessors() / (if (abandonOrSwitchSlowThreads > 0) 1.4d else 1.4d))).toInt else maxCompetingSolverThreadsR).max(1)
+    Math.ceil(Runtime.getRuntime().availableProcessors() / (if (abandonOrSwitchSlowThreads > 0) 1.4d else 1.4d))).toInt else maxSolverThreadsR).max(1)
 
   var maxBurstRR = Math.abs(maxBurstR)
 
@@ -223,9 +224,7 @@ class SolverMulti(prep: Preparation) {
                                                      sampledModels /*after adding new model m*/ : ArrayBuffer[(Array[Eli], IntOpenHashSet)],
                                                      costFctsInner: Array[DifferentialFunction[DoubleReal]],
                                                      fromScratch: Boolean = false,
-                                                     computeCosts: Boolean = true,
-                                                     partDerivativeComplete: Boolean,
-                                                     //update_parameterAtomVarForParamEli_forPartDerivCompl: => Unit
+                                                     computeCosts: Boolean = true
                                                     ):
   Option[(Double /*total cost*/ , Array[Double /*inner costs*/ ])] = {
 
@@ -236,9 +235,6 @@ class SolverMulti(prep: Preparation) {
       sampledModels,
       fromScratch)
 
-    /*if (partDerivativeComplete)
-      update_parameterAtomVarForParamEli_forPartDerivCompl*/
-
     if (!computeCosts)
       None
     else
@@ -248,6 +244,7 @@ class SolverMulti(prep: Preparation) {
 
   case class SampleMultiConf(
     requestedNoOfModelsBelowThresholdOrAuto: Int,
+    noOfSecondaryModels: Int,
     prep: Preparation,
     requestedNumberOfModels: Int /*-1: stopSolverThreads at minimum number of models required to reach threshold*/ ,
     threshold: Double,
@@ -286,8 +283,6 @@ class SolverMulti(prep: Preparation) {
 
         val measuredAtomEli: Eli = measuredAtomsElis(i)
 
-        val measureAtomVar: Variable[DoubleReal] = eliToVariableInCostFunctions(measuredAtomEli)
-
         println("   f(" + symbols(measuredAtomEli) + ") = " + new DoubleReal(sampledModels.count(_._2.contains(measuredAtomEli)).toDouble / sampledModels.length.toDouble))
 
         i += 1
@@ -302,18 +297,27 @@ class SolverMulti(prep: Preparation) {
 
     val samplingTimer = System.nanoTime()
 
-    var toleratedCostOfStoppedWeightLearning = -Double.MinPositiveValue
-
-    val finiteNumDiffOuterLoop = useNumericalFiniteDifferences
-
-    val stagnationTol = threshold / 1000d //0.001d
+    val stagnationTol = threshold / stagnationTolDiv
 
     var oldTotalCost = Double.MaxValue
 
     var costDifForStagn = Double.MaxValue
 
-    if (finiteNumDiffOuterLoop) { // we use finite differences (sort of discrete numerical differentiation) to approximate the partial
-      // derivatives. Mainly useful if automatic differentiation (i.e., nablaInner) cannot be used when there are parameter atoms which
+    val showNumDiffProgress = debug
+
+    var minCostSf = Double.MaxValue
+
+    if (enforceStopWhenSampleSizeReached)
+      stomp(-5012)
+
+    @inline def samplingStopCriterion(it: Int, totalCost: Double, costDifForStagn: Double): Boolean = (it < maxIt &&
+      (requestedNumberOfModels <= -1 && (totalCost.isNaN || totalCost > threshold) ||
+        requestedNumberOfModels >= 0 && (sampledModels.length < requestedNumberOfModels || (totalCost.isNaN || totalCost > threshold) && !enforceStopWhenSampleSizeReached)) &&
+      !(stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost < Double.MaxValue &&
+        (requestedNumberOfModels <= -1 || sampledModels.length >= requestedNumberOfModels)))
+
+    if (allowNumFiniteDiff) { // we use auto/sym diff (where available for a parameter atom) and/or finite differences (sort of discrete numerical differentiation) to approximate the partial
+      // derivatives. The latter is mainly useful if automatic differentiation (i.e., nablaInner) cannot be used, i.e., for parameter atoms which
       // aren't measured atoms (i.e., don't appear in the cost function term), as it is the case for weight learning and Inductive Logic Programming.
 
       do {
@@ -322,106 +326,147 @@ class SolverMulti(prep: Preparation) {
 
         val useRandomDiffQuot = rngGlobal.nextDouble() < numFinDiffShuffleProb
 
-        val diffQuotsPerHypoth: Predef.Map[Eli, Double] = parameterLiteralElisArray.take(parameterLiteralElisArray.length / 2 /*<- i.e., positive literals only*/) /*hypothesisParamTargetWeightVariables*/ .map { case probingParamAtomEli => {
+        val diffQuotsPerParameter: Predef.Map[Eli, Double] = parameterLiteralElisArray.take(parameterLiteralElisArray.length / 2 /*<- i.e., positive literals only*/).map {
+          case probingParamAtomEli: Eli => {
 
-          if (useRandomDiffQuot) {
+            if (useRandomDiffQuot) {
 
-            log(" Random diffquot step in finiteNumDiffOuterLoop")
+              if (showNumDiffProgress) println(" Random diffquot step in allowNumFiniteDiff")
 
-            (probingParamAtomEli, rngGlobal.nextDouble())
+              (probingParamAtomEli, rngGlobal.nextDouble())
 
-          } else {
+            } else {
 
-            log(" Probing for parameter (hypothesis) atom " + symbols(probingParamAtomEli) + "...")
+              val diffQuotPerAutoDiff = deficitByDeriv(probingParamAtomEli) // we try to get an analytical (automatic differentiation) diff result first
 
-            log("  Probing for +" + symbols(probingParamAtomEli) + "...")
+              if (!diffQuotPerAutoDiff.isNaN || ignoreParamIfNotMeasured)
+                (probingParamAtomEli, diffQuotPerAutoDiff)
+              else {
 
-            val rnOrderParamEli: Predef.Map[Integer, Double] = deficitOrderedUncertainLiteralsForJava.map((_, /*0d*/ rngGlobal.nextDouble())).toMap
+                if (showNumDiffProgress) println(" Probing for parameter (hypothesis) atom " + symbols(probingParamAtomEli) + "...")
 
-            val rnOrderParamEliMin = -1d //+ noise
+                if (showNumDiffProgress) println("  Probing for +" + symbols(probingParamAtomEli) + "...")
 
-            val rnOrderParamEliMax = 1d //- noise
+                val rnOrderParamEli: Predef.Map[Integer, Double] = deficitOrderedUncertainLiteralsForJava.map(p => (p, {
 
-            java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+                  //deficitByDeriv(p)
 
-              if (parameterLiteralEli == probingParamAtomEli)
-                rnOrderParamEliMin
-              else if (parameterLiteralEli == negateEli(probingParamAtomEli))
-                rnOrderParamEliMax
-              else
-                rnOrderParamEli(parameterLiteralEli) // 1d / deficitOrderedUncertainLiteralsForJava.indexOf(parameterLiteralEli).toDouble / deficitOrderedUncertainLiteralsForJava.length.toDouble // rngGlobal.nextGaussian() //+ 0.5 * 0.2
+                  1d / deficitOrderedUncertainLiteralsForJava.indexOf(p).toDouble / deficitOrderedUncertainLiteralsForJava.length.toDouble // heuristic
 
-            }))
+                })).toMap
 
-            val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
+                val rnOrderParamEliMin = -1d
 
-            if (newModelOpt.isEmpty)
-              return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+                val rnOrderParamEliMax = 1d
 
-            sampledModels.append(newModelOpt.get)
+                java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+                  // we push the probing atom to the top or bottom of the branching literals priority ranking
 
-            val costWithProbePlusH = updateMeasuredAtomsFreqsAndComputeCost(None,
-              measuredAtomElis = measuredAtomsElis,
-              sampledModels,
-              costFctsInner = costFctsInner,
-              fromScratch = true,
-              computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-              partDerivativeComplete = true
-            ).get._1
+                  if (parameterLiteralEli == probingParamAtomEli)
+                    rnOrderParamEliMin
+                  else if (parameterLiteralEli == negateEli(probingParamAtomEli))
+                    rnOrderParamEliMax
+                  else
+                    rnOrderParamEli(parameterLiteralEli)
 
-            sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
+                }))
 
-            log("  Probing for -" + symbols(probingParamAtomEli) + "...")
+                val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
 
-            java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+                if (newModelOpt.isEmpty)
+                  return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
 
-              if (parameterLiteralEli == probingParamAtomEli)
-                rnOrderParamEliMax
-              else if (parameterLiteralEli == negateEli(probingParamAtomEli))
-                rnOrderParamEliMin
-              else
-                rnOrderParamEli(parameterLiteralEli) // 1d / deficitOrderedUncertainLiteralsForJava.indexOf(parameterLiteralEli).toDouble / deficitOrderedUncertainLiteralsForJava.length.toDouble // rngGlobal.nextGaussian() //+ 0.5 * 0.2
+                sampledModels.append(newModelOpt.get)
 
-            }))
+                val costWithProbePlusH = updateMeasuredAtomsFreqsAndComputeCost(None,
+                  measuredAtomElis = measuredAtomsElis,
+                  sampledModels,
+                  costFctsInner = costFctsInner,
+                  fromScratch = true,
+                  computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
+                ).get._1
 
-            val newModelOptMinusH: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
+                sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
 
-            if (newModelOptMinusH.isEmpty)
-              return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+                if (showNumDiffProgress) println("  Probing for -" + symbols(probingParamAtomEli) + "...")
 
-            sampledModels.append(newModelOptMinusH.get)
+                java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+                  // we push the probing atom to the top or bottom of the branching literals priority ranking
 
-            val costWithProbeMinusH = updateMeasuredAtomsFreqsAndComputeCost(None,
-              measuredAtomElis = measuredAtomsElis,
-              sampledModels,
-              costFctsInner = costFctsInner,
-              fromScratch = true,
-              computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-              partDerivativeComplete = true
-            ).get._1
+                  if (parameterLiteralEli == probingParamAtomEli)
+                    rnOrderParamEliMax
+                  else if (parameterLiteralEli == negateEli(probingParamAtomEli))
+                    rnOrderParamEliMin
+                  else
+                    rnOrderParamEli(parameterLiteralEli)
 
-            sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
+                }))
 
-            val diffQuot = (costWithProbePlusH - costWithProbeMinusH) // * noOfModelsBeforeProbes.toDouble
-            // NB: negative diffQuote increases(!) the likeliness that the respective parameter atom will be included in the next model.
-            // NB: since in the solver we only need to compare these "quotients", division by 2h is redundant.
+                val newModelOptMinusH: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
 
-            log(" ==> diffQuot for param atom " + symbols(probingParamAtomEli) + " = " + diffQuot)
+                if (newModelOptMinusH.isEmpty)
+                  return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
 
-            (probingParamAtomEli, diffQuot)
+                sampledModels.append(newModelOptMinusH.get)
+
+                val costWithProbeMinusH = updateMeasuredAtomsFreqsAndComputeCost(None,
+                  measuredAtomElis = measuredAtomsElis,
+                  sampledModels,
+                  costFctsInner = costFctsInner,
+                  fromScratch = true,
+                  computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
+                ).get._1
+
+                sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
+
+                val diffQuot = (costWithProbePlusH - costWithProbeMinusH) // * noOfModelsBeforeProbes.toDouble
+                // NB: negative diffQuote increases(!) the likeliness that the respective parameter atom will be included in the next model.
+                // NB: since in the solver we only need to compare these "quotients", division by 2h is redundant.
+
+                if (showNumDiffProgress) println(" ==> diffQuot for param atom " + symbols(probingParamAtomEli) + " = " + diffQuot)
+
+                (probingParamAtomEli, diffQuot)
+
+              }
+
+            }
 
           }
-
-        }
         }.toMap
 
-        java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+        val ordering = if (diversifyLight || diversify) {
 
-          val x = diffQuotsPerHypoth.get(parameterLiteralEli)
+          //shuffleArray(deficitOrderedUncertainLiteralsForJava, rg = rngGlobalRG)  // not useful here, doesn't reliably achieve shuffling of elements with equal diffQuots due to IEEE arithmetics (e.g., -0 vs. 0)
 
-          x.getOrElse(-diffQuotsPerHypoth.get(negateEli(parameterLiteralEli)).getOrElse(0d))
+          val nnn = mutable.HashMap[Integer, Double]() ++ deficitOrderedUncertainLiteralsForJava.map(_ -> (rngGlobal.nextDouble() - 0.5d) / 1e12d /*1e12d*/)
 
-        }))
+          Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+            // NB: sorting algo is stable
+
+            val x = diffQuotsPerParameter.get(parameterLiteralEli)
+
+            val r: Double = x.getOrElse(-diffQuotsPerParameter.get(negateNegEli(parameterLiteralEli)).getOrElse(0d))
+
+            r + nnn(parameterLiteralEli)
+
+          })
+
+        } else {
+
+          Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+            // NB: sorting algo is stable, but 0 vs. -0 issue (see above)
+
+            val x = diffQuotsPerParameter.get(parameterLiteralEli)
+
+            val r = x.getOrElse(-diffQuotsPerParameter.get(negateNegEli(parameterLiteralEli)).getOrElse(0d))
+
+            r
+
+          })
+
+        }
+
+        java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, ordering)
 
         val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing()
 
@@ -435,17 +480,20 @@ class SolverMulti(prep: Preparation) {
           sampledModels,
           costFctsInner = costFctsInner,
           fromScratch = true,
-          computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-          partDerivativeComplete = true,
+          computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
         ).get._1
 
         costDifForStagn = Math.abs(oldTotalCost - totalCost)
 
         oldTotalCost = totalCost
 
+        minCostSf = minCostSf.min(totalCost)
+
+        //println("minCostSf = " + minCostSf)
+
         if (resetsNumericalOuterLoopOnStagnation > 0 && costDifForStagn < stagnationTol && totalCost > threshold) {
 
-          log("\n RESETTING \n\n")
+          if (showNumDiffProgress) println("\n RESETTING (costDifForStagn = " + costDifForStagn + ")\n\n")
 
           sampledModels.clear()
 
@@ -459,25 +507,48 @@ class SolverMulti(prep: Preparation) {
 
         if (showProgressStats) {
 
-          log("\nOuter-outer sampling iteration " + it + " (of max " + maxIt + ") complete. " +
-            "Current total cost: " + totalCost + " (threshold: " + threshold + ")\n")
+          if (showNumDiffProgress) println("\nOuter-outer sampling iteration (with allowNumFiniteDiff = true, mixedScenario = " + (if (mixedScenario) "true" else "false") + ") " + it + " (of max " + maxIt + ") complete. " +
+            "Current total cost: " + totalCost + " (threshold: " + threshold + "). #models: " + sampledModels.length + "\n")
 
         }
 
         it += 1
 
-      } while (it < maxIt && (requestedNumberOfModels == -1 && (totalCost.isNaN || totalCost > threshold + toleratedCostOfStoppedWeightLearning) ||
-        requestedNumberOfModels >= 0 && sampledModels.length < requestedNumberOfModels) && !(stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol))
+      } while (samplingStopCriterion(it = it, totalCost = totalCost, costDifForStagn = costDifForStagn))
 
-      if (stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol && totalCost > threshold)
+      if (stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost > threshold)
         stomp(-5011)
 
-    } else do { // outer-outer sampling loop for deductive inference (measured atoms = parameter atoms)
+      if (debug)
+        println("minCostSf = " + minCostSf)
+
+    } else do { // the (mostly deprecated) simpler outer-outer sampling loop for purely _deductive_ probabilistic inference (measured atoms = parameter atoms) and plain SAT/ASP solving
 
       if (!ignoreParamVariablesR) {
 
-        java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, deficitOrdering) // unfortunately boxing (Integer) needed, to achieve custom sort order
-        //java.util.Arrays.sort(deficitOrderedUncertainLiteralsForJava, deficitOrdering)
+        if (diversify) {
+
+          //shuffleArray(deficitOrderedUncertainLiteralsForJava, rg = rngGlobalRG)  // not useful here, doesn't reliably achieve shuffling of elements with equal diffQuots due to IEEE arithmetics (e.g., -0 vs. 0)
+
+          val nnn = deficitOrderedUncertainLiteralsForJava.map(_ -> (rngGlobal.nextDouble() - 0.5d) / 1e12d).toMap
+
+          java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, /*deficitOrdering*/ Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+            // NB: sorting algo is stable, but 0 vs. -0 issue (see above)
+
+            deficitByDeriv(parameterLiteralEli) + nnn(parameterLiteralEli)
+
+          }))
+
+        } else {
+
+          java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, /*deficitOrdering*/ Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
+
+            deficitByDeriv(parameterLiteralEli)
+
+          })) // unfortunately boxing (Integer) needed, to achieve custom sort order
+          //java.util.Arrays.sort(deficitOrderedUncertainLiteralsForJava, deficitOrdering)
+
+        }
 
       }
 
@@ -492,9 +563,8 @@ class SolverMulti(prep: Preparation) {
         measuredAtomElis = measuredAtomsElis,
         sampledModels,
         costFctsInner = costFctsInner,
-        fromScratch = !hypothesisParamTargetWeightVariables.isEmpty,
-        computeCosts = true, // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-        partDerivativeComplete = true,
+        fromScratch = false /*!hypothesisParamTargetWeightVariables.isEmpty*/ ,
+        computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
       ).get._1
 
       costDifForStagn = Math.abs(oldTotalCost - totalCost)
@@ -505,43 +575,121 @@ class SolverMulti(prep: Preparation) {
         println("\nOuter-outer sampling iteration " + it + " (of max " + maxIt + ") complete. " +
           "Current total cost: " + totalCost + " (threshold: " + threshold + ")")
 
-      //printMeasuredEliFreqs
-
       it += 1
 
-    } while (it < maxIt && (requestedNumberOfModels == -1 && (totalCost.isNaN || totalCost > threshold + toleratedCostOfStoppedWeightLearning) ||
-      requestedNumberOfModels >= 0 && sampledModels.length < requestedNumberOfModels) && !(stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol))
+    } while (samplingStopCriterion(it = it, totalCost = totalCost, costDifForStagn = costDifForStagn))
 
-    if (stopSamplingWhenCostStagnates && costDifForStagn < stagnationTol && totalCost > threshold)
+    if (stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost > threshold)
       stomp(-5011)
+
+    if (requestedNumberOfModels <= -2 && -requestedNumberOfModels > sampledModels.length) { // we "fill up" the sample by uniformly sampling from the current sample
+
+      if (showProgressStats)
+        println("Sampling " + (-requestedNumberOfModels - sampledModels.length) + " further models (with replacement) by uniformly sampling from current sample...")
+
+      val originalSampleSize = sampledModels.length
+
+      do {
+
+        val i = rngGlobal.nextInt(originalSampleSize)
+
+        sampledModels.append(sampledModels(i))
+
+      } while (-requestedNumberOfModels > sampledModels.length)
+
+    }
+
+    if (noOfSecondaryModels > 0) { // we uniformly sample from the overall sampledModels
+
+      println("Sampling " + noOfSecondaryModels + " models (with replacement) uniformly from the multisolution...")
+
+      var i = 1
+
+      val secondarySampledModels = ArrayBuffer[(Array[Eli], IntOpenHashSet)]()
+
+      while (i <= noOfSecondaryModels) {
+
+        secondarySampledModels.append(sampledModels(rngGlobal.nextInt(sampledModels.length)))
+
+        i += 1
+
+      }
+
+      sampledModels.clear()
+
+      sampledModels.appendAll(secondarySampledModels)
+
+    }
 
     if (showProbsOfSymbols) {
 
-      val showFreqsOf = symbols.filterNot(_.contains("aux")).map(symbolToEli(_))
+      println("Approximations:\n")
+
+      val showFreqsOf = symbols.sorted.filterNot(_.contains("aux")).map(symbolToEli(_))
 
       showFreqsOf.foreach(atomEli => {
 
         val freqInModels = sampledModels.count(_._1.contains(atomEli)).toDouble / sampledModels.length.toDouble
 
-        println("Approximation: Pr(" + symbols(atomEli) + ") = " + freqInModels)
+        println("Pr(" + symbols(atomEli) + ") \u2248 " + freqInModels)
 
       })
 
-
     }
 
-    if (totalCost < threshold)
+    if (totalCost <= threshold)
       println("\nSampling complete; specified threshold reached; cost reached: " + totalCost + "\n" + sampledModels.length + " model(s) sampled (with replacement)\n")
     else
       stomp(-5008, "\nCost reached: " + totalCost)
 
     println("Time for multi-model sampling: " + timerToElapsedMs(samplingTimer) + " ms\n")
 
-    val sampledModelsSymbolic = sampledModels.map(model => model._1.map(eli => symbols(eli)))
+    updateAtomsFreqs(None,
+      measuredAtomsElis,
+      sampledModels,
+      fromScratch = true)
+
+    val sampledModelsWithEvalResolved: ArrayBuffer[(Array[Eli], IntOpenHashSet)] = sampledModels.map { case (modelElis, _) => {
+
+      val modelElisEvalResolved: Array[Eli] = modelElis.map((posEli: Eli) => {
+
+        val sym = symbols(posEli) // e.g., _eval_("f(pn1(a))*2","?",1)  Note that after "?" there can be any number of user-specified extra arguments
+
+        if (sym.startsWith(evalFactPrefix + "(") && sym.contains("\"?\"") /*<- important as there might be resolved _eval_ atoms also (i.e., without "?")*/ ) {
+
+          val (term, extraArgs) = aspIOutils.splitEvalSymbol(sym)
+
+          val evalFunOpt: Option[DifferentialFunction[DoubleReal]] = sampleMultiConf.prep.costsOpt.flatMap(_.evalExpressionToFct.get(term))
+
+          if (evalFunOpt.isEmpty)
+            stomp(-209, term)
+
+          val resolvedEvalAtomSym = "_eval_(\"" + term + "\"," + (evalFunOpt.get.getReal * probabilisticFactProbDivider).toInt + extraArgs
+
+          symbols = symbols.:+(resolvedEvalAtomSym) // hmmpff
+
+          symbols.length - 1
+
+        } else
+          posEli
+
+      })
+
+      (modelElisEvalResolved, new IntOpenHashSet(modelElisEvalResolved))
+
+    }
+
+    }
+
+    val sampledModelsSymbolic = sampledModelsWithEvalResolved.map(model => model._1.map(eli => symbols(eli)))
+    // ^ NB: these are not yet the printed symbolic models; observe that in SAT mode, (classically-)negative literals (e.g., "-5") are
+    // at this point atoms which don't occur in the model, whereas in ASP mode, classical negation is expressed using
+    // prefix "-" which is part of the symbol itself. Default negation (which doesn't exist in SAT mode) is represented in ASP mode by
+    // absence of the negative literals in the model.
 
     log("sampledModelsSymbolic:\n" + sampledModelsSymbolic.map(_.mkString(" ")).mkString("\n"))
 
-    (sampledModelsSymbolic, sampledModels)
+    (sampledModelsSymbolic, sampledModelsWithEvalResolved)
 
   }
 
@@ -2217,7 +2365,7 @@ class SolverMulti(prep: Preparation) {
 
         def findFreeEli: Int /*freeEli < 0: enforce -freeEli-1. Max.Int: no absfree eli found*/ = {
 
-          // Branching decision heuristics & parameter eli decision using symbolic or automatic differentiation (partial derivatives)
+          // Branching decision heuristics & parameter eli decision using symbolic or automatic differentiation (partial derivative)
 
           /* if (variableOrNogoodElimConfig._1 && variableOrNogoodElimConfig._5) {  // TODO: (reactivate after optimization)
 

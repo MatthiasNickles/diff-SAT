@@ -1,9 +1,26 @@
 /**
-  * Parser for a subset of the ASP Intermediate Format (ASPIF) in delSAT. Not a general-purpose ASPIF parser - designed for use within delSAT only.
+  * delSAT
   *
-  * Copyright (c) 2018, 2019 Matthias Nickles
+  * Copyright (c) 2018,2019 Matthias Nickles
   *
-  * THIS CODE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * This code is licensed under MIT License (see file LICENSE for details)
+  *
+  */
+
+package parsing
+
+import aspIOutils._
+import commandlineDelSAT.delSAT
+import commandlineDelSAT.delSAT.{debug, log}
+import sharedDefs._
+
+import scala.collection.mutable.ArrayBuffer
+import scala.collection.{Map, Set, mutable}
+
+/**
+  * Parser for a subset of the ASP Intermediate Format (ASPIF) in delSAT. Not a general-purpose ASPIF parser - designed for use within delSAT only. Work in progress.
   *
   * ASPIF file format (of which we support a subset): see Appendix A in "A Tutorial on Hybrid Answer Set Solving with clingo",
   * https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6 (https://www.cs.uni-potsdam.de/~torsten/hybris.pdf)
@@ -12,21 +29,6 @@
   * filtering assumptions.
   * Use a preprocessor such as Clingo 5 (options --trans-ext=all --pre=aspif) or lp2normal to translate extended rules
   * (e.g., choice rules, weight rules...) to normal rules.
-  *
-  */
-
-package parsing
-
-import aspIOutils._
-import commandline.delSAT
-import commandline.delSAT.{debug, log}
-import sharedDefs._
-
-import scala.collection.mutable.ArrayBuffer
-import scala.collection.{Map, Set, mutable}
-
-/**
-  * Parser for a subset of the aspif format.
   *
   * @author Matthias Nickles
   */
@@ -370,7 +372,7 @@ object AspifPlainParser {
 
   def aspifRulesToEliRules(symbols: Array[String], aspifRules: ArrayBuffer[AspifRule],
                            aspifEliToSymbolOpt: Option[mutable.HashMap[AspifEli, String]],
-                           assumptionAspifElis: Seq[AspifEli]): (ArrayBuffer[Rule], Int, Int, Predef.Map[String, AspifEli], (Array[String], Array[String]), Seq[Eli]) = {
+                           assumptionAspifElis: Seq[AspifEli]): (ArrayBuffer[Rule], Int, Int, Predef.Map[String, AspifEli], (Array[String], Array[String], Array[String]), Seq[Eli]) = {
 
     val rules = ArrayBuffer[Rule]()
 
@@ -380,11 +382,15 @@ object AspifPlainParser {
 
     val costFactBPrefix = costFactPrefix + "("
 
+    val evalFactBPrefix = evalFactPrefix + "("
+
     val probabilisticFacts = ArrayBuffer[(String, Double)]() // can be used as an alternative to declaring inner MSE costs. From these we'll generate MSE inner costs
 
     val patsFromFacts = ArrayBuffer[String]() // can be used as an alternative to declaring parameter atoms using a "pats" line
 
     val costsFromFacts = ArrayBuffer[String]() // can be used as an alternative to declaring an inner cost using a "cost" line
+
+    val evalsFromFacts = ArrayBuffer[String]()
 
     //rules.sizeHint(aspifRulesStrLines.length)
 
@@ -569,7 +575,6 @@ object AspifPlainParser {
 
       //log("parsetimer E4: " + timerToElapsedMs(timerParserNs) + " ms")
 
-
       assert(rule.headAtomsElis.length <= 1)
 
       if (rule.bodyNegAtomsElis.length == 0 && rule.bodyPosAtomsElis.length == 0 && rule.headAtomsElis.length == 1) {
@@ -612,9 +617,26 @@ object AspifPlainParser {
 
           //println("Encountered cost definition fact in aspif input: " + costFact)
 
-          var cost = costFact.stripPrefix(costFactBPrefix).stripSuffix(")").trim.stripPrefix("\"").stripSuffix("\"").trim
+          var cost = costFact.stripPrefix(costFactBPrefix).stripSuffix(")").trim.stripPrefix("\"").stripSuffix("\"").replaceAllLiterally(" ", "")
 
           costsFromFacts.append(cost)
+
+        } else if (symbols(rule.headAtomsElis.head).startsWith(evalFactBPrefix)) {
+
+          val evalFact = symbols(rule.headAtomsElis.head)
+
+          //println("Encountered cost definition fact in aspif input: " + costFact)
+
+          if(evalFact.contains("\"?\"")) { // in case there is an _eval_ without "?", we just ignore it (treat it as a plain atom). This is important in case
+            // a resolved _eval_ (i.e., where the "?" had been replaced with a number) is part of the input logic program.
+
+            //var evalTerm = evalFact.stripPrefix(evalFactBPrefix).stripSuffix(",\"?\")").trim.stripPrefix("\"").stripSuffix("\"").replaceAllLiterally(" ", "")
+
+            val (evalTerm, _) = aspIOutils.splitEvalSymbol(evalFact)
+
+            evalsFromFacts.append(evalTerm)
+
+          }
 
         }
 
@@ -638,7 +660,7 @@ object AspifPlainParser {
     if (delSAT.verbose)
       println("Parsing time: " + timerToElapsedMs(timerParserNs) + " ms")
 
-    val additionalUncertainAtomsInnerCostsStrs: (Array[String], Array[String]) = if (ignoreParamVariablesR) (Array[String](), Array[String]()) else {
+    val additionalUncertainAtomsInnerCostsStrs: (Array[String], Array[String], Array[String]) = if (ignoreParamVariablesR) (Array[String](), Array[String](), Array[String]()) else {
 
       import java.text.DecimalFormat
       import java.text.DecimalFormatSymbols
@@ -654,7 +676,7 @@ object AspifPlainParser {
 
         "(" + dFormat.format(atomAndWeight._2) + "-f(" + atomAndWeight._1 + "))^2"
 
-      }) ++ costsFromFacts)
+      }) ++ costsFromFacts, evalsFromFacts.toArray)
 
     }
 

@@ -1,7 +1,17 @@
+/**
+  * delSAT
+  *
+  * Copyright (c) 2018,2019 Matthias Nickles
+  *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * This code is licensed under MIT License (see file LICENSE for details)
+  *
+  */
+
 package utils
 
 /**
-
  Weakly randomizable Int set with dual index structure (O(1) add, remove).
 
  Based on Java code from https://stackoverflow.com/questions/124671/picking-a-random-element-from-a-set

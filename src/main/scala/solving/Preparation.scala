@@ -1,11 +1,11 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2019 Matthias Nickles
+  * Copyright (c) 2018,2019 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
-  * License: https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE
+  * This code is licensed under MIT License (see file LICENSE for details)
   *
   */
 
@@ -17,12 +17,12 @@ import java.util
 import aspIOutils._
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, PolynomialTerm, Sum, Variable}
-import commandline.delSAT
-import commandline.delSAT._
+import commandlineDelSAT.delSAT
+import commandlineDelSAT.delSAT._
 import diff.UncertainAtomsSeprt
 import it.unimi.dsi.fastutil.ints.{Int2ObjectMap, Int2ObjectOpenHashMap, IntOpenHashSet, IntSet}
 import it.unimi.dsi.fastutil.objects.ObjectArrayList
-//import org.graphstream.graph.Node
+
 import sharedDefs._
 import utils.IntArrayUnsafeS
 
@@ -39,7 +39,7 @@ import scala.concurrent.{Await, Future}
   *
   */
 class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
-                  costsOpt: Option[UncertainAtomsSeprt],
+                  val costsOpt: Option[UncertainAtomsSeprt],
                   satModeR: Boolean,
                   omitAtomNogoods: Boolean /*for testing purposes only*/) {
 
@@ -493,8 +493,11 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
       assert(satMode) // TODO: make work with ASP (see "posHeadAtomToNegBlits =" below) or generatePseudoRulesForNogoodsForSATMode
 
-      if (!satMode)
+      if (!satMode) {
+
         stomp(-5006)
+
+      }
 
       log("Removing eliminated elis...")
 
@@ -757,8 +760,9 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   }
 
-  val costFctsInnerWithPossMeasuredElis = mutable.HashMap[Eli, DifferentialFunction[DoubleReal]]()
-  // Note ^: we always need the values (i.e., the set of all inner cost functions) in the above hashMap, but the actual mapping eli->innerCost is needed only for the simplified MSE case (where we use simplified derivation formulas, see further below)
+  val costFctsInnerWithPossMeasuredElis_ForPartDerivINCOMPLETE = mutable.HashMap[Eli, DifferentialFunction[DoubleReal]]()
+  // Note ^: this is needed only for the simplified (faster) approach where each partial derivative is computed from an inner cost
+  // term, e.g., in case of MSE. I.e., with --solverarg "partDerivComplete" "false"
 
   val nablasInner /*partial derivatives of the inner cost functions wrt. parameter atoms (as freqx variables)*/ : Array[DifferentialFunction[DoubleReal]] =
     Array.fill[DifferentialFunction[DoubleReal]](symbols.length /*if we could place
@@ -770,12 +774,15 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
   val eliToVariableInCostFunctions: mutable.Map[Eli, Variable[DoubleReal]] = costsOpt.map(_.eliToVariableInCostFunctions).getOrElse(mutable.HashMap[Int, Variable[DoubleReal]]())
   // ^ for each measured eli, the corresponding autodiff.Variable within the inner cost. We can only differentiate wrt. parameter elis which are contained in this map.
 
-  val symbolToEli: Predef.Map[String, Eli] = if (aspifOrDIMACSParserResult.symbolToEliOpt.isDefined && aspifOrDIMACSParserResult.symbols.length == symbols.length && !variableOrNogoodElimConfig._5) aspifOrDIMACSParserResult.symbolToEliOpt.get else symbols.zipWithIndex.toMap
+  val symbolToEli: Predef.Map[String, Eli] = if (aspifOrDIMACSParserResult.symbolToEliOpt.isDefined && aspifOrDIMACSParserResult.symbols.length == symbols.length && !variableOrNogoodElimConfig._5)
+    aspifOrDIMACSParserResult.symbolToEliOpt.get
+  else
+    symbols.zipWithIndex.toMap
 
   val parameterAtomsElis0 /*(from  the "pats" line)*/ : Array[Eli] = costsOpt.map(_.parameterAtomsSeq).map(pmasg =>
     pmasg.map(pred => symbolToEli(pred))).getOrElse(Array[Eli]())
 
-  @inline def measuredAtomNameInCostFnToSymbol(n: String): String = if (satMode) n.stripPrefix("v") else n
+  @inline def measuredAtomNameInCostFnToSymbol(n: String): String = if (satMode) n.stripPrefix("v") else n.replaceAllLiterally(" ", "")
 
   val measuredAtomsElis /*(from within the cost functions)*/ : Array[Eli] = costsOpt.map(_.measuredAtomsSeq).map(_.map((vn: Pred) =>
     symbolToEli(measuredAtomNameInCostFnToSymbol(vn)))).getOrElse(Array[Eli]())
@@ -787,7 +794,11 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
   // NB: In case of weight learning, the parameter atoms are the hypotheses whose weights
   // we are looking for, and the measured atoms are the learning examples whose weights we are maximizing by influencing the hypotheses weights.
 
-  val hypothesisParamTargetWeightVariables = ArrayBuffer[(Eli, /*current target weight of hypothesis:*/ Variable[DoubleReal])]()
+  @deprecated val hypothesisParamTargetWeightVariables = ArrayBuffer[(Eli, /*current target weight of hypothesis:*/ Variable[DoubleReal])]()
+
+  var costFctsInner: Array[DifferentialFunction[DoubleReal]] = costsOpt.map(co => Array.ofDim[DifferentialFunction[DoubleReal]](co.innerCostExpressionInstances.length)).getOrElse(Array[DifferentialFunction[DoubleReal]]()) // = costFctsInnerWithPossMeasuredElis_ForPartDerivINCOMPLETE.values.toArray
+
+  var cfi = 0
 
   setCostFctsInner
 
@@ -799,15 +810,20 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
         val cStr = costFunInner.toString
 
+        costFctsInner(cfi) = costFunInner
+
+        cfi += 1
+
+        if (debug)
+          println("\ncostFctsInner: " + costFunInner)
+
         val i = cStr.indexOf("freqx")
 
         if (i != -1) {
 
           val possibleMeasuredEli: Int = cStr.substring(i + 5).takeWhile(_ != '_').toInt
 
-          costFctsInnerWithPossMeasuredElis.put(possibleMeasuredEli, costFunInner)
-
-          log("costFctsInner: " + costFunInner)
+          costFctsInnerWithPossMeasuredElis_ForPartDerivINCOMPLETE.put(possibleMeasuredEli, costFunInner)
 
           if (cStr.contains("wDf")) { // deprecated; remove after more tests
 
@@ -840,6 +856,16 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
             }
 
           }) // this happens when a measured atom is undefined and f(ma) had been replaced with 0
+          // However, by default we still retain this inner cost in the list of innerCosts (because the undefined atom has a defined frequency (0)).
+          // Use switch ignoreCostsWithUndefMeasuredAtoms to omit such innerCosts (more precisely, we replace it with 0):
+
+          if (ignoreCostsWithUndefMeasuredAtoms) {
+
+            stomp(-208, costFctsInner(cfi - 1).toString)
+
+            costFctsInner(cfi - 1) = (new diff.DifferentialFunctionFactoryStasp()).zero()
+
+          }
 
         }
 
@@ -851,9 +877,11 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   //log("\npreptimer 2.1: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
-  @inline def findInnerCostFunForParameterAtom(parameterAtomEli: Eli): Option[DifferentialFunction[DoubleReal]] = {
+  @inline def findInnerCostFunForParameterAtom_ForPartDerivINCOMPLETE(parameterAtomEli: Eli): Option[DifferentialFunction[DoubleReal]] = {
 
-    costFctsInnerWithPossMeasuredElis.get(parameterAtomEli) //costFctsInnerWithPossMeasuredElis.find(_._2 == parameterAtomEli)
+    assert(!partDerivComplete) // works only with partDerivComplete=false
+
+    costFctsInnerWithPossMeasuredElis_ForPartDerivINCOMPLETE.get(parameterAtomEli) //costFctsInnerWithPossMeasuredElis.find(_._2 == parameterAtomEli)
 
   }
 
@@ -862,24 +890,34 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
   //@Contended
   val parameterAtomsElis = parameterAtomsElis0 //.filter(eliToVariableInCostFunctions.contains(_))
 
-  val innerCostFunForParamAtomEli = if (ignoreParamVariablesR || partDerivComplete) mutable.Map[Eli, Option[DifferentialFunction[DoubleReal]]]() else
+  val innerCostFunForParamAtomEli_ForPartDerivINCOMPLETE = if (ignoreParamVariablesR || partDerivComplete) mutable.Map[Eli, Option[DifferentialFunction[DoubleReal]]]() else
     mutable.HashMap[Eli, Option[DifferentialFunction[DoubleReal]]]().++(parameterAtomsElis.map(eli => {
 
-      eli -> findInnerCostFunForParameterAtom(eli)
+      // NB: implicit assumption for !partDerivComplete is that measured atoms = parameter atoms
+
+      eli -> findInnerCostFunForParameterAtom_ForPartDerivINCOMPLETE(eli)
 
     }).toMap)
 
   log("\npreptimer 4: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
-  val costFctsInner = costFctsInnerWithPossMeasuredElis.values.toArray
+  //costFctsInner = costFctsInnerWithPossMeasuredElis_ForPartDerivINCOMPLETE.values.toArray
 
   val n = dFFactory.`val`(new DoubleReal(costFctsInner.length.toDouble))
 
   val totalCostFun_forPartDerivCompl: DifferentialFunction[DoubleReal] = if (costFctsInner.isEmpty) dFFactory.`val`(new DoubleReal(-1 /*dummy*/)) else
-    costFctsInner.reduceLeft((reduct: DifferentialFunction[DoubleReal], addendum: DifferentialFunction[DoubleReal])
-    => reduct.plus(addendum)).div(n)
+    costFctsInner.reduceLeft((reduct: DifferentialFunction[DoubleReal], x: DifferentialFunction[DoubleReal])
+    => {
 
-  if (!ignoreParamVariablesR && !useNumericalFiniteDifferences)
+      // /*reduct.mul(x)*/ reduct.plus(x)
+
+      innerCostReductFun(reduct, x)
+
+    }
+    ).div(n)
+
+  // We store the partial derivatives of the cost function(s) in nablasInner:
+  if (!ignoreParamVariablesR && (!allowNumFiniteDiff || mixedScenario))
     parameterAtomsElis.foreach(parameterAtomEli => {
 
       if (eliToVariableInCostFunctions.contains(parameterAtomEli)) {
@@ -892,11 +930,13 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
         } else { // faster, less general. For simple MSE-style (and some others?) cost functions. See M. Nickles: ILP'18 paper.
 
-          val innerCostFun: DifferentialFunction[DoubleReal] = innerCostFunForParamAtomEli(parameterAtomEli).getOrElse {
+          val innerCostFun: DifferentialFunction[DoubleReal] = innerCostFunForParamAtomEli_ForPartDerivINCOMPLETE(parameterAtomEli).getOrElse {
 
-            stomp(-5003)
+            if (!allowNumFiniteDiff)
+              stomp(-5003) // we can arrive here also if there are no costs and the measured variables in eliToVariableInCostFunctions are
+            // extracted from some _eval_ fact, so we make this just a warning and not an error.
 
-            costFctsInner(0)
+            dFFactory.`val`(new DoubleReal(0d))
 
           }
 
@@ -944,14 +984,14 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
         nablasInner(parameterLiteralEli).getReal
 
       } else
-        0d
+        return Double.NaN //0d
 
     } else {
 
       if (nablasInner(negateNegEli(parameterLiteralEli)) != null)
         -nablasInner(negateNegEli(parameterLiteralEli)).getReal
       else
-        0d
+        return Double.NaN //0d
 
     }
 
@@ -962,14 +1002,15 @@ class Preparation(val aspifOrDIMACSParserResult: AspifOrDIMACSPlainParserResult,
 
   }
 
-  val deficitOrdering: Ordering[Integer /*actually a parameter eli*/ ] = // TODO: try to avoid boxing here (we use boxing to be able to use a certain sorting method)
-    Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
-
-      deficitByDeriv(parameterLiteralEli)
-
-    })
-
   var deficitOrderedUncertainLiteralsForJava: Array[Integer] = parameterLiteralElisArray.map(new Integer(_))
+
+  if (debug) {
+
+    println("Parameter elis:")
+
+    parameterLiteralElisArray.foreach(p => if (isPosEli(p)) println(p + " = " + symbols(p)) else println(p + " = not " + symbols(negateNegEli(p))))
+
+  }
 
   if (shuffleRandomVariables)
     shuffleArray(deficitOrderedUncertainLiteralsForJava, new java.util.SplittableRandom())
