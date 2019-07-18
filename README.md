@@ -419,7 +419,7 @@ Example (7):
     0.65 1 -2 3 0
     4 5 0
     0.7 6 0
-	0.92 -1 3 0
+    0.92 -1 3 0
     
 This example defines that clause v1 v -v2 v v3 has probability 0.65, that the probability of -v1 v v3 is 0.92 and Boolean variable v6 has probability 0.7 (and that -v6 has probability 0.3). Cost functions and
 auxiliary Boolean variables and their declaration as parameter atoms are automatically generated for these weighted clauses. Clause v4 v v5 is a regular ("hard") clause which must always hold.   
@@ -456,6 +456,7 @@ Example (8):
     _pat_(q).
     
     _eval_("f(num) / f(q)", "?").  % queries Pr(p|q)
+    _eval_("f(p)", "?").           % queries marginal probability Pr(p)
 
 Observe that `_eval_` isn't a proper predicate, it cannot be used in the condition of rules (more precisely, it can, but then the `"?"` as second argument isn't resolved).
 
