@@ -240,7 +240,6 @@ Multiple `_pr_` facts can be provided.
 
 If of these only `_pr_` facts are provided (i.e., the problem is purely deductive-probabilistic), it is recommended to use delSAT
 with command line switch `-mse` which activates optimized handling of costs which have the form of inner MSE (Mean Squared Error) terms.  
-
 Note that parameter atoms (the random variables in our framework) need to be logically defined (i.e., occur in some rule head or choice fact) but 
 without completely fixing their truth values, as otherwise they couldn't be varied during sampling. A simple way to ensure this is by using a so-called _spanning rule_ of
 the form `{a}.` However, apart from this, parameter atoms and measured atoms can be freely used in any rules and be interdependent 
@@ -399,7 +398,7 @@ Example grounder call using [Clingo](https://potassco.org/clingo/) (observe the 
  
 The final input file can then be created by appending the `pats` and `cost` lines (if any) to the ASPIF or DIMACS file, each starting in a new line. 
 
-##### Probabilistic clauses for DIMACS CNF #####
+##### Probabilistic clauses for DIMACS CNF (PCNF) #####
 
 Alternatively to the previous formats, input is also accepted in an extension of the DIMACS CNF format (called _Probabilistic CNF_ or PCNF) where each
 clause can optionally be prefixed by a real number p which specifies the probability of the clause, 0 < p < 1, followed by whitespace. The number **must** contain a decimal point ('.').  
