@@ -1,8 +1,9 @@
-<img src=delSAT1.jpg width=200 align="right" style="margin-left: 0px">
+<img src=delSAT1.jpg width=200 align="right" style="margin-left: 0px;margin-top: 0px">
 
 ### Latest releases, changelog ###
 
-0.4.1
+<sub><sup>
+  0.4.1
 
 - Support for clauses annotated with probabilities in DIMACS CNF (Probabilistic CNF)
 - `_eval_` for ad hoc querying of probabilities and other statistics (e.g., remaining costs/errors)
@@ -18,6 +19,8 @@
 
 - Simplified usage; support for parameter atom and cost function specification using special logical predicates
 - Support for distinct sets of parameter atoms and measured atoms, enabling preliminary support for inductive/abductive inference.
+
+</sup></sub>
 
 See [CHANGELOG.md](CHANGELOG.md) for details.
 
