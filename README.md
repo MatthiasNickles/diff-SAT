@@ -1,4 +1,4 @@
-![delSATimg](delSAT1.jpg?raw=true "delSATimg1")
+![delSATimg](delSAT1.jpg?raw=true "delSATimg1" | width=100)
 ### Latest releases, changelog ###
 
 0.4.1
