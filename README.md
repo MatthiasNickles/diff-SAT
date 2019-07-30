@@ -1,4 +1,4 @@
-<img src=delSAT1.jpg width=120>
+<img src=delSAT1.jpg width=320 style="padding-left: 0px">
 
 ### Latest releases, changelog ###
 
