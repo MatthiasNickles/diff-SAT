@@ -1,5 +1,3 @@
-<img src=delSAT1.jpg width=320 align="right" style="margin-left: 0px">
-
 ### Latest releases, changelog ###
 
 0.4.1
@@ -21,6 +19,7 @@
 
 See [CHANGELOG.md](CHANGELOG.md) for details.
 
+<img src=delSAT1.jpg width=320 align="right" style="margin-left: 0px">
 ### delSAT ###
 
 - [Synopsis](#synopsis)
