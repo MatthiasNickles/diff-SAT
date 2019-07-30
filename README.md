@@ -1,4 +1,3 @@
-<sub>
   
 ### Latest releases, changelog ###
 
@@ -20,7 +19,6 @@
 - Support for distinct sets of parameter atoms and measured atoms, enabling preliminary support for inductive/abductive inference.
 
 See [CHANGELOG.md](CHANGELOG.md) for details.
-</sub>
 
 <img src=delSAT1.jpg width=200 align="right" style="margin-left: 0px">
 
