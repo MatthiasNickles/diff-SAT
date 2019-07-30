@@ -1,3 +1,4 @@
+![delSATimg](delSAT1.jpg?raw=true "delSATimg1")
 ### Latest releases, changelog ###
 
 0.4.1
