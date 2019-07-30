@@ -1,4 +1,4 @@
-<img src=delSAT1.jpg width=200 align="right" style="margin-left: 0px;margin-top: 0px;padding-top: 0px">
+<img src=delSAT1.jpg width=200 align="right" style="margin-left: 0px;margin-top: 0px;padding: 0px;clear:top">
 
 ### Latest releases, changelog ###
 
