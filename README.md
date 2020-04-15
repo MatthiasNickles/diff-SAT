@@ -109,6 +109,11 @@ http://arxiv.org/abs/1812.11948
   In Fabrizio Riguzzi, Elena Bellodi, Riccardo Zese (Eds.): Proceedings of the 28th International Conference on Inductive Logic Programming (ILP'18). Lecture Notes in Artificial Intelligence (LNAI), Springer, 2018.
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. In Davide Ciucci, Gabriella Pasi, Barbara Vantaggi (Eds.): Proceedings of the 12th International Conference on 
   Scalable Uncertainty Management (SUM'18). Lecture Notes in Artificial Intelligence (LNAI), Springer 2018.
+  
+delSAT also furthers ideas from earlier publications where Probabilistic Answer Set Programming was implemented via sampling and counting operations 
+over multiple answer sets, see, e.g.,  
+
+- Matthias Nickles, Alessandra Mileo: A Hybrid Approach to Inference in Probabilistic Non-Monotonic Logic Programming, PLP@ICLP, 2015.
 
 #### Build and Run ####
 
