@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018,2019 Matthias Nickles
+  * Copyright (c) 2018-2020 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -11,35 +11,87 @@
 
 package solving
 
-import java.lang.management.ManagementFactory
 import java.util
 import java.util.concurrent._
-import java.util.{Map, Optional}
+import sun.misc.Contended
 
 import aspIOutils._
+
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, Variable}
-import commandlineDelSAT.delSAT._
-import it.unimi.dsi.fastutil.ints._
-import it.unimi.dsi.fastutil.objects.ObjectArrayList
-import sharedDefs.{allowNumFiniteDiff, _}
-import sun.misc.Contended
-import utils._
 
-import scala.collection.mutable
+import input.delSAT._
+import it.unimi.dsi.fastutil.ints.{IntOpenHashSet, _}
+
+import sharedDefs._
+
+import input.UNSAFEhelper._
+import input.{UNSAFEhelper, delSAT}
+
+import utils._
+import utils.Various._
+
+import scala.collection.{Seq, mutable}
 import scala.collection.mutable.ArrayBuffer
 
 /**
   * Main multimodel solver and propositional model sampling class.
   *
-  * TODO: more detailed API documentation
-  *
+  * @todo further refactoring
   * @author Matthias Nickles
   *
   */
 class SolverMulti(prep: Preparation) {
 
   import prep._
+
+  case class SampleMultiModelsConf(
+                                    requestedNoOfModelsBelowThresholdOrAuto: Int,
+                                    noOfSecondaryModels: Int,
+                                    prep: Preparation,
+                                    requestedNumberOfModels: Int /*-1: stopSolverThreads at minimum number of models required to reach threshold*/ ,
+                                    costThreshold: Double,  // the target cost
+                                    maxIt: Int,
+                                    maxSamplingTimeMs: Long,
+                                    offHeapGarbageCollectionMode: Int /*0: never do any off-heap ("unsafe memory") garbage collection,
+    1: always perform off-heap garbage collection when either (an estimate of) free off-heap memory falls
+    below x% or UNSAFEhelper.debugMode=true,
+    2: enforces garbage collection after each model, regardless of available memory,
+    -1: auto (omits off-heap garbage collections for
+    sampling tasks (since these typically generate small models and need to be fast) or if only
+    a single model has been requested by the user, in which case occupied off-heap memory is simply released by the OS on program exit)*/);
+
+
+  val localSingleSamplerThreadPool = /*Executors.newFixedThreadPool(3)*/
+    if (false /*localSolverParallelThresh == localSolverParallelThreshMax*/ )
+    null.asInstanceOf[ThreadPoolExecutor] else
+    new ThreadPoolExecutor(3 /*TODO: set depending on whether parallel unit propagation specified*/ ,
+      8 /*<- TODO: set depending on unit prop config and #CPUs*/ , 10, TimeUnit.SECONDS,
+      new LinkedBlockingQueue[Runnable](256) /*new SynchronousQueue[Runnable]*/) // used for various local (within a solver thread) multithreading
+
+
+  val parallelBCPThreadPool: ExecutorService = localSingleSamplerThreadPool
+
+  @Contended val sampledModels = ArrayBuffer[(Array[Eli], IntOpenHashSet)]()
+
+  //@volatile var refreshedBestPhasesGlobal: Int = 0
+
+  var maxCompetingSolverThreads: Int = (if (maxSolverThreadsR < 0) (if (noOfAbsElis < -maxSolverThreadsR)
+    1
+  else
+    Math.ceil(Runtime.getRuntime().availableProcessors() / (if (abandonOrSwitchSlowThreads != 0 && abandonOrSwitchSlowThreads != 4)
+      1.4d else 1.6d))).toInt
+  else
+    maxSolverThreadsR).max(1)
+
+  val threadConfs = Array.ofDim[SolverThreadSpecificSettings](maxCompetingSolverThreads)
+
+  @volatile var optimalSingleSolverConfOpt: Option[SolverThreadSpecificSettings] = None
+
+  val uncertainAtomsUpdateExecutorService = new ThreadPoolExecutor(2, 2, 3, TimeUnit.SECONDS, new LinkedBlockingQueue[Runnable])
+
+  //private[this] val unsafe: Unsafe = unsafeRefl.get(null).asInstanceOf[Unsafe] // we can prevent val access via
+  // automatically generated getter method like this (using private [this]), but doesn't seem to make a difference, because of inlining, except in profiler like VisualVM
 
   /**
     * Computes both the total cost and all inner costs (the sub-costs which add up to the total cost).
@@ -82,22 +134,9 @@ class SolverMulti(prep: Preparation) {
 
   }
 
-  val uncertainAtomsUpdateExecutorService = new ThreadPoolExecutor(2, 2, 3, TimeUnit.SECONDS, new LinkedBlockingQueue[Runnable])
-
-  var maxCompetingSolverThreads = (if (maxSolverThreadsR < 0) (if (noOfPosElis < -maxSolverThreadsR)
-    1
-  else
-    Math.ceil(Runtime.getRuntime().availableProcessors() / (if (abandonOrSwitchSlowThreads > 0) 1.4d else 1.4d))).toInt else maxSolverThreadsR).max(1)
-
-  var maxBurstRR = Math.abs(maxBurstR)
-
-  @Contended var dynamicallyAdaptMaxBurst = maxBurstR < 0
-
-  @Contended var noOfConflictsTotalAllThreads = 0 // approximate number - not entirely current
-
   @inline def updateAtomsFreqs(mOpt: Option[IntOpenHashSet],
                                measuredAtomElis: Array[Eli],
-                               sampledModels /*after adding new model mOpt*/ : ArrayBuffer[(Array[Eli], IntOpenHashSet)],
+                               sampledModels /*after(!) adding new model mOpt*/ : ArrayBuffer[(Array[Eli], IntOpenHashSet)],
                                fromScratch: Boolean = false): Unit = {
 
     val newModelsCount: Double = sampledModels.length.toDouble
@@ -114,7 +153,22 @@ class SolverMulti(prep: Preparation) {
 
         val measureAtomVar: Variable[DoubleReal] = eliToVariableInCostFunctions(measuredAtomEli)
 
-        measureAtomVar.set(new DoubleReal(sampledModels.count(_._2.contains(measuredAtomEli)).toDouble / newModelsCount))
+        var count = 0
+
+        var j = 0
+
+        while(j < sampledModels.length) {
+
+          val model = sampledModels(j)
+
+          if(model._2.contains(measuredAtomEli))
+            count += 1
+
+          j += 1
+
+        }
+
+        measureAtomVar.set(new DoubleReal(count.toDouble / newModelsCount))
 
         i += 1
 
@@ -219,6 +273,89 @@ class SolverMulti(prep: Preparation) {
 
   }
 
+
+  @inline def tempUpdMeasuredAtomsFreqs(appending: Boolean,
+                                        newModel: IntOpenHashSet,
+                                        measuredAtomElis: Array[Eli],
+                                        modelsCount: Int /* <--- excluding newModel */): Unit = {
+
+    assert(appending)
+
+    if(appending) {
+
+      var i = 0
+
+      val il = measuredAtomElis.length
+
+      while (i < il) {
+
+        val measuredAtomEli = measuredAtomElis(i)
+
+        val measureAtomVar = eliToVariableInCostFunctions(measuredAtomEli)
+
+        val newValue = if (newModel.contains(measuredAtomEli))
+          (measureAtomVar.getReal * modelsCount + 1d) / (modelsCount + 1d)
+        else
+          (measureAtomVar.getReal * modelsCount) / (modelsCount + 1d)
+
+        measureAtomVar.set(new DoubleReal(newValue))
+
+        i += 1
+
+      }
+
+    }/* nope, gives NaN for #models = 0
+    else {  // undoes one previous appending call
+
+      var i = 0
+
+      val il = measuredAtomElis.length
+
+      while (i < il) {
+
+        val measuredAtomEli = measuredAtomElis(i)
+
+        val measureAtomVar = eliToVariableInCostFunctions(measuredAtomEli)
+
+        val newValue = if (newModel.contains(measuredAtomEli))
+          (-1d + measureAtomVar.getReal + modelsCount * measureAtomVar.getReal) / (1d + modelsCount)
+        else
+          (1d + modelsCount) * measureAtomVar.getReal / modelsCount
+
+        measureAtomVar.set(new DoubleReal(newValue))
+
+        i += 1
+
+      }
+
+    }*/
+
+  }
+
+  @inline def predictTotalCostWithHypotheticalModel(newModel: IntOpenHashSet,
+                                                    measuredAtomElis: Array[Eli]): Double = {
+
+  //  println("\nBefore:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
+
+    val originalMeasuredAtomValues: Array[Double] = measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal)
+
+    tempUpdMeasuredAtomsFreqs(appending = true,
+      newModel = newModel,
+      measuredAtomElis = measuredAtomElis,
+      sampledModels.length)
+
+   // println("  With hypothetical update:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
+
+    val predictedNewTotalCost = currentCosts(costFctsInner)
+
+    measuredAtomElis.zipWithIndex.map{ case (eli, index) => eliToVariableInCostFunctions(eli).set(new DoubleReal(originalMeasuredAtomValues(index))) }
+
+   // println("\nAfter reverting to original:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
+
+    predictedNewTotalCost._1
+
+  }
+
   @inline def updateMeasuredAtomsFreqsAndComputeCost(mOpt: Option[IntOpenHashSet],
                                                      measuredAtomElis: Array[Eli],
                                                      sampledModels /*after adding new model m*/ : ArrayBuffer[(Array[Eli], IntOpenHashSet)],
@@ -242,38 +379,21 @@ class SolverMulti(prep: Preparation) {
 
   }
 
-  case class SampleMultiConf(
-    requestedNoOfModelsBelowThresholdOrAuto: Int,
-    noOfSecondaryModels: Int,
-    prep: Preparation,
-    requestedNumberOfModels: Int /*-1: stopSolverThreads at minimum number of models required to reach threshold*/ ,
-    threshold: Double,
-    maxIt: Int);
-
-  @Contended val localSingleSamplerThreadPool = if (localSolverParallelThresh == localSolverParallelThreshMax) null.asInstanceOf[ThreadPoolExecutor] else
-    new ThreadPoolExecutor(3, 3, 5, TimeUnit.SECONDS,
-      new LinkedBlockingQueue[Runnable]) // used for various local (within toAbsEli solver thread) multithreading
-
-  @Contended val sampledModels = ArrayBuffer[(Array[Eli], IntOpenHashSet)]()
-
-  val passPreviousGlobal: ByteArrayUnsafeS = if (globalPassCache)
-    new ByteArrayUnsafeS(noOfPosElis, 0x00.toByte /*<- sensitive value*/ , true) // 0x01.toByte could be used to indicate "don't know", but doesn't seem to have a positive effect
-  // NB: we deliberately access this ^ array in a thread unsafe way
-  else
-    null.asInstanceOf[ByteArrayUnsafeS]
-
-
   /**
-    * Samples multiple models (answer sets or SAT models) until the total cost function falls below the specified threshold (or the maximum number of trials has been reached).
+    * Samples multiple models (answer sets or SAT models) until the total cost function falls below the specified threshold
+    * (or the maximum number of trials has been reached or some specified minimum number of models have been generated).
+    * Don't invoke directly - when using the User API, use [[input.ProbabilisticAnswerSetProgram#solve(input.SolverParametersOverlay, scala.Option)]] instead.
     *
     * @param sampleMultiConf
     * @return (sequence of sampled symbolic models, sequence of pairs (model as array of elis, model as eli hash set))
     */
-  def sampleMulti(sampleMultiConf: SampleMultiConf): (mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)]) = {
+  def sampleMulti(sampleMultiConf: SampleMultiModelsConf): SamplingResult/*(mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)], Long)*/ = {
 
     import sampleMultiConf._
 
-    def printMeasuredEliFreqs = {
+    if (UNSAFEhelper.debugMode) println("Available off-heap mem at start of sampleMulti: " + approxSizeOfCurrentFreeUnsafeMemory() + " (" + approxSizeOfCurrentFreeUnsafeMemory().toDouble / 1073741824d + " GB)")
+
+    @inline def printMeasuredEliFreqs: Unit = {
 
       var i = 0
 
@@ -283,7 +403,7 @@ class SolverMulti(prep: Preparation) {
 
         val measuredAtomEli: Eli = measuredAtomsElis(i)
 
-        println("   f(" + symbols(measuredAtomEli) + ") = " + new DoubleReal(sampledModels.count(_._2.contains(measuredAtomEli)).toDouble / sampledModels.length.toDouble))
+        println("   f(" + symbols(measuredAtomEli - 1) + ") = " + new DoubleReal(sampledModels.count(_._2.contains(measuredAtomEli)).toDouble / sampledModels.length.toDouble))
 
         i += 1
 
@@ -295,26 +415,74 @@ class SolverMulti(prep: Preparation) {
 
     var it = 1
 
-    val samplingTimer = System.nanoTime()
+    val samplingTimerNs = System.nanoTime()
 
-    val stagnationTol = threshold / stagnationTolDiv
+    val stagnationTol = costThreshold / stagnationTolDiv
 
     var oldTotalCost = Double.MaxValue
 
     var costDifForStagn = Double.MaxValue
 
-    val showNumDiffProgress = debug
+    val showNumDiffProgressForDebugging = debug
 
     var minCostSf = Double.MaxValue
 
     if (enforceStopWhenSampleSizeReached)
       stomp(-5012)
 
-    @inline def samplingStopCriterion(it: Int, totalCost: Double, costDifForStagn: Double): Boolean = (it < maxIt &&
-      (requestedNumberOfModels <= -1 && (totalCost.isNaN || totalCost > threshold) ||
-        requestedNumberOfModels >= 0 && (sampledModels.length < requestedNumberOfModels || (totalCost.isNaN || totalCost > threshold) && !enforceStopWhenSampleSizeReached)) &&
+    if (requestedNumberOfModels != 1 && (!freeOrReassignDeletedNogoodMemory || freeDeletedNogoodMemoryApproach != 2))
+      stomp(-5006, "If -n 1 is not specified, freeOrReassignDeletedNogoodMemory must be true and freeDeletedNogoodMemoryApproach must be 2")
+
+    if (requestedNumberOfModels != 1 && nogoodRemovalUsingRecyclingFromTotalHistoryEvery > 0)
+      stomp(-5006, "If -n 1 is not specified, nogoodRemovalUsingRecyclingFromTotalHistoryEvery must be 0 (deactivated)")
+
+    if(writeRuntimeStatsToFile) {
+
+      assert(delSAT.stats != null)
+
+      input.delSAT.stats.writeEntry(key = "timeoutMs", value = timeoutMs, solverThreadNo = 0/*0: outside solver solver thread or thread irrelevant */)
+
+      input.delSAT.stats.writeEntry(key = "targetCost", value = costThreshold, solverThreadNo = 0)
+
+      input.delSAT.stats.writeEntry(key = "requestedNumberOfModels", value = requestedNumberOfModels, solverThreadNo = 0)
+
+    }
+
+    @inline def samplingContinueCriterion(it: Nogi, totalCost: Double, costDifForStagn: Double): Boolean = (it < maxIt &&
+      System.currentTimeMillis <= maxSamplingTimeMs &&
+      (requestedNumberOfModels <= -1 && (totalCost.isNaN || totalCost > costThreshold) ||
+        requestedNumberOfModels >= 0 && (sampledModels.length < requestedNumberOfModels || (totalCost.isNaN || totalCost > costThreshold) && !enforceStopWhenSampleSizeReached)) &&
       !(stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost < Double.MaxValue &&
         (requestedNumberOfModels <= -1 || sampledModels.length >= requestedNumberOfModels)))
+
+    @inline def offHeapGarbageCollectionCriterion(lockedSolverData: Boolean): Boolean = { // also see offHeapGarbageReleaseCriterion().
+      // Both collecting off-heap garbage and releasing it is costly.
+
+      val r = !lockedSolverData && (offHeapGarbageCollectionMode == 1 || offHeapGarbageCollectionMode == 2 || offHeapGarbageCollectionMode == -1 && (
+
+        !(sampleMultiConf.requestedNumberOfModels == 1 && sampleMultiConf.noOfSecondaryModels == 1 ||
+          sampleMultiConf.requestedNumberOfModels == -1 && sampleMultiConf.noOfSecondaryModels == -1)
+        // i.e., with possible multimodel sampling (... == -1), by default we do NOT perform any off-heap garbage collections, for performance reasons
+
+        ))
+      // If lockedSolverData (from reuseSolverData), we need to postpone garbage collection and release until after the outer sampling loop
+
+      r
+
+    }
+
+    @inline def offHeapGarbageReleaseCriterion(noFurtherModels: Boolean, lockedSolverData: Boolean): Boolean = { // also see offHeapGarbageCollectionCriterion.
+      // Both collecting off-heap garbage and releasing it is costly.
+
+      offHeapGarbageCollectionCriterion(lockedSolverData) && !(offHeapGarbageCollectionMode == -1 && noFurtherModels) &&
+        (UNSAFEhelper.debugMode || offHeapGarbageCollectionMode == 2 ||
+          approxSizeOfCurrentFreeUnsafeMemory.toFloat < approxSizeOfInitialFreeUnsafeMemory.toFloat * offHeapGarbageReleaseThreshold)
+
+    }
+
+    var outerLoopIncomplete = true
+
+    var reentrySolverDataOpt: Option[SingleSolverThreadData] = None
 
     if (allowNumFiniteDiff) { // we use auto/sym diff (where available for a parameter atom) and/or finite differences (sort of discrete numerical differentiation) to approximate the partial
       // derivatives. The latter is mainly useful if automatic differentiation (i.e., nablaInner) cannot be used, i.e., for parameter atoms which
@@ -322,7 +490,7 @@ class SolverMulti(prep: Preparation) {
 
       do {
 
-        val noOfModelsBeforeProbes = sampledModels.length
+        //val noOfModelsBeforeProbes = sampledModels.length
 
         val useRandomDiffQuot = rngGlobal.nextDouble() < numFinDiffShuffleProb
 
@@ -331,7 +499,7 @@ class SolverMulti(prep: Preparation) {
 
             if (useRandomDiffQuot) {
 
-              if (showNumDiffProgress) println(" Random diffquot step in allowNumFiniteDiff")
+              if (showNumDiffProgressForDebugging) println(" Random diffquot step in allowNumFiniteDiff")
 
               (probingParamAtomEli, rngGlobal.nextDouble())
 
@@ -339,17 +507,15 @@ class SolverMulti(prep: Preparation) {
 
               val diffQuotPerAutoDiff = deficitByDeriv(probingParamAtomEli) // we try to get an analytical (automatic differentiation) diff result first
 
-              if (!diffQuotPerAutoDiff.isNaN || ignoreParamIfNotMeasured)
+              if ((!diffQuotPerAutoDiff.isNaN || ignoreParamIfNotMeasured))
                 (probingParamAtomEli, diffQuotPerAutoDiff)
-              else {
+              else { // this branch is only entered if we couldn't get a value analytically:
 
-                if (showNumDiffProgress) println(" Probing for parameter (hypothesis) atom " + symbols(probingParamAtomEli) + "...")
+                if (showNumDiffProgressForDebugging) println(" Probing for parameter (hypothesis) atom " + symbols(probingParamAtomEli - 1) + "...")
 
-                if (showNumDiffProgress) println("  Probing for +" + symbols(probingParamAtomEli) + "...")
+                if (showNumDiffProgressForDebugging) println("  Probing for +" + symbols(probingParamAtomEli - 1) + "...")
 
                 val rnOrderParamEli: Predef.Map[Integer, Double] = deficitOrderedUncertainLiteralsForJava.map(p => (p, {
-
-                  //deficitByDeriv(p)
 
                   1d / deficitOrderedUncertainLiteralsForJava.indexOf(p).toDouble / deficitOrderedUncertainLiteralsForJava.length.toDouble // heuristic
 
@@ -371,24 +537,19 @@ class SolverMulti(prep: Preparation) {
 
                 }))
 
-                val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
+                val (newModelOpt: Option[(Array[Eli], IntOpenHashSet)], _) = sampleSingleRacing(maxSamplingTimeMs = maxSamplingTimeMs, collectOffHeapGarbage = offHeapGarbageCollectionCriterion(reuseSolverData))
 
-                if (newModelOpt.isEmpty)
-                  return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+                if (newModelOpt.isEmpty) { // UNSAT or aborted
 
-                sampledModels.append(newModelOpt.get)
+                  finalActionsAfterSampling()
 
-                val costWithProbePlusH = updateMeasuredAtomsFreqsAndComputeCost(None,
-                  measuredAtomElis = measuredAtomsElis,
-                  sampledModels,
-                  costFctsInner = costFctsInner,
-                  fromScratch = true,
-                  computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-                ).get._1
+                  return solving.SamplingResult(mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)](), System.nanoTime() - samplingTimerNs)
 
-                sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
+                }
 
-                if (showNumDiffProgress) println("  Probing for -" + symbols(probingParamAtomEli) + "...")
+                val costWithProbePlusH = predictTotalCostWithHypotheticalModel(newModelOpt.get._2, measuredAtomsElis)
+
+                if (showNumDiffProgressForDebugging) println("  Probing for -" + symbols(probingParamAtomEli - 1) + "...")
 
                 java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, Ordering.by[Integer, Double]((parameterLiteralEli: Integer) => {
                   // we push the probing atom to the top or bottom of the branching literals priority ranking
@@ -402,28 +563,24 @@ class SolverMulti(prep: Preparation) {
 
                 }))
 
-                val newModelOptMinusH: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing(tempFacts = Nil)
+                val (newModelOptMinusH: Option[(Array[Eli], IntOpenHashSet)], _) = sampleSingleRacing(maxSamplingTimeMs = maxSamplingTimeMs,
+                  collectOffHeapGarbage = offHeapGarbageCollectionCriterion(reuseSolverData))
 
-                if (newModelOptMinusH.isEmpty)
-                  return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+                if (newModelOptMinusH.isEmpty) { // UNSAT or aborted
 
-                sampledModels.append(newModelOptMinusH.get)
+                  finalActionsAfterSampling()
 
-                val costWithProbeMinusH = updateMeasuredAtomsFreqsAndComputeCost(None,
-                  measuredAtomElis = measuredAtomsElis,
-                  sampledModels,
-                  costFctsInner = costFctsInner,
-                  fromScratch = true,
-                  computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-                ).get._1
+                  return solving.SamplingResult(mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)](), System.nanoTime() - samplingTimerNs)
 
-                sampledModels.remove(noOfModelsBeforeProbes, sampledModels.length - noOfModelsBeforeProbes)
+                }
+
+                val costWithProbeMinusH = predictTotalCostWithHypotheticalModel(newModelOptMinusH.get._2, measuredAtomsElis)
 
                 val diffQuot = (costWithProbePlusH - costWithProbeMinusH) // * noOfModelsBeforeProbes.toDouble
                 // NB: negative diffQuote increases(!) the likeliness that the respective parameter atom will be included in the next model.
                 // NB: since in the solver we only need to compare these "quotients", division by 2h is redundant.
 
-                if (showNumDiffProgress) println(" ==> diffQuot for param atom " + symbols(probingParamAtomEli) + " = " + diffQuot)
+                if (showNumDiffProgressForDebugging) println(" ==> diffQuot for param atom " + symbols(probingParamAtomEli - 1) + " = " + diffQuot)
 
                 (probingParamAtomEli, diffQuot)
 
@@ -432,11 +589,12 @@ class SolverMulti(prep: Preparation) {
             }
 
           }
+
         }.toMap
 
         val ordering = if (diversifyLight || diversify) {
 
-          //shuffleArray(deficitOrderedUncertainLiteralsForJava, rg = rngGlobalRG)  // not useful here, doesn't reliably achieve shuffling of elements with equal diffQuots due to IEEE arithmetics (e.g., -0 vs. 0)
+          //shuffleArray(deficitOrderedUncertainLiteralsForJava, rg = rngGlobal)  // not useful here, doesn't reliably achieve shuffling of elements with equal diffQuots due to IEEE arithmetics (e.g., -0 vs. 0)
 
           val nnn = mutable.HashMap[Integer, Double]() ++ deficitOrderedUncertainLiteralsForJava.map(_ -> (rngGlobal.nextDouble() - 0.5d) / 1e12d /*1e12d*/)
 
@@ -468,18 +626,31 @@ class SolverMulti(prep: Preparation) {
 
         java.util.Arrays.parallelSort(deficitOrderedUncertainLiteralsForJava, ordering)
 
-        val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing()
+        // We compute the actual new model (the one we keep in sampledModels):
+        val (newModelOpt: Option[(Array[Eli], IntOpenHashSet)], newReentrySolverDataOpt: Option[SingleSolverThreadData]) =
+          sampleSingleRacing(collectOffHeapGarbage = offHeapGarbageCollectionCriterion(reuseSolverData),
+            maxSamplingTimeMs = maxSamplingTimeMs, reentrySingleSolverThreadDataOpt = reentrySolverDataOpt)
 
-        if (newModelOpt.isEmpty)
-          return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+        if (newModelOpt.isEmpty) { // UNSAT or aborted
+
+          finalActionsAfterSampling()
+
+          return solving.SamplingResult(mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)](), System.nanoTime() - samplingTimerNs)
+
+        }
 
         sampledModels.append(newModelOpt.get)
 
-        totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
+        if(reuseSolverData)
+          reentrySolverDataOpt = newReentrySolverDataOpt
+
+        totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity
+        else
+          updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
           measuredAtomElis = measuredAtomsElis,
           sampledModels,
           costFctsInner = costFctsInner,
-          fromScratch = true,
+          fromScratch = false /*true*/,
           computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
         ).get._1
 
@@ -491,9 +662,9 @@ class SolverMulti(prep: Preparation) {
 
         //println("minCostSf = " + minCostSf)
 
-        if (resetsNumericalOuterLoopOnStagnation > 0 && costDifForStagn < stagnationTol && totalCost > threshold) {
+        if (resetsNumericalOuterLoopOnStagnation > 0 && costDifForStagn < stagnationTol && totalCost > costThreshold) {
 
-          if (showNumDiffProgress) println("\n RESETTING (costDifForStagn = " + costDifForStagn + ")\n\n")
+          if (showNumDiffProgressForDebugging) println("\nResetting samples (stagnation detected; costDifForStagn = " + costDifForStagn + ")\n\n")
 
           sampledModels.clear()
 
@@ -507,20 +678,29 @@ class SolverMulti(prep: Preparation) {
 
         if (showProgressStats) {
 
-          if (showNumDiffProgress) println("\nOuter-outer sampling iteration (with allowNumFiniteDiff = true, mixedScenario = " + (if (mixedScenario) "true" else "false") + ") " + it + " (of max " + maxIt + ") complete. " +
-            "Current total cost: " + totalCost + " (threshold: " + threshold + "). #models: " + sampledModels.length + "\n")
+          if (showNumDiffProgressForDebugging) println("\nSampling in progress... Sampled " + sampledModels.length + " models.\nOuter-outer sampling iteration (with allowNumFiniteDiff = true, mixedScenario = " + (if (mixedScenario) "true" else "false") + ") " + it + " (of max " + maxIt + ") complete. " +
+            "Current total cost: " + totalCost + " (threshold: " + costThreshold + "). #models: " + sampledModels.length + "\n")
+          else if(it % 2000 == 0)
+            println("\nSampling in progress... Sampled " + sampledModels.length + " models. Current total cost: " + totalCost + " (threshold: " + costThreshold + ")")
+
+          if(writeRuntimeStatsToFile)
+            input.delSAT.stats.writeEntry(key = "totalCostIntermediate", value = totalCost, solverThreadNo = 0)
 
         }
 
         it += 1
 
-      } while (samplingStopCriterion(it = it, totalCost = totalCost, costDifForStagn = costDifForStagn))
+        outerLoopIncomplete = samplingContinueCriterion(it = it, totalCost = totalCost, costDifForStagn = costDifForStagn)
 
-      if (stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost > threshold)
+        if (offHeapGarbageReleaseCriterion(noFurtherModels = !outerLoopIncomplete, lockedSolverData = reuseSolverData))
+          offHeapGarbageCollectionFreeGarbage
+
+      } while (outerLoopIncomplete)
+
+      if (stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost > costThreshold)
         stomp(-5011)
 
-      if (debug)
-        println("minCostSf = " + minCostSf)
+      if(debug) println("minCostSf (over all samples models) = " + minCostSf)
 
     } else do { // the (mostly deprecated) simpler outer-outer sampling loop for purely _deductive_ probabilistic inference (measured atoms = parameter atoms) and plain SAT/ASP solving
 
@@ -528,7 +708,7 @@ class SolverMulti(prep: Preparation) {
 
         if (diversify) {
 
-          //shuffleArray(deficitOrderedUncertainLiteralsForJava, rg = rngGlobalRG)  // not useful here, doesn't reliably achieve shuffling of elements with equal diffQuots due to IEEE arithmetics (e.g., -0 vs. 0)
+          //shuffleArray(deficitOrderedUncertainLiteralsForJava, rg = rngGlobal)  // not useful here, doesn't reliably achieve shuffling of elements with equal diffQuots due to IEEE arithmetics (e.g., -0 vs. 0)
 
           val nnn = deficitOrderedUncertainLiteralsForJava.map(_ -> (rngGlobal.nextDouble() - 0.5d) / 1e12d).toMap
 
@@ -552,12 +732,21 @@ class SolverMulti(prep: Preparation) {
 
       }
 
-      val newModelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingleRacing()
+      val (newModelOpt: Option[(Array[Eli], IntOpenHashSet)], newReentrySolverDataOpt: Option[SingleSolverThreadData]) = sampleSingleRacing(collectOffHeapGarbage = offHeapGarbageCollectionCriterion(reuseSolverData),
+        maxSamplingTimeMs = maxSamplingTimeMs, reentrySingleSolverThreadDataOpt = reentrySolverDataOpt)
 
-      if (newModelOpt.isEmpty)
-        return (mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)]())
+      if (newModelOpt.isEmpty) { // UNSAT or aborted
+
+        finalActionsAfterSampling()
+
+        return solving.SamplingResult(mutable.Seq[Array[Pred]](), ArrayBuffer[(Array[Eli], IntOpenHashSet)](), System.nanoTime() - samplingTimerNs)
+
+      }
 
       sampledModels.append(newModelOpt.get)
+
+      if(reuseSolverData)
+        reentrySolverDataOpt = newReentrySolverDataOpt
 
       totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
         measuredAtomElis = measuredAtomsElis,
@@ -572,14 +761,24 @@ class SolverMulti(prep: Preparation) {
       oldTotalCost = totalCost
 
       if (showProgressStats)
-        println("\nOuter-outer sampling iteration " + it + " (of max " + maxIt + ") complete. " +
-          "Current total cost: " + totalCost + " (threshold: " + threshold + ")")
+        println("Sampling in progress... Sampled " + sampledModels.length + " models.\nOuter-outer sampling iteration " + it + " (of max " + maxIt + ") complete. " +
+          "Current total cost: " + totalCost + " (threshold: " + costThreshold + ")")
+      else if(it % 10 == 0)
+        println("Sampling in progress... Sampled " + sampledModels.length + " models. Current total cost: " + totalCost + " (threshold: " + costThreshold + ")")
+
+      if(writeRuntimeStatsToFile)
+        input.delSAT.stats.writeEntry(key = "totalCostIntermediate", value = totalCost, solverThreadNo = 0)
 
       it += 1
 
-    } while (samplingStopCriterion(it = it, totalCost = totalCost, costDifForStagn = costDifForStagn))
+      outerLoopIncomplete = samplingContinueCriterion(it = it, totalCost = totalCost, costDifForStagn = costDifForStagn)
 
-    if (stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost > threshold)
+      if (offHeapGarbageReleaseCriterion(noFurtherModels = !outerLoopIncomplete, lockedSolverData = reuseSolverData))
+        offHeapGarbageCollectionFreeGarbage
+
+    } while (outerLoopIncomplete)
+
+    if (stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost > costThreshold)
       stomp(-5011)
 
     if (requestedNumberOfModels <= -2 && -requestedNumberOfModels > sampledModels.length) { // we "fill up" the sample by uniformly sampling from the current sample
@@ -625,35 +824,79 @@ class SolverMulti(prep: Preparation) {
 
       println("Approximations:\n")
 
-      val showFreqsOf = symbols.sorted.filterNot(_.contains("aux")).map(symbolToEli(_))
+      val showFreqsOf = symbols.sorted.filterNot(_.contains("aux")).map(symbolToAbsEli(_))
 
       showFreqsOf.foreach(atomEli => {
 
         val freqInModels = sampledModels.count(_._1.contains(atomEli)).toDouble / sampledModels.length.toDouble
 
-        println("Pr(" + symbols(atomEli) + ") =(approx.) " + freqInModels)
+        println("Pr(" + symbols(atomEli - 1) + ") =(approx.) " + freqInModels)
 
       })
 
     }
 
-    if (totalCost <= threshold)
-      println("\nSampling complete; specified threshold reached; cost reached: " + totalCost + "\n" + sampledModels.length + " model(s) sampled (with replacement)\n")
-    else
-      stomp(-5008, "\nCost reached: " + totalCost)
+    def finalActionsAfterSampling(): Unit = {
 
-    println("Time for multi-model sampling: " + timerToElapsedMs(samplingTimer) + " ms\n")
+      if(reuseSolverData && noOfMinibenchmarkTrials > 1)  // TODO: this is needed due to unknown bug which
+        // causes an off-heap memory leak if reuseSolverData=true.
+        stomp(-10000, "If noOfMinibenchmarkTrials > 1, sharedDefs.reuseSolverData needs to be false")
 
-    updateAtomsFreqs(None,
-      measuredAtomsElis,
-      sampledModels,
-      fromScratch = true)
+      //System.gc()
 
-    val sampledModelsWithEvalResolved: ArrayBuffer[(Array[Eli], IntOpenHashSet)] = sampledModels.map { case (modelElis, _) => {
+      if (offHeapGarbageCollectionCriterion(lockedSolverData = false)) { // with reuseSolverData=true within the sampling loop, we
+      // couldn't collect model data garbage in the inner solver thread, we had to wait until this point.
+
+        reentrySolverDataOpt.foreach(_.queueOffHeapGarbageInSingleSolver)
+
+       // nope, as these are allocated outside the "mini-benchmarking" loop: aspifOrDIMACSParserResult.rulesOrClauseNogoods.foreach(_.foreach{ _.addToGarbage() })
+
+
+      }
+
+      if (offHeapGarbageReleaseCriterion(noFurtherModels = true, lockedSolverData = false))
+        offHeapGarbageCollectionFreeGarbage
+
+      val timedOut = System.currentTimeMillis > maxSamplingTimeMs && (totalCost > costThreshold || sampledModels.length < requestedNumberOfModels)
+      // TODO (?): doesn't consider secondary models (switch -s)
+
+      if (writeRuntimeStatsToFile) {
+
+        input.delSAT.stats.writeEntry(key = "totalCost", value = totalCost, solverThreadNo = 0)
+
+        input.delSAT.stats.writeEntry(key = "sampledModels", value = sampledModels.length, solverThreadNo = 0)
+
+        input.delSAT.stats.writeEntry(key = "targetCostReached", value = totalCost <= costThreshold, solverThreadNo = 0)
+
+        input.delSAT.stats.writeEntry(key = "targetNoOfModelsReached", value = sampledModels.length >= requestedNumberOfModels, solverThreadNo = 0)
+
+        input.delSAT.stats.writeEntry(key = "timedout", value = timedOut, solverThreadNo = 0)
+
+      }
+
+      if (timedOut) {
+
+        stomp(-5018, "" + timeoutMs + "ms")
+
+      } else if (totalCost <= costThreshold) {
+
+        println("\nSampling complete; cost (over all models): " + totalCost + " (<= threshold " + costThreshold + ")\n" + sampledModels.length + " model(s) sampled (with replacement)\n")
+
+      } else if(sampledModels.length > 0/*otherwise UNSAT*/) {
+
+        stomp(-5008, "\nCost reached: " + totalCost + " (> threshold " + costThreshold + ")")
+
+      }
+
+    }
+
+    //println("Time for multi-model sampling: " + timerToElapsedMs(samplingTimer) + " ms\n")
+
+    val sampledModelsUsingElisWithEvalResolved: ArrayBuffer[(Array[Eli], IntOpenHashSet)] = sampledModels.map { case (modelElis, _) => {
 
       val modelElisEvalResolved: Array[Eli] = modelElis.map((posEli: Eli) => {
 
-        val sym = symbols(posEli) // e.g., _eval_("f(pn1(a))*2","?",1)  Note that after "?" there can be any number of user-specified extra arguments
+        val sym = symbolsWithoutTranslation(posEli - 1) // e.g., _eval_("f(pn1(a))*2","?",1)  Note that after "?" there can be any number of user-specified extra arguments
 
         if (sym.startsWith(evalFactPrefix + "(") && sym.contains("\"?\"") /*<- important as there might be resolved _eval_ atoms also (i.e., without "?")*/ ) {
 
@@ -666,9 +909,9 @@ class SolverMulti(prep: Preparation) {
 
           val resolvedEvalAtomSym = "_eval_(\"" + term + "\"," + (evalFunOpt.get.getReal * probabilisticFactProbDivider).toInt + extraArgs
 
-          symbols = symbols.:+(resolvedEvalAtomSym) // hmmpff
+          symbolsWithoutTranslation = symbolsWithoutTranslation.:+(resolvedEvalAtomSym) // hmmpff
 
-          symbols.length - 1
+          symbolsWithoutTranslation.length - 1
 
         } else
           posEli
@@ -681,2454 +924,759 @@ class SolverMulti(prep: Preparation) {
 
     }
 
-    val sampledModelsSymbolic = sampledModelsWithEvalResolved.map(model => model._1.map(eli => symbols(eli)))
-    // ^ NB: these are not yet the printed symbolic models; observe that in SAT mode, (classically-)negative literals (e.g., "-5") are
-    // at this point atoms which don't occur in the model, whereas in ASP mode, classical negation is expressed using
-    // prefix "-" which is part of the symbol itself. Default negation (which doesn't exist in SAT mode) is represented in ASP mode by
-    // absence of the negative literals in the model.
+    val sampledModelsSymbolicWithNegLits = if(!satMode) {
 
-    log("sampledModelsSymbolic:\n" + sampledModelsSymbolic.map(_.mkString(" ")).mkString("\n"))
+      val symbolicModels = sampledModelsUsingElisWithEvalResolved.map(model => model._1.map(eli => symbolsWithoutTranslation(eli - 1)))
 
-    (sampledModelsSymbolic, sampledModelsWithEvalResolved)
+      symbolicModels // In ASP mode, any classically-negative literals are already symbols (e.g., "-a") whereas
+      // default negation is represented by absence of the respective atom.
+
+    } else {  // In SAT-mode, we need to fill up the model for printing with negative literals if the positive literal isn't present. :
+
+      val fullSATModelsWithNegLiterals = sampledModelsUsingElisWithEvalResolved.map((model: (Array[Eli], IntOpenHashSet)) => {
+
+        // In SAT mode only, we need to fill up the model with negative literals if the respective positive literal isn't present:
+
+        val fullModelWithSymbols: Array[Pred] = symbolsWithoutTranslation.map(symbol =>
+          if (model._2.contains(symbol.toInt)) symbol else "-" + symbol)
+
+        fullModelWithSymbols
+
+      })
+
+      fullSATModelsWithNegLiterals
+
+    }
+
+    //if (debug && satMode) println("sampledModelsSymbolic (positive literals only):\n" +
+      //sampledModelsSymbolic.map((m: Array[String]) => m.map(_.toInt).sorted.mkString(" ")).mkString("\n"))
+
+    finalActionsAfterSampling()
+
+    solving.SamplingResult(sampledModelsSymbolicWithNegLits,
+      sampledModelsUsingElisWithEvalResolved,
+      System.nanoTime() - samplingTimerNs)
 
   }
 
-  @Contended var nogoodExchangePool = new java.util.concurrent.ConcurrentHashMap[IntArrayUnsafeS, Int /*producing thread*/ ]()
+  @inline def offHeapGarbageCollectionFreeGarbage: Unit = {
 
-  /*@volatile*/ var prevUnassi = Int.MaxValue // not precise; for statistics/debugging only
+    freeGarbageOffHeapMem(Long.MaxValue)
 
-  val threadConfs = Array.ofDim[SingleSolverConf](maxCompetingSolverThreads)
+    if (UNSAFEhelper.debugMode) println("Available off-heap memory after garbage collection   " + approxSizeOfCurrentFreeUnsafeMemory() + " (" + approxSizeOfCurrentFreeUnsafeMemory().toDouble / 1073741824d + " GB)")
+    // Remark: there is sometimes a discrepancy (a few MB) between this and the amount which was available at the start of
+    // sampleSingle() of unknown cause - perhaps some unaccounted slack generated by unsafe's memory management?
 
-  case class SingleSolverConf(threadNo: Int /*>=1*/ ,
-                              dependencyGraph: Int2ObjectOpenHashMap[List[Eli]],
-                              progIsTight: Boolean,
-                              var freeEliSearchApproach: Int,
-                              restartTriggerConfR: (Int, Int, Double),
-                              noHeapR: Int,
-                              absEliScoreFact: Float,
-                              rndmIgnLearnedNogoodThresholdR: Float,
-                              prep: Preparation /*<-for debugging/crosschecks only*/ ,
-                              arrangeEliPoolR: Int,
-                              seed: Long,
-                              rndmBranchR: Double)
+    if(UNSAFEhelper.debugMode) showRemainingAllocsDebug()
 
-  /** Samples a single model (answer set in case of ASP mode) using optionally multiple parallel solver threads which
+  }
+
+  /** Samples a single model (answer set in case of ASP mode) using (possibly) multiple parallel solver threads which
     * compete against each other in discovering a model.
     * The model generated by this function consists of elis (literals represented as positive integers).
     *
     * @author Matthias Nickles
     * @return Option[model as array of elis, model as hash set of elis] or None (UNSAT)
     */
-  def sampleSingleRacing(tempFacts: List[Eli] = Nil): Option[(Array[Eli], IntOpenHashSet)] = {
+  def sampleSingleRacing(collectOffHeapGarbage: Boolean, maxSamplingTimeMs: Long,
+                         reentrySingleSolverThreadDataOpt: Option[SingleSolverThreadData] = None): (Option[(Array[Eli], IntOpenHashSet)], Option[SingleSolverThreadData]/*<-- data from successful solver run, for optional reentry*/) = {
+    // If the returned models list is empty, this can mean either UNSAT or UNKNOWN (inner solver aborted, e.g., timeout),
+    // that is, at this level these two results cannot be distinguished from each other anymore.
 
-    @Contended @volatile var stopSolverThreads = false
+    val sharedAmongSingleSolverThreads = new SharedAmongSingleSolverThreads()
+
+    @volatile var preReportedMinUnassignedGlobal = noOfAllElis
+
+    @volatile var minUnassignedGlobal = noOfAllElis // not precise - use for statistical or debugging purposes only
+
+    @volatile var unsatMessagePrinted = false
 
     case class SolverThreadInfo(thread: Thread, progressNormalized: Double = 0d)
 
     val progressNormalizedPerThread = scala.collection.concurrent.TrieMap[Int, SolverThreadInfo]()
 
-    val progressCheckEveryTrials = progressCheckEveryTrialsR
+    val enforceProgressChecksEveryTrials = enforceProgressChecksEveryTrialsR
 
-    var progressCheckEveryTrialsState = progressCheckEveryTrials
+    val minimumTrialsBeforeFirstProgressCheck = 50000.min(enforceProgressChecksEveryTrials)
 
     val threadChangeCheckFreq = Math.abs(abandonOrSwitchSlowThreads).toInt.max(1)
 
     var threadChangeCheckFreqState = threadChangeCheckFreq
 
+    var threadChangeActions = 0
+
     /**
-      * Computes a single model. Typically not called directly but via method sampleSingleRacing().
+      * Computes a single model using one existing thread (but might launch further threads for sub-tasks).
       *
       * @author Matthias Nickles
       * @param singleSolverConf
-      * @return Option[model as array of elis, model as hash set of elis] or None (UNSAT) or null (aborted)
+      * @return Option[model as array of elis, model as hash set of elis] or None (UNSAT) or null (UNKNOWN satisfisability, e.g., timeout)
       */
-    def sampleSingle(singleSolverConf: SingleSolverConf): Option[(Array[Eli], IntOpenHashSet)] = {
+    def sampleSingle(singleSolverConf: SolverThreadSpecificSettings,
+                     collectOffHeapGarbage: Boolean,
+                     maxSamplingTimeMs: Long,
+                     singleSolverThreadData: SingleSolverThreadData,
+                     reentry: Boolean): Option[(Array[Eli], IntOpenHashSet)] = {
 
       import singleSolverConf._
+
+      import singleSolverThreadData._
 
       Thread.currentThread().setPriority(Thread.MAX_PRIORITY)
 
       progressNormalizedPerThread.put(threadNo, new SolverThreadInfo(thread = Thread.currentThread()))
 
-      var trialsAtLastImprovement = 0 // used for abandonOrSwitchSlowThreads, see code
+      if (UNSAFEhelper.debugMode) resetMemTracerDebug() // use to find off-heap memory leaks
 
-      var trialsSinceLastProgress = 0 // used for abandonOrSwitchSlowThreads, see code
+      if (UNSAFEhelper.debugMode) println("Available off-heap memory at start of sampleSingle:  " + approxSizeOfCurrentFreeUnsafeMemory() + " (" + approxSizeOfCurrentFreeUnsafeMemory().toDouble / 1073741824d + " GB)")
 
-      @inline def unsat: Unit = {
+      if(nogoodRemovalUsingRecyclingFromTotalHistoryEvery > 0 && collectOffHeapGarbage)
+        stomp(-5017, "With nogoodRemovalUsingRecyclingFromTotalHistoryEvery > 0 no complete off-heap garbage collection is possible")
+
+      def unsat(): Unit = {
+
+        if(!stopSolverThreads && !unsatMessagePrinted) {
+
+          unsatMessagePrinted = true
+
+          println("\n\nUNSAT" + (if (verbose) "\n  (reporting: solver thread $" + threadNo + ")" else ""))
+
+        }
 
         stopSolverThreads = true
 
-        println("\nUNSAT" + (if (verbose) "\n  (reporting: solver thread " + threadNo + ")" else ""))
+        if (writeRuntimeStatsToFile)
+          stats.writeEntry(key = "unsat", value = "true", solverThreadNo = 0)
 
       }
 
-      val solverTimer = System.nanoTime()
+      def unknown(): Unit = {
 
-      val rngLocal = /*rngLocalL*/ if (seed == -1l) new java.util.SplittableRandom() else new java.util.SplittableRandom(seed)
+        stopSolverThreads = true
 
-      val med: Int = if (noOfAllElis == 0) 1 else (0x7fffffff / noOfAllElis + 1)
+        println("\n\nUNKNOWN (inner solver timed out after " + timeoutMs + "ms)")
 
-      val medAbs: Int = if (noOfAllElis == 0) 1 else (0x7fffffff / noOfPosElis + 1)
+        if (collectOffHeapGarbage)
+          queueOffHeapGarbageInSingleSolver
 
-      val rngLocalL = new XORShift32(if (seed == -1l) Optional.empty() else Optional.of(seed)) { // not thread-safe
+      }
 
-        @inline def nextEli(): Eli = { // Remark: code generated by Scala 2.12.8 for this method is not yet understood by Graal as of 10 Feb 2019
+      @inline def printSingleLineProgress(trials: Eli, noOfRemovedNogoods: Eli): Unit = {
 
-          nextPosInt() / med
+        val peakPercent = ((noOfAbsElis - minUnassignedGlobal).toDouble / noOfAbsElis.toDouble * 100).toInt.min(99)
+
+        val progressEstimGlobalPercent = ((1d - (Math.log10(minUnassignedGlobal + 5) / Math.log10(noOfAbsElis))) * 100).toInt.min(99)
+
+        //val progressEstimThreadPercent = ((1d - (Math.log10(noOfAbsElis - orderNo + 1/*NB: not the overall minimum of thread*/) / Math.log10(noOfAbsElis))) * 100).toInt.min(99)
+
+        //val trialsPerConflicts = noOfConflictsTotal.toDouble / trials
+
+        if (timeAtLastProgressPrintedNs > 0l) {
+
+          val noOfNanosSinceLastProgressPrinted = System.nanoTime() - timeAtLastProgressPrintedNs
+
+          val noOfPropagationsPerNanosecond = noOfPropagationsSinceLastProgressPrinted.toDouble / noOfNanosSinceLastProgressPrinted
+
+          val noOfPropagationsPerSecond = (noOfPropagationsPerNanosecond * /*ms:1000000*//*sec:*/ 1000000000d).toLong
+
+          avgNoPropagationsPerSecond = (noOfPropagationsPerSecond + noOfProgressUpdatesPrinted * avgNoPropagationsPerSecond) / (noOfProgressUpdatesPrinted + 1)
 
         }
 
-        @inline def nextPosEli(): Eli = nextPosInt() / medAbs
+        noOfProgressUpdatesPrinted += 1
 
-      }
+        timeAtLastProgressPrintedNs = System.nanoTime()
 
-      var fastIntRandSeed = rngLocal.nextInt()
+        noOfPropagationsSinceLastProgressPrinted = 0
 
-      /**
-        * Fast but low quality. Not thread-safe.
-        *
-        */
-      @inline def fastIntRand: Int = {
+        @inline def toK(n: Long) = n / 1000L + "k"
 
-        fastIntRandSeed = 214013 * fastIntRandSeed + 2531011
+        @inline def toM(n: Long) = round(n.toDouble / 1000000d, 1) + "m"
 
-        (fastIntRandSeed >> 16) & 0x7FFF
+        @inline def toKorM(n: Long): String = if(n < 1000) n.toString else if(n < 1000000) toK(n) else toM(n)
 
-      }
+        //lazy val avgAbsEliScore = totalAbsEliScoreForDebugging / noOfAbsElis.toDouble // updated only at score rescaling, otherwise 0!
 
-      /**
-        * Fast but low quality. Not thread-safe.
-        *
-        */
-      @inline def fastFloatRand: Float = fastIntRand.toFloat / 0x7FFF
+        lazy val removedNogoodsByPrefilter = omittedByPreFilterForNogoods.toDouble / (keptByPreFilterForNogoods + omittedByPreFilterForNogoods)
 
-      @inline def nextFloatRngLocal(): Float = fastFloatRand
+        if (!stopSolverThreads && peakPercent >= 0) {
 
-      val sccCache = mutable.HashMap[mutable.Seq[Eli], ArrayBuffer[ArrayBuffer[Eli]]]()
+          if(writeRuntimeStatsToFile) {
 
-      val noHeap = noHeapR == 1
+            input.delSAT.stats.writeEntry(key = "minUnassignedGlobal", value = minUnassignedGlobal, solverThreadNo = 0)
 
-      var maxBurst = if (noHeap || useBurstWithHeap) maxBurstRR else 0
-
-      var freeEliSearchApproach4or1or5or9 = freeEliSearchApproach == 4 || freeEliSearchApproach == 1 || freeEliSearchApproach == 5 || freeEliSearchApproach == 9
-
-      var freeEliSearchApproach3or10 = freeEliSearchApproach == 3 || freeEliSearchApproach == 10
-
-      @inline def useAbsElisInArrangementInFreeEliSearch = freeEliSearchApproach == 2 || freeEliSearchApproach == 5 || freeEliSearchApproach == 9 || freeEliSearchApproach == 1 || freeEliSearchApproach == 8
-
-      @inline def useScoresInFreeEliSearch = freeEliSearchApproach == 2 || freeEliSearchApproach4or1or5or9 && freeEliSearchApproach != 9 ||
-        freeEliSearchApproach == 3 || freeEliSearchApproach == 7
-
-      val nogiToNogood: ObjectArrayList[IntArrayUnsafeS] = new ObjectArrayList(clarkNogoods)
-
-      val loopNogoods: ObjectArrayList[IntArrayUnsafeS] = if (emitClauses) new ObjectArrayList[IntArrayUnsafeS]() else null.asInstanceOf[ObjectArrayList[IntArrayUnsafeS]]
-
-      @inline def primeUnassignedProbWithFalse(eli: Eli) =
-        eliToNogisClark(eli).length.toFloat / nogiToNogood.size.toFloat * noOfPosElis
-
-      val arrangeEliPool = if (arrangeEliPoolR <= 4) arrangeEliPoolR else
-        Math.floor(nextFloatRngLocal() / 0.2)
-
-      val elisSeq = if (useAbsElisInArrangementInFreeEliSearch)
-        (0 until noOfPosElis).toArray
-      else
-        (0 until noOfAllElis).toArray
-
-      val elisArranged: IntArrayUnsafeS = if (arrangeEliPool == 0)
-        null.asInstanceOf[IntArrayUnsafeS]
-      else if (arrangeEliPool == 3 || arrangeEliPool == 4) {
-
-        val elisSeqUnsafe = new IntArrayUnsafeS(elisSeq, aligned = true)
-
-        //shuffleArrayUnsafe(elisSeqUnsafe, rngLocal)
-
-        elisSeqUnsafe
-
-      } else {
-
-        new IntArrayUnsafeS(elisSeq.sortBy({ case ((eli: Eli)) =>
-
-          if (useAbsElisInArrangementInFreeEliSearch)
-            (eliToNogisClark(eli).length + eliToNogisClark(negateEli(eli)).length) * (if (arrangeEliPool == 1) 1 else -1)
-          else
-            (eliToNogisClark(eli).length) * (if (arrangeEliPool == 1) 1 else -1)
-
-        }), aligned = true)
-
-      }
-
-      val absEliScore = new FloatArrayUnsafeS(noOfPosElis, absEliScoreInitVal, true)
-
-      val unassignedAbsElisQueue = if (freeEliSearchApproach == 11) {
-
-        val r = new IntHeapPriorityQueue(noOfPosElis * 2, new IntComparator {
-
-          @inline override def compare(o1: Eli, o2: Eli): Int = (absEliScore.get(o2) - absEliScore.get(o1)).toInt
-
-        })
-
-        (0 until noOfPosElis).foreach(r.enqueue(_))
-
-        r
-
-      } else null.asInstanceOf[IntHeapPriorityQueue]
-
-      val entryFreeEliSearchFrom0Threshold = (Math.sqrt(nogiToNogood.size).toInt).max(1024)
-
-      val nogiCapacityInit = next2Pow(clarkNogoods.length * 2)
-
-      nogiToNogood.ensureCapacity(nogiCapacityInit)
-
-      val eliToNogis: Array[ArrayValExtensibleIntUnsafe] = eliToNogisClark.clone().map(ausf => new ArrayValExtensibleIntUnsafe(ausf.getContent.clone()))
-
-      var eliScoreUpdateFact = absEliScoreFact
-
-      var warnMessageEliScoreOutOfRangeShown = false
-
-      val restartTriggerConf = restartTriggerConfR
-
-      //val localSolverParallelThreshForUnitProp = localSolverParallelThresh
-
-      val useNogisPerEliAsOrderForAbsEliPool = (arrangeEliPool == 1 || arrangeEliPool == 2) /*<- not the same, but the same principle*/ &&
-        freeEliSearchApproach3or10
-
-      val useEliScoresAsOrderForAbsEliPool = false && freeEliSearchApproach == 3 // not recommended
-
-      val noNogisPerAbsEliForAbsEliPool: Array[Int] = if (useNogisPerEliAsOrderForAbsEliPool)
-        (0 until noOfPosElis).map(absEli =>
-          eliToNogis(absEli).length + eliToNogis(negatePosEli(absEli)).length).toArray else null.asInstanceOf[Array[Int]]
-
-      val priorityCompNogisPerEliForAbsEliPool = new IntComparator {
-
-        @inline override def compare(o1: Eli, o2: Eli) = {
-
-          val delta = if (arrangeEliPool == 1) noNogisPerAbsEliForAbsEliPool(o2) - noNogisPerAbsEliForAbsEliPool(o1) else noNogisPerAbsEliForAbsEliPool(o1) - noNogisPerAbsEliForAbsEliPool(o2)
-
-          if (delta > 0f)
-            1
-          else if (delta < 0f)
-            -1
-          else
-            0
-
-        }
-
-      }
-
-      val priorityCompEliScoresForAbsEliPool = new IntComparator { // TODO: not ideal - see comment further below
-
-        @inline override def compare(o1: Eli, o2: Eli) = {
-
-          val delta = absEliScore.get(o2) - absEliScore.get(o1)
-
-          if (delta > 0f)
-            1
-          else if (delta < 0f)
-            -1
-          else
-            0
-
-        }
-
-      }
-
-      val allowSwitchFreeEliSearchApproach = abandonOrSwitchSlowThreads != 0d && slowThreadAction == 3
-
-      val unassignedAbsElisPool = if (freeEliSearchApproach3or10 || allowSwitchFreeEliSearchApproach) {
-
-        assert(!useEliScoresAsOrderForAbsEliPool || !useNogisPerEliAsOrderForAbsEliPool)
-
-        if (useEliScoresAsOrderForAbsEliPool) // NB: if we don't do this, we still consider eli scores in findFreeEli if freeEliSearchApproach == 3
-          new Int2BooleanRBTreeMap(priorityCompEliScoresForAbsEliPool /* <- issue: this comparator is "dynamic" (changes scores after insertion), which messes up key removal and slows down tree operations */) {
-
-            @inline def reassess(key: Int): Unit = { // doesn't work with GraalVM/substratevm if compiled with Scala 2.12
-
-              if (containsKey(key))
-                put(key, remove(key))
-
-
-            }
-
-          } else if (useNogisPerEliAsOrderForAbsEliPool)
-          new Int2BooleanRBTreeMap(priorityCompNogisPerEliForAbsEliPool) {
-
-            @inline def reassess(key: Int): Unit = {}
-
-          } else
-          new Int2BooleanRBTreeMap() {
-
-            @inline def reassess(key: Int): Unit = {}
+            input.delSAT.stats.writeEntry(key = "noOfConflictsTotal", value = noOfConflictsTotal, solverThreadNo = threadNo)
 
           }
 
-      } else null
+          // The length of the following string should be below maxAssumedConsoleWidth to avoid scrolling of status line
 
-      @inline def rearrangeUnassignedAbsElisPool = {
+          val pStr = ("@" + timerToElapsedMs(solverTimer) / 1000 + "s:" +
+            "Rm:" + (if (minUnassignedGlobal <= 1) "1" /*2 is the finest resolution possible with minUnassignedGlobal*/ else
+            toKorM(minUnassignedGlobal)) +  //"(<" + /*(if (peakPercent == 99) "<=" else "")*/ +(100 - peakPercent + 1) + "%)," + // not exact, since we sample this value not every trial
+            //"Prgr~" + progressEstimGlobalPercent + "%|" +
+            ",t$" + threadNo + ":" +
+            //"Progress estim thread: " + progressEstimThreadPercent + "%, " +
+            "C:" + toKorM(noOfConflictsTotal) + "," +
+            //(if (debug && computeAvgLR) "avgLR: " + (avgLR /*- (avgLR % 0.01)*/) + ", " else "") +
+            /*includes nogoods shared with this thread -> */ "LN:" /*after removal*/ + (toKorM(getApproxNoOfLearnedNogoods) /*if (firstRecordedNogi >= 1) nogiClarkToNogoodReducible.size - firstRecordedNogi else 0*/) + "" +
+            // (if (noOfRemovedNogoods >= 0) " after removing " + noOfRemovedNogoods + ", " else ", ") +
+            "(DN:" + toKorM(noOfDeletedLearnedNogoods) + ",SN:" + toKorM(noOfSharedNogoods) + (if(learnedNogoodReduciblesListTotal != null) ",rcycld:" + toKorM(noOfRecycledLearnedNogoodsFromTotal) +" from:" + toKorM(learnedNogoodReduciblesListTotal.size) else "") + ")," +
+            (if (debug /*&& threshForPreFilterLearnedNogoods != 0d */ && keptByPreFilterForNogoods > 0) "preFiltered:" + Math.floor(removedNogoodsByPrefilter * 1000) / 10 + "%," else "") +
+            "Rs:" + toKorM(noOfRestarts) + "," +
+            (if (debug) "PrgChks:" + noOfProgressChecks + "," else "") +
+            "Rp:" + toKorM(noOfRephasings) + "(SLS:" + toKorM(noOfRephasingsUsingSLS) + ")," +
+            (if (debug && bestPhasesQueue != null) "refrshBstPh:" + sharedAmongSingleSolverThreads.refreshedBestPhasesGlobal + "/" + bestPhasesQueue.size + "," else "") +
+            //(if (debug && rescalingsAbsEliScores > 0) "#conflicts/#rescalingsAbsEliScores: " + noOfConflictsTotal / rescalingsAbsEliScores + ", " else "") +
+            (if (debug && abandonOrSwitchSlowThreads != 0d) "thrdChgActs:" + threadChangeActions + "," else "") +
+            (if (debug) "ngdRmvThrsh:" + nogoodRemovalThreshAdapted.toInt + "," else "") +
+            //(if (debug) "getApproxNoOfLearnedNogoods: " + getApproxNoOfLearnedNogoods + ", " else "") +
+            //  (if (debug) "noOfNogoodRemovalPhases: " + noOfNogoodRemovalPhases + ", " else "") +
+            (if (debug) "rsclLitScrs:" + rescalingsAbsEliScores + "," else "") +
+            (if (debug) "noisePhsMm:" + round(noisePhaseMemo,6) + "," else "") +
+            //(if (debug) "totalAbsEliScore: " + (totalAbsEliScoreForDebugging.toInt /*set only at rescaling!*/) + ", " else "") +
+            // (if (debug) "Avg var score: " + (avgAbsEliScore - (avgAbsEliScore % 0.000000000000001)) + ", " else "") +
+            (if (debug && noOfReducibleSpaceRequests > 0) "MemMisses:" + round(noOfReducibleSpaceRequestsMisses.toDouble / noOfReducibleSpaceRequests.toDouble, 3) + "," else "") +
+            //(if (debug) "rsseEMA:" + round(reducibleSlotSizeEnlargementsEMA.toDouble, 3) + "," else "") +
+            //(if (debug) "confls/trials:" + round(noOfConflictsTotal.toFloat / trials.toFloat,2) + "," else "") +
+            //"linePrint: " + linePrint + ", " +
+            //  (if (debug && enforceLBDemaComputation) "lbdEmaFast: " + round(lbdEmaFast, 2) + ", " else "") +
+             (if (debug && enforceLBDemaComputation) "lbdEmaSlow: " + round(lbdEmaSlow, 2) + ", " else "") +
+            //(if (debug) "Conflicts/trials: " + round(trialsPerConflicts, 2) + ", " else "") +
+            //(if (debug && rndmBranchProbR < 0f) "rndmBranchProb: " + rndmBranchProb else "") +
+            (if (true) "P/s:" + toKorM(avgNoPropagationsPerSecond) + "," else "") +
+            //(if (debug) "weakRephasings: " + weakRephasings + ", " else "") +
+            //" UP/DOWN: " + (UP.toFloat / DOWN.toFloat) +
+            "Tr:" + toKorM(trials)
+            )
 
-        (0 until noOfPosElis).foreach(eli => unassignedAbsElisPool.put(eli, {
+          printStatusLine(pStr)
 
-          if (true /*!primeUnassigned*/ )
-            rngLocalL.nextFloat() < 0.5f /*.nextBoolean()*/
-          else
-            primeUnassignedProbWithFalse(eli) < 0.5f
-
-        }))
-
-      }
-
-      if (unassignedAbsElisPool != null)
-        rearrangeUnassignedAbsElisPool
-
-      val useUnassignedAbsElisPoolCache = true // only relevant for the case where we have to loop over the unassigned absElis
-
-      var unassignedAbsElisPoolCache = Array[Eli]()
-
-      var unassignedAbsElisPoolCacheDirty = true
-
-      @inline def resetAbsEliActi(clearUnassignedPool: Boolean = true) = {
-
-        var absEliAddr = absEliScore.addr
-
-        val absEliAddrMax = absEliAddr + (noOfPosElis << 2)
-
-        while (absEliAddr < absEliAddrMax) {
-
-          unsafe.putFloat(absEliAddr, absEliScoreInitVal)
-
-          absEliAddr += 4
-
-        }
-
-        if (clearUnassignedPool && unassignedAbsElisPool != null) {
-
-          unassignedAbsElisPool.clear()
-
-          unassignedAbsElisPoolCacheDirty = true
-
-        }
-
-      }
-
-      resetAbsEliActi(clearUnassignedPool = false)
-
-      var someFreeEli1: Eli = rngLocalL.nextPosInt() / med // rngLocalL.nextEli()
-      var someFreeEli2: Eli = rngLocalL.nextPosInt() / med // rngLocalL.nextEli()
-      var someFreeEli3: Eli = rngLocalL.nextPosInt() / med // rngLocalL.nextEli()
-      var someFreeEli4: Eli = rngLocalL.nextPosInt() / med //  rngLocalL.nextEli()
-
-      class ForceElisIndexedSet(randomizeAccess: Boolean) extends IndexedSet(noOfAllElis, rngLocalL) with ForceElis {
-
-        @inline override def addv(eli: Eli): Unit = {
-
-          add(eli)
-
-        }
-
-        @inline override def hasMore: Boolean = {
-
-          size > 0
-
-        }
-
-        @inline override def getNext: Eli = {
-
-          if (randomizeAccess)
-            getRemoveRandom()
-          else
-            getRemoveLast()
-
-        }
-
-        @inline override def reset: Unit = {
-
-          clear()
+          // ^ NB: remaining #unassigned literals < 1 at this point doesn't imply we are finished, since there may still be some unresolved conflict(s)
 
         }
 
       }
 
-      class ForceElisArraySet(maxSize: Int = next2Pow(noOfAllElis * 2), noDuplicates: Boolean) extends IntArrayUnsafeS(maxSize, aligned = true) with ForceElis {
+      var enforceImmediateFullRestart = reentry
 
-        @Contended var addrCounter = addr
+      if(reentry) {
 
-        @inline override def addv(eli: Eli): Unit = {
+        if(debug)
+          println("\nReusing solver data from previous model")
 
-          if (addrCounter == addr || !noDuplicates || !contains(eli, addrCounter)) {
+        modelOpt = null/*not: None*/
 
-            unsafe.putInt(addrCounter, eli)
+        violatedNogoodReducible = 0l
 
-            addrCounter += 4l
+        noOfConflictsTotal = 0
 
-          }
+        noOfConflictsAfterRestart = 0
 
-        }
+        noOfConflictsAfterLastRephasing = 0
 
-        @inline override def hasMore: Boolean = {
+        noOfRestarts = 0
 
-          addrCounter > addr
-
-        }
-
-        @inline override def getNext: Eli = {
-
-          addrCounter -= 4l
-
-          unsafe.getInt(addrCounter)
-
-        }
-
-        @inline override def reset: Unit = {
-
-          addrCounter = addr
-
-        }
-
-        @inline def getCounter: Int = (addrCounter - addr).toInt >> 2
+        uncertainEliSearchStart = 0
 
       }
 
-      val deficitOrderedUncertainLiteralsHalf = deficitOrderedUncertainLiteralsForJava.size / 2 // each variable appears twice (pos and neg polarity), we only need their lowest ranked literals
+      if(triviallyUNSAT) {
 
-      val ignoreParamVariables = ignoreParamVariablesR || deficitOrderedUncertainLiteralsHalf == 0
+        unsat
 
-      val rndmBranch = rndmBranchR
+        if (collectOffHeapGarbage)
+          queueOffHeapGarbageInSingleSolver
 
-      val passPrevious = if (globalPassCache) passPreviousGlobal else {
-
-        if (!freeEliSearchApproach3or10 || allowSwitchFreeEliSearchApproach)
-          new ByteArrayUnsafeS(noOfPosElis, 0x00.toByte /*<- sensitive value*/ , true) // 0x01.toByte could be used to indicate "don't know", but doesn't seem to have a positive effect
-        else
-          null.asInstanceOf[ByteArrayUnsafeS]
+        return None
 
       }
 
-      if (primeUnassigned && passPrevious != null && !globalPassCache)
-        (0 until noOfPosElis).foreach(posEli => {
-
-          if (primeUnassignedProbWithFalse(posEli) < 0.5f)
-            passPrevious.update(posEli, 0xFF.toByte)
-          else
-            passPrevious.update(posEli, 0x00.toByte)
-
-        })
-
-      val pass = new IntArrayUnsafeS(noOfAllElis, initialValue = 0, aligned = true) // the partial assignment. Item == 0: eli is unassigned or doesn't hold
-
-      val dlToFirstOrder = new IntArrayUnsafeS(noOfPosElis + 1, initialValue = Int.MinValue, aligned = true)
-      // We will use binary search in this, which should be fine as
-      // the actual number of decision levels (upper bound of search area) is typically not that large (i.e., fits in cache or at least page).
-
-      val orderToDlCache = new IntArrayUnsafeS(noOfPosElis + 1, initialValue = -1, aligned = true)
-
-      var orderNo = 1 // sequence number of next eli assignment (not necessarily consecutive). Cannot be zero.
-
-      var dl: Int = 0 // decision level (increased at each nondeterministic branching literal decision)
-
-      val eliToRemainders = new Array[ObjectArrayList[NogoodRemainder]](next2Pow(noOfAllElis))
-
-      val nogiToRemainder = new ObjectArrayList[NogoodRemainder]()
-
-      nogiToRemainder.ensureCapacity(nogiCapacityInit)
-
-      val useBurstableForceElis = false //!ignoreParamVariables || maxBurst != 0 && burstPlainElis
-      // TODO: true ^ currently not supported, occasionally leads to inconsistencies for reasons tbd.
-
-      assert(!useBurstableForceElis)
-
-      val forceElis: ForceElis = if (noHeap) null else (if (!useBurstableForceElis) new ForceElisIndexedSet(randomizeAccess = true)
-      else
-        new ForceElisArraySet(next2Pow(noOfAllElis * 2), noDuplicates = true))
-      // ^ the next batch of deductively inferable literals. Not used with noHeap = true.
-
-      var conflictNogi = -1
-
-      val maxAbsEliAddr = pass.getAddr + ((noOfPosElis - 1) << 2) // i.e. the last pos eli address
-
-      val absEliAddrNegOffset = posNegEliBoundary << 2
-
-      var entryFreeEliAddrSearch = pass.getAddr
-
-      var entryFreeEliIAddrSearch = if (elisArranged != null) elisArranged.getAddr else -1l
-
-      val maxEliIAddr = if (elisArranged != null) elisArranged.getAddr + (noOfAllElis << 2) else -1l // actually one behind max address
-
-      val maxAbsEliIAddr = if (elisArranged != null) elisArranged.getAddr + (noOfPosElis << 2) else -1l
-
-      log("solverTimer 1: " + timerToElapsedMs(solverTimer) + " ms")
-
-      @inline def setDecisionLevel(newDl: Int, updateDlToFirstOrder: Boolean = true): Unit = {
-        // NB: this function must only be called if afterwards at least one eli is assigned on the new level
-
-        dl = newDl
-
-        if (updateDlToFirstOrder) {
-
-          dlToFirstOrder.update(dl, orderNo) // the next order goes to the new level
-
-          orderToDlCache.update(orderNo, dl)
-
-        }
-
-      }
-
-      @inline def dlFromOrder(o: Int, dlLow: Int): Int = {
-
-        if (orderToDlCache.get(o) != -1)
-          orderToDlCache.get(o)
-        else {
-
-          val r = dlToFirstOrder.binSearch(o, dlLow, dl /*<- inclusive*/)
-
-          orderToDlCache.update(o, r)
-
-          r
-
-        }
-
-      }
-
-      var avgNormProgress = 0d
-
-      val threadmxBean = ManagementFactory.getThreadMXBean()
-
-      var noOfConflictsTotal = 0
-
-      var noOfConflictsAfterRestart = 0
-
-      var noOfTrialsAtLastRestart = 0
-
-      var noOfRestarts = 0
-
-      var firstRecordedNogi = -1
-
-      class NogoodRemainder(val pool: IntArrayUnsafeS, var nogi: Nogi) {
-        // NB: constructor doesn't set the two lits, so we need to call reset (unless we know both lits must be -1)
-
-        var notsetCounter = pool.sizev // meaningless if is2
-
-        var cachedUnsetItem: Eli = -1 // used only if useCounters
-
-        var hdNotsetItem = -1 // not used if |pool| = 2. NB: observe the order of the two lits and their treatment at jump backs after conflicts.
-
-        var tlNotsetItem = -1 // not used if |pool| = 2.
-
-        val is2 = pool.sizev == 2
-
-        val lastPoolAddr = pool.getAddr + ((pool.sizev - 1) << 2)
-
-        var runningAddr = pool.addr
-
-        @inline def count: Int = {
-
-          assert(!is2)
-
-          var counter = 0
-
-          var start = lastPoolAddr
-
-          while (start >= pool.addr) {
-
-            if (isNotSetInPass(sharedDefs.unsafe.getInt(start))) {
-
-              if (cachedUnsetItem == -1)
-                cachedUnsetItem = sharedDefs.unsafe.getInt(start)
-
-              counter += 1
-
-            }
-
-            start -= 4
-
-          }
-
-          counter
-
-        }
-
-        @inline def reset: Unit = { // resets counter or fills hdNotsetItem and tlNotsetItem lits with UNset items (e.g., unassignedPosElis elis), unless |pool| = 2.
-
-          if (!is2) {
-
-            if (useCounters) {
-
-              cachedUnsetItem = -1
-
-              notsetCounter = count
-
-            } else {
-
-              hdNotsetItem = -1
-
-              tlNotsetItem = -1
-
-              var start = pool.addr
-
-              while (start <= lastPoolAddr) {
-
-                if (isNotSetInPass(sharedDefs.unsafe.getInt(start))) {
-
-                  if (hdNotsetItem == -1)
-                    hdNotsetItem = sharedDefs.unsafe.getInt(start)
-                  else if (sharedDefs.unsafe.getInt(start) != hdNotsetItem) {
-
-                    tlNotsetItem = sharedDefs.unsafe.getInt(start)
-
-                    return
-
-                  }
-
-                }
-
-                start += 4
-
-              }
-
-            }
-
-          }
-
-        }
-
-        @inline def unSetItem(item: Eli): Unit = {
-
-          if (!is2) {
-
-            if (useCounters) {
-
-              notsetCounter += 1
-
-              if (cachedUnsetItem == -1)
-                cachedUnsetItem = item
-
-            } else if (hdNotsetItem == -1 && item != tlNotsetItem) {
-
-              hdNotsetItem = item
-
-            } else if (tlNotsetItem == -1 && item != hdNotsetItem) {
-
-              tlNotsetItem = item
-
-            }
-
-          }
-
-        }
-
-        @inline private def fillUp: Unit = {
-
-          // assert(pool.sizev != 2)
-          // assert(!useCounters)
-
-          if (pool.sizev >= 2) {
-
-            val start = runningAddr
-
-            do {
-
-              if (isNotSetInPass(sharedDefs.unsafe.getInt(runningAddr)) && sharedDefs.unsafe.getInt(runningAddr) != hdNotsetItem) {
-
-                tlNotsetItem = sharedDefs.unsafe.getInt(runningAddr)
-
-                /*if (runningAddr == lastPoolAddr)
-                  runningAddr = pool.addr
-                else
-                  runningAddr += 4*/
-
-                return
-
-              }
-
-              if (runningAddr == lastPoolAddr)
-                runningAddr = pool.addr
-              else
-                runningAddr += 4
-
-            } while (runningAddr != start)
-
-          }
-
-          tlNotsetItem = -1
-
-        }
-
-        @inline private def getIndicCase2: Int = {
-
-          // assert(pool.sizev == 2)
-
-          if (isSetInPass(pool.get(0))) {
-
-            if (isSetInPass(pool.get(1)))
-              -1
-            else
-              pool.get(1)
-
-          } else if (isSetInPass(pool.get(1)))
-            pool.get(0)
-          else
-            Int.MaxValue
-
-        }
-
-        @inline private def getIndicNot2NoCounters: Int = {
-
-          // assert(pool.sizev != 2)
-          // assert(!useCounters)
-
-          if (hdNotsetItem == -1)
-            -1
-          else if (tlNotsetItem == -1)
-            hdNotsetItem
-          else
-            Int.MaxValue
-
-        }
-
-        @inline private def getIndicNot2Counters: Int = {
-
-          if (notsetCounter > 1)
-            Int.MaxValue
-          else if (notsetCounter == 0)
-            -1
-          else {
-
-            if (cachedUnsetItem != -1)
-              return cachedUnsetItem
-
-            var start = pool.addr
-
-            do {
-
-              if (isNotSetInPass(sharedDefs.unsafe.getInt(start)))
-                return sharedDefs.unsafe.getInt(start)
-
-              start += 4
-
-            } while (start <= lastPoolAddr)
-
-            stomp(-10000, "Value of notsetCounter is inconsistent")
-
-            Int.MaxValue
-
-          }
-
-        }
-
-        @inline def getIndic: Int = {
-
-          if (is2)
-            getIndicCase2
-          else if (useCounters)
-            getIndicNot2Counters
-          else
-            getIndicNot2NoCounters
-
-        }
-
-        @inline private def setItemPureNot2(item: Eli) = {
-
-          // assert(pool.sizev != 2)
-          // assert(!useCounters)
-
-          if (item == hdNotsetItem) {
-
-            if (tlNotsetItem != -1) {
-
-              hdNotsetItem = tlNotsetItem
-
-              fillUp
-
-            } else
-              hdNotsetItem = -1
-
-          } else if (item == tlNotsetItem)
-            fillUp
-
-        }
-
-        @inline def setItemIndic(item: Eli): Int = {
-
-          if (is2)
-            getIndicCase2
-          else if (useCounters) {
-
-            if (item == cachedUnsetItem)
-              cachedUnsetItem = -1
-
-            notsetCounter -= 1
-
-            getIndicNot2Counters
-
-          } else {
-
-            setItemPureNot2(item)
-
-            getIndicNot2NoCounters
-
-          }
-
-        }
-
-      }
-
-      // class NogoodRemainderTEST last internal version: 9th Feb 2019
-
-      @inline def isSetInPass(eli: Eli): Boolean = pass.get(eli) != 0
-
-      @inline def isNotSetInPass(eli: Eli): Boolean = pass.get(eli) == 0
-
-      @inline def isAbsSetInPass(eli: Eli): Boolean = {
-
-        pass.get(eli) != 0 || {
-
-          if (eli < posNegEliBoundary)
-            pass.get(eli + posNegEliBoundary)
-          else
-            pass.get(eli - posNegEliBoundary)
-
-        } != 0
-
-      }
-
-      @inline def isNotAbsSetInPass(eli: Eli): Boolean = {
-
-        pass.get(eli) == 0 && {
-
-          if (eli < posNegEliBoundary)
-            pass.get(eli + posNegEliBoundary)
-          else
-            pass.get(eli - posNegEliBoundary)
-
-        } == 0
-
-      }
-
-      @inline def isPosEliNotAbsSetInPass(eli: Eli): Boolean = {
-
-        pass.get(eli) == 0 && pass.get(eli + posNegEliBoundary) == 0
-
-      }
-
-      @inline def isAbsNotSetInPassInt(eli: Eli): Int = {
-
-        if (pass.get(eli) != 0 || {
-
-          if (eli < posNegEliBoundary)
-            pass.get(eli + posNegEliBoundary) != 0
-          else
-            pass.get(eli - posNegEliBoundary) != 0
-
-        }) 0 else 1
-
-      }
-
-      @inline def setInPass(eli: Eli): Unit = { // this and setInPassIfUnassigned must be the only ways (besides initialization) of assigning True to an eli.
-
-        //assert(!isAbsSetInPass(eli))  // must hold when calling this function!
-        //assert(orderNo > 0)
-
-        assert(isNotSetInPass(negateEli(eli))) // if this fails, first check that the branching eli and its negation are both unset after
-        // findFreeEli.
-        // Another possible failure reason: if setting an eli in pass doesn't immediately reduce the nogood remainders with that eli.
-        //
-        // (Remark: it's temporarily possible that both eli and its negation are set, when a conflict has stopped propagation of unit elis
-        // (so that eli had been fired but not all set to "set" in all affected nogoods, so that -eli could still fire). However,
-        // in that case jumping back after the conflict unsets eli.)
-
-        pass.update(eli, orderNo)
-
-        orderNo += 1
-
-        if (freeEliSearchApproach3or10) {
-
-          unassignedAbsElisPool.remove(toAbsEli(eli))
-
-          //the following doesn't hold in general after ^, as we might dynamically change the order which messes up the search for keys:
-          //   assert(!unassignedAbsElisPool.containsKey(toAbsEli(eli)))
-
-        }
-
-      }
-
-      @inline def setInPassIfUnassigned(eli: Eli): Boolean = {
-
-        pass.compareWithZeroAndUpdate(eli, orderNo) && {
-
-          assert(isNotSetInPass(negateEli(eli))) // if this fails, first check that the branching eli and its negation are both unset after findFreeEli
-          // and that no further elis are assigned after a conflict (before conflict resolution).
-          // NB: see remark in setInPass()
-
-          if (freeEliSearchApproach3or10) {
-
-            unassignedAbsElisPool.remove(toAbsEli(eli))
-
-            //the following doesn't hold in general after ^, as we might dynamically change the order which messes up the search for keys:
-            //  assert(!unassignedAbsElisPool.containsKey(toAbsEli(eli)))
-
-          }
-
-          orderNo += 1
-
-          true
-
-        }
-
-        /* semantically equivalent:
-
-        if (isNotSetInPass(eli)) {
-
-          setInPass(eli)
-
-          true
-
-        } else
-          false
-        */
-
-      }
-
-      @inline def clearInPass(eli: Eli) = { // must be the only way (after preprocessing/initialization) of assigning False to an eli. Must not update nogood remainder.
-
-        assert(isSetInPass(eli))
-
-        if (freeEliSearchApproach3or10) {
-
-          unassignedAbsElisPool.put(toAbsEli(eli), isPosEli(eli))
-
-          unassignedAbsElisPoolCacheDirty = true
-
-        } else {
-
-          if (isPosEli(eli))
-            passPrevious.update(eli, true)
-          else
-            passPrevious.update(negateNegEli(eli), false)
-
-          if (freeEliSearchApproach == 11)
-            unassignedAbsElisQueue.enqueue(toAbsEli(eli))
-          else if (freeEliSearchApproach4or1or5or9) {
-
-            if (isSetInPass(someFreeEli1) || absEliScore.get(toAbsEli(eli)) > absEliScore.get(toAbsEli(someFreeEli1)))
-              someFreeEli1 = eli
-            else if (isSetInPass(someFreeEli2) || absEliScore.get(toAbsEli(eli)) > absEliScore.get(toAbsEli(someFreeEli2)))
-              someFreeEli2 = eli
-            else if (isSetInPass(someFreeEli3) || absEliScore.get(toAbsEli(eli)) > absEliScore.get(toAbsEli(someFreeEli3)))
-              someFreeEli3 = eli
-            else if (isSetInPass(someFreeEli4) || absEliScore.get(toAbsEli(eli)) > absEliScore.get(toAbsEli(someFreeEli4)))
-              someFreeEli4 = eli
-
-          }
-
-        }
-
-        pass.update(eli, 0)
-
-        orderNo -= 1
-
-      }
-
-      @inline def orderOfEli(eli: Eli): Int = pass.get(eli)
-
-      @inline def decisionLevelOfEli(eli: Eli) = { // result is only valid if eli is assigned (i.e., orderOfEli != 0),
-        // otherwise result of this method is undefined.
-
-        dlFromOrder(orderOfEli(eli), dlLow = 0)
-
-      }
-
-      trait ForceElis {
-
-        @inline def addv(eli: Eli): Unit
-
-        @inline def hasMore: Boolean
-
-        @inline def getNext: Eli
-
-        @inline def reset: Unit
-
-      }
-
-      class ForceElisSet extends it.unimi.dsi.fastutil.ints.IntRBTreeSet with ForceElis {
-
-        @inline override def addv(eli: Eli): Unit = {
-
-          add(eli)
-
-        }
-
-        @inline override def hasMore: Boolean = {
-
-          !isEmpty
-
-        }
-
-        @inline override def getNext: Eli = {
-
-          val eli = firstInt()
-
-          remove(eli)
-
-          eli
-
-        }
-
-        @inline override def reset: Unit = {
-
-          clear()
-
-        }
-
-      }
-
-      var ni = 0
-
-      while (ni < nogiToNogood.size) {
-
-        val remainder = new NogoodRemainder(pool = nogiToNogood.get(ni) /*<- we must assign the reference in nogiToNogood, not some copy*/ , ni)
-
-        remainder.reset
-
-        nogiToRemainder.add(remainder)
-
-        ni += 1
-
-      }
-
-      var ei = 0
-
-      while (ei < noOfAllElis) {
-
-        eliToRemainders(ei) = new ObjectArrayList[NogoodRemainder]()
-
-        eliToRemainders(ei).ensureCapacity(8192)
-
-        eliToNogis(ei).traverseUntil(nogi => {
-
-          eliToRemainders(ei).add(nogiToRemainder.get(nogi))
-
-          false
-
-        })
-
-        ei += 1
-
-      }
-
-      @inline val propagate: Nogi => Boolean = if (rndmIgnLearnedNogoodThresholdR >= 0f)
-        (triggerNogi: Nogi) => nextFloatRngLocal() > rndmIgnLearnedNogoodThresholdR * (firstRecordedNogi / triggerNogi.max(1).toFloat)
-      else {
-
-        (triggerNogi: Nogi) => {
-
-          triggerNogi < firstRecordedNogi || noOfConflictsTotal < 3000 || triggerNogi > nogiToNogood.size - (nogiToNogood.size - firstRecordedNogi) * -rndmIgnLearnedNogoodThresholdR
-          // Remark: there is no guarantee that the most recent x% contain any learned loop nogoods, but that's not an issue in practice, might just lead
-          // to some more restarts if -rndmIgnLearnedNogoodThresholdR is too small.
-
-        }
-
-      }
-
-      log("solverTimer 2: " + timerToElapsedMs(solverTimer) + " ms")
-
-      @inline def checkFireNogood(remainder: NogoodRemainder, nogi: Nogi): Unit = {
-
-        val indic = remainder.getIndic
-
-        if (indic == -1)
-          conflictNogi = nogi
-        else if (indic != Int.MaxValue) { // the only remaining unassigned eli in nogood is unit resulting
-
-          if (noHeap)
-            setEliWithNogoodUpdatesNoHeap(negateEli(indic))
-          else
-            forceElis.addv(negateEli(indic))
-
-        }
-
-      }
-
-      // (last internal ver with setEliWithNogoodUpdatesParNoHeap: 10 Feb 2019)
-
-      @inline def setEliWithNogoodUpdatesNoHeap(eli: Eli): Unit = {
-
-        if (conflictNogi == -1 && setInPassIfUnassigned(eli)) {
-
-          val il = eliToRemainders(eli).size
-
-          if (il == 0)
-            return
-          else {
-
-            var ri = 0
-
-            var prop = propagate(eliToRemainders(eli).get(il - 1).nogi)
-
-            val rmiStore = if (prop) new IntOpenHashSet(32, 0.75f) else null // don't use any Unsafe or off-heap data structure here
-
-            do {
-
-              val rmi = eliToRemainders(eli).get(ri).setItemIndic(eli)
-
-              if (rmi == -1) {
-
-                if (conflictNogi == -1)
-                  conflictNogi = eliToRemainders(eli).get(ri).nogi
-
-                if (!useCounters)
-                  return
-                else
-                  prop = false // we must not set any further elis after a conflict has been encountered
-
-              } else if (prop && rmi != Int.MaxValue)
-                rmiStore.add(rmi)
-
-              ri += 1
-
-            } while (ri < il)
-
-            if (prop) {
-
-              val it = rmiStore.iterator()
-
-              while (it.hasNext() && conflictNogi == -1)
-                setEliWithNogoodUpdatesNoHeap(negateEli(it.nextInt()))
-
-            }
-
-          }
-
-        }
-
-      }
-
-      var nogi: Nogi = 0
-
-      val ntngl = nogiToNogood.size
-
-      while (nogi < ntngl) {
-
-        val nogood = nogiToNogood.get(nogi)
-
-        if (nogood.sizev == 0) {
-
-          unsat
-
-          return None
-
-        }
-
-        nogi += 1
-
-      }
-
-      @inline def activUpVar(absEli: sharedDefs.Eli) = {
-
-        absEliScore.update(absEli, absEliScore.get(absEli) * eliScoreUpdateFact)
-
-        if (freeEliSearchApproach3or10) {
-
-          //unassignedAbsElisPool.reassess(absEli)
-
-          if (unassignedAbsElisPool.isInstanceOf[Int2BooleanRBTreeMap]) {
-
-            if (unassignedAbsElisPool.containsKey(absEli))
-              unassignedAbsElisPool.put(absEli, unassignedAbsElisPool.remove(absEli))
-
-          }
-
-        }
-
-      }
-
-      def conflictAnalysis(conflNogi: Nogi):
-      (Int /*new decision level to jump to*/ , IntArrayUnsafeS /*learned nogood*/ , Int /*sigmaEli*/ ) = {
-
-        val conflNogood = nogiToNogood.get(conflNogi)
-
-        if (useScoresInFreeEliSearch) {
-
-          var i = conflNogood.sizev - 1
-
-          while (i >= 0) {
-
-            activUpVar(toAbsEli(conflNogood.get(i)))
-
-            i -= 1
-
-          }
-
-        }
-
-        val accumulatedNogoodBuilder = new ArrayValExtensibleIntUnsafe(conflNogood.clone(0))
-
-        var lp = true
-
-        var sigmaEli = -1
-
-        var k = -1
-
-        var accI = -1
-
-        var sigmaOrder = -1
-
-        var eli = -1
-
-        while (lp) {
-
-          accI = accumulatedNogoodBuilder.length - 1
-
-          sigmaOrder = -1
-
-          while (accI >= 0) {
-
-            eli = accumulatedNogoodBuilder.get(accI)
-
-            if (eli != -1) {
-
-              val orderEli = orderOfEli(eli)
-
-              if (orderEli > sigmaOrder) {
-
-                sigmaOrder = orderEli
-
-                sigmaEli = eli
-
-              }
-
-            }
-
-            accI -= 1
-
-          }
-
-          val sigmaEliDecisionLevel = decisionLevelOfEli(sigmaEli)
-
-          k = 0
-
-          var pi = accumulatedNogoodBuilder.length - 1
-
-          var shotOutSigma = -1
-
-          while (pi >= 0) {
-
-            if (accumulatedNogoodBuilder.get(pi) != -1) {
-
-              if (accumulatedNogoodBuilder.get(pi) != sigmaEli) {
-
-                val d = decisionLevelOfEli(accumulatedNogoodBuilder.get(pi))
-
-                if (d > k)
-                  k = d
-
-              } else {
-
-                shotOutSigma = pi
-
-                accumulatedNogoodBuilder.buffer.update(pi, -1)
-
-              }
-
-            }
-
-            pi -= 1
-
-          }
-
-          if (k == sigmaEliDecisionLevel) { // we haven't found a UIP yet
-
-            val sigmaNot = negateEli(sigmaEli)
-
-            val orderOfSigma = sigmaOrder
-
-            // since current sigmaEli is not a decision literal, so there must have been some nogood which has "fired" sigmaEli:
-
-            val candNogis = eliToNogis(sigmaNot).buffer
-
-            val candNogisLength = eliToNogis(sigmaNot).length
-
-            var candNogisI = 0
-
-            var eps: Nogi = -1
-
-            var candNogood = null.asInstanceOf[IntArrayUnsafeS]
-
-            while (candNogisI < candNogisLength && eps == -1) {
-
-              candNogood = nogiToNogood.get(candNogis.get(candNogisI))
-
-              val fa: Boolean = {
-
-                var i = 0
-
-                while (i < candNogood.sizev) {
-
-                  if (candNogood.get(i) == sigmaNot)
-                    i += 1
-                  else {
-
-                    if (isNotSetInPass(candNogood.get(i))
-                      /*<- effectively !isSetInPass(toAbsEli)*/ || orderOfEli(candNogood.get(i)) >= orderOfSigma)
-                      i = Int.MaxValue
-                    else
-                      i += 1
-
-                  }
-
-                }
-
-                i < Int.MaxValue
-
-              }
-
-              if (fa)
-                eps = candNogis.get(candNogisI)
-              else
-                candNogisI += 1
-
-            }
-
-            if (eps == -1) // important check, don't disable! If this check fails, this
-              stomp(-10000, "eps == -1 in conflictAnalysis") // typically (but not necessarily) indicates that elis have been assigned out of order, or an toAbsEli was assigned
-            // after a conflict was detected.
-            // E.g., neg(eli) is assigned True before the other elis within the unit-resulting nogood have been set to True.
-
-            val ngEps = nogiToNogood.get(eps)
-
-            val accLenOld = accumulatedNogoodBuilder.length
-
-            var ngEpsI = ngEps.sizev - 1
-
-            while (ngEpsI >= 0) {
-
-              if (ngEps.get(ngEpsI) != sigmaNot && !accumulatedNogoodBuilder.contains(ngEps.get(ngEpsI), until = accLenOld.toInt))
-                accumulatedNogoodBuilder.append(ngEps.get(ngEpsI))
-
-              ngEpsI -= 1
-
-            }
-
-          } else {
-
-            accumulatedNogoodBuilder.buffer.update(shotOutSigma, sigmaEli) // we restore sigmaEli
-
-            lp = false
-
-          }
-
-        }
-
-        val nogoodFinal = accumulatedNogoodBuilder.getContentUnsafeExceptInt(except = -1)
-
-        ((k, nogoodFinal, sigmaEli))
-
-      }
-
-      var noOfConflictsBeforeRestart: Double = restartTriggerConf._2
-
-      val lubySeq = ArrayBuffer[Int]()
-
-      lubySeq.sizeHint(if (restartTriggerConf._1 == 3) 4096 else 0)
-
-      lubySeq.append(-1 /*<- dummy*/ , 1)
-
-      val l2km1ForLuby = Array(/*k=1:*/ 1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095, 8191, 16383,
-        32767, 65535, 131071, 262143, 524287, 1048575)
-
-      val clearInJumpBackTasks = new ObjectArrayList[Runnable]()
-
-      var remaindersToClear: ObjectArrayList[NogoodRemainder] = null
-
-      var nweh = -1
-
-      var eliToClear = -1
-
-      var cdlcl = null.asInstanceOf[CountDownLatch]
-
-      clearInJumpBackTasks.add(() => {
-
-        var i = 0
-
-        while (i < nweh) {
-
-          remaindersToClear.get(i).unSetItem(eliToClear)
-
-          i += 1
-
-        }
-
-        cdlcl.countDown()
-
-      })
-
-      clearInJumpBackTasks.add(() => {
-
-        var i = nweh
-
-        val il = nweh * 2
-
-        while (i < il) {
-
-          remaindersToClear.get(i).unSetItem(eliToClear)
-
-          i += 1
-
-        }
-
-        cdlcl.countDown()
-
-      })
-
-      clearInJumpBackTasks.add(() => {
-
-        var i = nweh * 2
-
-        val il = remaindersToClear.size
-
-        while (i < il) {
-
-          remaindersToClear.get(i).unSetItem(eliToClear)
-
-          i += 1
-
-        }
-
-        cdlcl.countDown()
-
-      })
-
-      @inline def fireSingletonNogoods: Boolean = {
-
-        if (initiallyResolveSingletonNogoods) {
-
-          assert(dl == 0)
-
-          if (noHeap) {
-
-            var nogi = 0
-
-            val nogil = nogiToRemainder.size
-
-            while (nogi < nogil) {
-
-              val remainder = nogiToRemainder.get(nogi)
-
-              val nogood = nogiToNogood.get(remainder.nogi)
-
-              if (nogood.size == 1) {
-
-                setEliWithNogoodUpdatesNoHeap(negateEli(nogood.get(0)))
-
-                if (conflictNogi != -1)
-                  return true
-
-              }
-
-              nogi += 1
-
-            }
-
-          } else {
-
-            nogiToRemainder.forEach(remainder => {
-
-              val nogood = nogiToNogood.get(remainder.nogi)
-
-              if (nogood.size == 1)
-                forceElis.addv(negateEli(nogood.get(0)))
-
-            })
-
-          }
-
-        }
-
-        false
-
-      }
-
-      @inline def jumpBack(newLevel: Int): Unit = {
-
-        val oldOrder = orderNo
-
-        log("Jumping back to decision level " + newLevel)
-
-        // We remove everything with a decision level > newLevel. NB: Level newLevel itself won't be cleared, new elis are assigned
-        // in additions to any which are on level newLevel already.
-
-        conflictNogi = -1
-
-        if (!noHeap)
-          forceElis.reset
-
-        var posEli = 0
-
-        while (posEli < noOfPosElis) {
-
-          @inline def clear(eli: Eli): Unit = {
-
-            remaindersToClear = eliToRemainders(eli)
-
-            clearInPass(eli)
-
-            assert(isNotAbsSetInPass(eli))
-
-            if (remaindersToClear.size < localSolverParallelThresh) {
-
-              var i = remaindersToClear.size - 1
-
-              while (i >= 0) {
-
-                remaindersToClear.get(i).unSetItem(eli)
-
-                i -= 1
-
-              }
-
-            } else {
-
-              nweh = remaindersToClear.size / 3
-
-              eliToClear = eli
-
-              cdlcl = new CountDownLatch(3)
-
-              localSingleSamplerThreadPool.execute(clearInJumpBackTasks.get(0))
-
-              localSingleSamplerThreadPool.execute(clearInJumpBackTasks.get(1))
-
-              localSingleSamplerThreadPool.execute(clearInJumpBackTasks.get(2))
-
-              cdlcl.await()
-
-            }
-
-          }
-
-          if (isSetInPass(posEli) && decisionLevelOfEli(posEli) > newLevel) // NB: decisionLevelOfEli doesn't check if eli is set
-            clear(posEli)
-          else if (isSetInPass(negatePosEli(posEli)) && decisionLevelOfEli(negatePosEli(posEli)) > newLevel)
-            clear(negatePosEli(posEli))
-
-          posEli += 1
-
-        }
-
-        var dlOi: Int = newLevel + 1
-
-        val firstOrderNoToClear = dlToFirstOrder.get(dlOi).max(0) // dlToFirstOrder can be Int.MinValue for dlOi=0 (because it's unsure that level 0 contains
-        // any elis)
-
-        //assert(firstOrderNoToClear >= 0 && firstOrderNoToClear < orderToDlCache.sizev)
-
-        while (dlOi <= dl + 1) {
-
-          dlToFirstOrder.update(dlOi, Int.MinValue)
-
-          dlOi += 1
-
-        }
-
-        if (newLevel == -1) { // we restart from scratch
-
-          setDecisionLevel(0, updateDlToFirstOrder = false /*<- since the new level already exists and might be populated already*/)
-
-          noOfConflictsAfterRestart = 1
-
-          if (fireSingletonNogoods) {
-
-            // unsat  // TODO (remove line after checks)
-
-            return
-
-          }
-
-        } else {
-
-          setDecisionLevel(newLevel, updateDlToFirstOrder = false /*<- since the new level already exists and might be populated already*/)
-
-          noOfConflictsAfterRestart += 1
-
-          noOfConflictsTotal += 1
-
-          noOfConflictsTotalAllThreads += 1
-
-        }
-
-        //orderToDlCache.clear()
-
-        var oi = firstOrderNoToClear
-
-        while (oi <= oldOrder) {
-
-          orderToDlCache.update(oi, -1)
-
-          oi += 1
-
-        }
-
-      }
-
-      @inline def addNogood(newNogood: IntArrayUnsafeS): Nogi = {
-
-        val newNogi = nogiToNogood.size
-
-        if (firstRecordedNogi == -1)
-          firstRecordedNogi = newNogi
-
-        nogiToNogood.add(newNogood)
-
-        val newNogoodRemainder = new NogoodRemainder(pool = newNogood /*<- we must assign the reference within nogiToNogood, not some clone of the nogood */ , newNogi)
-
-        nogiToRemainder.add(newNogoodRemainder)
-
-        newNogoodRemainder.reset
-
-        var i = newNogood.size - 1
-
-        while (i >= 0) {
-
-          val eliInNewNogood = newNogood.get(i)
-
-          eliToNogis(eliInNewNogood).append(newNogi)
-
-          if (noNogisPerAbsEliForAbsEliPool != null)
-            noNogisPerAbsEliForAbsEliPool.update(toAbsEli(eliInNewNogood), noNogisPerAbsEliForAbsEliPool(toAbsEli(eliInNewNogood)) + 1)
-
-          eliToRemainders(eliInNewNogood).add(newNogoodRemainder)
-
-          i -= 1
-
-        }
-
-        checkFireNogood(newNogoodRemainder, newNogi)
-
-        if (maxCompetingSolverThreads > 1 && nogoodShareProbability > 0.000001f)
-          nogoodExchangePool.put(newNogood, threadNo)
-
-        newNogi
-
-      }
-
-      var modelOpt: Option[(Array[Eli], IntOpenHashSet)] = null.asInstanceOf[Option[(Array[Eli], IntOpenHashSet)]]
-
-      val xForLevelledRestarts = -Math.log10(noOfPosElis)
-
-      @inline def printSingleLineProgress(peak: Int, trials: Int) = {
-
-        if (!stopSolverThreads && peak >= 0) {
-
-          print("\r")
-
-          print("@ " + timerToElapsedMs(solverTimer) / 1000 + "sec: Peak: " + peak + "%, " +
-            "Thread $" + threadNo + ": " +
-            "Unassigned: " + (if (prevUnassi < 5) "< 5" else prevUnassi) + ", " +
-            "#Conflicts: " + noOfConflictsTotal + ", " +
-            "#Learned nogoods: " + (if (firstRecordedNogi >= 1) nogiToRemainder.size - firstRecordedNogi else 0) + ", " +
-            "#Restarts: " + noOfRestarts + ", #trials (inner loop): " + trials)
-
-          // NB: remaining unassigned literals < 1 doesn't mean we are finished, since there might still be an unresolved conflict.
-
-        }
-
-      }
-
-      var uncertainEliSearchStart = 0
-
-      var (r1, r2, r3, r4) = (-1f, -1f, -1f, -1f)
-
-      val rndEveryTrials = ((1000000000d * rndmBranch).toInt).max(1) // (remark: 1 has same effect as diversify=true)
-
-      log("rndEveryTrials = " + rndEveryTrials)
-
-      var rndEveryTrialsIt = rndEveryTrials
-
-      //println(""Time (ms) for singleSolver initialization:" + timerToElapsedMs(startSingleSolverInit))
-
-      tempFacts.foreach(tempFactEli => {
-
-        val factNogood = new IntArrayUnsafeS(Array(negateEli(tempFactEli)), aligned = false)
-
-        addNogood(factNogood)
-
-      })
-
-      while (modelOpt == null && !stopSolverThreads) { // bounce-back loop; if program is tight or sat-mode, there is only a single iteration
+      while (modelOpt == null/*[sic]; None = UNSAT*/ && !stopSolverThreads) { // bounce-back loop; if program is tight or in sat-mode, there is only a single iteration
 
         var incompleteModuloConflict = true
 
-        var trials = 0 // inner loop trials (for truth assignment search), not sampling trials
+        var trials = 0 // inner loop trials (for truth assignment search in an individual solver thread, not sampling trials)
 
         var maxApproachSwitches = maxApproachSwitchesPerSolverThread
 
-        @inline def literally(eli: Eli) = -eli - 1
+        var progress: Boolean = false
 
-        val maxIAddr = if (useAbsElisInArrangementInFreeEliSearch) maxAbsEliIAddr else maxEliIAddr
+        var progressGlobal: Boolean = false
 
-        def findFreeEli: Int /*freeEli < 0: enforce -freeEli-1. Max.Int: no absfree eli found*/ = {
+        while (incompleteModuloConflict && !stopSolverThreads) { // inner loop of single model solver ----------------------------
 
-          // Branching decision heuristics & parameter eli decision using symbolic or automatic differentiation (partial derivative)
-
-          /* if (variableOrNogoodElimConfig._1 && variableOrNogoodElimConfig._5) {  // TODO: (reactivate after optimization)
-
-            val removedElisFreeOpt = removedNogoodsPerAtomOpt.flatMap(_.keys.find(!isAbsSetInPass(_)))
-
-            if (removedElisFreeOpt.isDefined)
-              return literally(removedElisFreeOpt.get)
-
-          } */
-
-          if (!ignoreParamVariables) {
-
-            // We check the parameter atoms (random variables) in the order provided by the sorted partial derivatives (over multiple atoms, this
-            // implicitly gives the gradient):
-
-            var i = uncertainEliSearchStart // if there wasn't a conflict after the previous parameter eli assignment, we
-            // don't need to start searching from start again. (Similar effect as with maxBurst != 0)
-
-            while (i < deficitOrderedUncertainLiteralsHalf) {
-
-              val uncertainEli = deficitOrderedUncertainLiteralsForJava(i)
-
-              if (isNotAbsSetInPass(uncertainEli)) {
-
-                uncertainEliSearchStart = if (i + 1 >= deficitOrderedUncertainLiteralsHalf) 0 else i + 1
-
-                return literally(uncertainEli)
-
-              }
-
-              i += 1
-
-            }
-
-          }
-
-          rndEveryTrialsIt -= 1
-
-          if (!diversify && rndEveryTrialsIt > 0) {
-
-            if (noOfConflictsAfterRestart > entryFreeEliSearchFrom0Threshold)
-              entryFreeEliAddrSearch = pass.getAddr
-
-            @inline def findFreeVarInElisArranged(useActivities: Boolean): Eli = {
-
-              var freeEli = -1
-
-              var freeVarActiv = -Float.MaxValue // NB: -Float.MaxValue in Scala (but not Java) is same as Float.MinValue
-
-              if (arrangeEliPool > 0) {
-
-                var eliIAddr = entryFreeEliIAddrSearch
-
-                do {
-
-                  if (isNotAbsSetInPass(unsafe.getInt(eliIAddr))) {
-
-                    if (useActivities) {
-
-                      if (absEliScore.get(toAbsEli(unsafe.getInt(eliIAddr))) > freeVarActiv) {
-
-                        freeEli = unsafe.getInt(eliIAddr)
-
-                        freeVarActiv = absEliScore.get(toAbsEli(unsafe.getInt(eliIAddr)))
-
-                        if (freeEliSearchApproach == 5) {
-
-                          entryFreeEliIAddrSearch = if (eliIAddr + 4l >= maxIAddr) elisArranged.getAddr else eliIAddr + 4l
-
-                          return freeEli
-
-                        }
-
-                      }
-
-                    } else {
-
-                      entryFreeEliIAddrSearch = if (eliIAddr + 4l >= maxIAddr) elisArranged.getAddr else eliIAddr + 4l
-
-                      return unsafe.getInt(eliIAddr)
-
-                    }
-
-                  }
-
-                  if (eliIAddr + 4l < maxIAddr)
-                    eliIAddr += 4l
-                  else
-                    eliIAddr = elisArranged.getAddr
-
-                } while (eliIAddr != entryFreeEliIAddrSearch)
-
-                entryFreeEliIAddrSearch = if (eliIAddr + 4l >= maxIAddr) elisArranged.getAddr else eliIAddr + 4l
-
-                freeEli
-
-              } else { // no specific arrangement, so we just iterate through all the elis in their original sequence
-
-                // NB: here we always look only at the abs (ri.e., positive) elis, since we record activities for abs elis only and
-                // the elis arrangement is considered arbitrary (it could still have an influence, but unlikely).
-
-                val entryFreeEliAddrSearchStart = entryFreeEliAddrSearch
-
-                do {
-
-                  if (unsafe.getInt(entryFreeEliAddrSearch + absEliAddrNegOffset) == 0 && unsafe.getInt(entryFreeEliAddrSearch) == 0) {
-
-                    if (useActivities) {
-
-                      val absEliCand = ((entryFreeEliAddrSearch - pass.getAddr) >>> 2).toInt
-
-                      if (freeEliSearchApproach == 5)
-                        return absEliCand
-                      else if (absEliScore.get(absEliCand) > freeVarActiv) {
-
-                        freeVarActiv = absEliScore.get(absEliCand)
-
-                        freeEli = absEliCand
-
-                      }
-
-                    } else {
-
-                      val r = (((entryFreeEliAddrSearch - pass.getAddr) >>> 2)).toInt
-
-                      if (entryFreeEliAddrSearch >= maxAbsEliAddr)
-                        entryFreeEliAddrSearch = pass.getAddr
-                      else
-                        entryFreeEliAddrSearch += 4l
-
-                      return r
-
-                    }
-                  }
-
-                  if (entryFreeEliAddrSearch >= maxAbsEliAddr)
-                    entryFreeEliAddrSearch = pass.getAddr
-                  else
-                    entryFreeEliAddrSearch += 4l
-
-                } while (entryFreeEliAddrSearch != entryFreeEliAddrSearchStart)
-
-                freeEli
-
-              }
-
-            }
-
-            if (freeEliSearchApproach4or1or5or9) {
-
-              r1 = isAbsNotSetInPassInt(someFreeEli1) * absEliScore.get(toAbsEli(someFreeEli1))
-
-              r2 = isAbsNotSetInPassInt(someFreeEli2) * absEliScore.get(toAbsEli(someFreeEli2))
-
-              r3 = isAbsNotSetInPassInt(someFreeEli3) * absEliScore.get(toAbsEli(someFreeEli3))
-
-              r4 = isAbsNotSetInPassInt(someFreeEli4) * absEliScore.get(toAbsEli(someFreeEli4))
-
-              if (r1 != 0f && r1 > r2 && r1 > r3 && r1 > r4) return someFreeEli1
-              if (r2 != 0f && r2 > r1 && r2 > r3 && r2 > r4) return someFreeEli2
-              if (r4 != 0f && r3 > r1 && r3 > r2 && r3 > r4) return someFreeEli3
-              if (r1 != 0f && r4 > r1 && r4 > r2 && r4 > r3) return someFreeEli4
-
-              val freeEli = findFreeVarInElisArranged(useActivities = freeEliSearchApproach != 9)
-
-              if (freeEli != -1) {
-
-                return freeEli
-
-              }
-
-            } else if (freeEliSearchApproach == 11) {
-
-              while (!unassignedAbsElisQueue.isEmpty) {
-
-                val pe = unassignedAbsElisQueue.dequeueInt()
-
-                if (isNotAbsSetInPass(pe)) {
-
-                  return literally(pe)
-
-                }
-
-              }
-
-            } else if (freeEliSearchApproach3or10) {
-
-              if (!useScoresInFreeEliSearch || useEliScoresAsOrderForAbsEliPool) {
-
-                if (!unassignedAbsElisPool.isEmpty) {
-
-                  val eliCand = (
-                    if (unassignedAbsElisPool.get(unassignedAbsElisPool.firstIntKey))
-                      unassignedAbsElisPool.firstIntKey
-                    else
-                      negatePosEli(unassignedAbsElisPool.firstIntKey)
-                    )
-
-                  // doesn't necessarily hold in case we've used a tree order which changes after inserting a node (because then we cannot reliably
-                  // remove keys from tree anymore): assert(isNotAbsSetInPass(x))
-
-                  if (isNotAbsSetInPass(eliCand)) // see above
-                    return literally(eliCand)
-
-                }
-
-              } else {
-
-                var freeEli = -1
-
-                var freeVarActiv = -Float.MaxValue // NB: -Float.MaxValue in Scala (but not Java) is same as Float.MinValue
-
-                if (useUnassignedAbsElisPoolCache) {
-
-                  if (unassignedAbsElisPoolCacheDirty) {
-
-                    unassignedAbsElisPoolCache = unassignedAbsElisPool.keySet.toIntArray
-
-                    unassignedAbsElisPoolCacheDirty = false
-
-                  }
-
-                  var i = 0
-
-                  while (i < unassignedAbsElisPoolCache.length) {
-
-                    val absEliCand = unassignedAbsElisPoolCache(i)
-
-                    if (absEliScore.get(absEliCand) > freeVarActiv && isNotAbsSetInPass(absEliCand)) { // we need the isNotAbsSet check because the cache is not always up-to-date
-
-                      freeVarActiv = absEliScore.get(absEliCand)
-
-                      freeEli = absEliCand
-
-                    }
-
-                    i += 1
-
-                  }
-
-                } else {
-
-                  unassignedAbsElisPool.forEach { case (absEliCand, _) => { // (strangely, this seems to be faster than iterating over the keySet)
-
-                    if (absEliScore.get(absEliCand) > freeVarActiv) {
-
-                      freeVarActiv = absEliScore.get(absEliCand)
-
-                      freeEli = absEliCand
-
-                    }
-
-                  }
-                  }
-
-                }
-
-                if (freeEli != -1)
-                  return literally(
-                    if (unassignedAbsElisPool.get(freeEli))
-                      freeEli
-                    else
-                      negatePosEli(freeEli)
-                  )
-
-              }
-
-            } else if (freeEliSearchApproach != 6) {
-
-              val freeEli = findFreeVarInElisArranged(useActivities = useScoresInFreeEliSearch)
-
-              if (freeEli != -1)
-                return freeEli
-
-            }
-
-          } else
-            rndEveryTrialsIt = rndEveryTrials
-
-          do {
-
-            val freeEliCand = rngLocalL.nextPosInt() / med //rngLocalL.nextEli()
-
-            if (isNotAbsSetInPass(freeEliCand))
-              return literally(freeEliCand)
-
-          } while (true)
-
-          Int.MaxValue
-
-        }
-
-        var burstsBeforeConflictsRatios: Double = 0d
-
-        var burstsBeforeConflictsRatiosN = 0
-
-        val forceElisArray = if (forceElis.isInstanceOf[ForceElisArraySet]) forceElis.asInstanceOf[ForceElisArraySet] else null
-
-        @inline def updateburstsBeforeConflictsRatios(burstCountInitial: Int, burstIndex: Long): Unit = {
-
-          val x = (burstCountInitial - ((/*burstCount*/ burstIndex >> 2) + 1)) / burstCountInitial.toDouble
-
-          burstsBeforeConflictsRatios = (x + burstsBeforeConflictsRatiosN * burstsBeforeConflictsRatios) / (burstsBeforeConflictsRatiosN + 1d)
-
-          burstsBeforeConflictsRatiosN += 1
-
-        }
-
-        def unitPropsHeap(burstCountInitial: Int): Unit = { // Boolean Constraint Propagation (BCP)
-
-          if (!useBurstableForceElis) {
-
-            while (forceElis.hasMore) {
-
-              val eli = forceElis.getNext
-
-              if (setInPassIfUnassigned(eli)) {
-
-                var j = eliToRemainders(eli).size() - 1
-
-                //var prop = propagate(eliToRemainders(eli).get(j).nogi)
-
-                while (j >= 0) {
-
-                  val htIndic = eliToRemainders(eli).get(j).setItemIndic(eli)
-
-                  if (htIndic == -1) {
-
-                    if (conflictNogi == -1)
-                      conflictNogi = eliToRemainders(eli).get(j).nogi
-
-                    if (!useCounters)
-                      return
-                    else
-                      forceElis.reset
-
-                  } else if (htIndic != Int.MaxValue && conflictNogi == -1 && /*prop*/ propagate(eliToRemainders(eli).get(j).nogi)) // TODO: more experiments needed to determine optimal prop criterion
-                    forceElis.addv(negateEli(htIndic))
-
-                  j -= 1
-
-                }
-
-              }
-
-            }
-
-          } else {
-
-            assert(forceElis.isInstanceOf[ForceElisArraySet])
-
-            var burstCountAddr = forceElisArray.addr + (burstCountInitial << 2)
-
-            val oldDl = dl
-
-            while (forceElisArray.hasMore) {
-
-              forceElisArray.addrCounter -= 4
-
-              val eli = unsafe.getInt(forceElisArray.addrCounter)
-
-              if (if (forceElisArray.addrCounter < burstCountAddr) {
-
-                if (isSetInPass(negateEli(eli))) { // we need to reduce maxBurst in that case as otherwise all or many bursted parameter elis would
-                  // be invalidated (not set), leading to non-convergence against threshold.
-                  // See below why we need to check for isSetInPass(negateEli(eli)) at all.
-
-                  // TODO: this approach to reducing maxBurst is probably not optimal:
-                  maxBurst = maxBurst >> 1 //too weak: updateburstsBeforeConflictsRatios(burstCountInitial, burstCountAddr - forceElisArray.addr)
-
-                  jumpBack(oldDl)
-
-                  return
-
-                }
-
-                isNotSetInPass /*isNotAbsSetInPass [see below]*/ (eli) && {
-                  // ^ we check for isSetInPass(negateEli(eli)) above or alternatively absSetInPass here instead of just setInPass, because with
-                  // bursting of elis, we might not reduce the remainder direclty after setting
-                  // the bursted eli, which means there might be some firing event which sets negation(eli) before we set eli, which wouldn't
-                  // be allowed.
-
-                  setDecisionLevel(dl + 1)
-                  // We need to make sure that each of the "burst" elis and all elis which
-                  // are triggered by that respective burst toAbsEli are assigned on a new decision level. The burst
-                  // elis are on level 0..burstCount-1 and triggered elis are added at the end (ri.e., forceElisSize++).
-
-                  burstCountAddr = forceElisArray.addrCounter
-
-                  setInPass(eli)
-
-                  true
-
-                }
-
-              } else setInPassIfUnassigned(eli)) {
-
-                var j = 0
-
-                while (j < eliToRemainders(eli).size) {
-
-                  val htIndic = eliToRemainders(eli).get(j).setItemIndic(eli)
-
-                  if (htIndic == -1) {
-
-                    conflictNogi = eliToNogis(eli).buffer.get(j)
-
-                    if (burstCountInitial > 0 && dynamicallyAdaptMaxBurst) { // we keep track of how much bursting triggers conflicts
-
-                      updateburstsBeforeConflictsRatios(burstCountInitial, burstCountAddr - forceElisArray.addr)
-
-                    }
-
-                    return
-
-                  } else if (htIndic != Int.MaxValue) {
-
-                    if (propagate(eliToRemainders(eli).get(j).nogi)) {
-
-                      unsafe.putInt(forceElisArray.addrCounter, negateEli(htIndic))
-
-                      forceElisArray.addrCounter += 4
-
-                    }
-
-                  }
-
-                  j += 1
-
-                }
-
-              }
-
-            }
-
-          }
-
-        }
-
-        var burstCount = 0
-
-        var bi = 0
-
-        if (fireSingletonNogoods) {
-
-          unsat
-
-          return None
-
-        }
-
-        @inline def setPlainElisByBurst = {
-
-          var maxTry = maxBurst //<< 1
-
-          if (noHeap) {
-
-            while (burstCount < maxBurst && maxTry >= 0 && conflictNogi == -1) {
-
-              val candPosEli = rngLocalL.nextPosEli()
-
-              if (isPosEliNotAbsSetInPass(candPosEli)) {
-
-                setDecisionLevel(dl + 1)
-
-                if (passPrevious.getBoolean(candPosEli))
-                  setEliWithNogoodUpdatesNoHeap(candPosEli)
-                else
-                  setEliWithNogoodUpdatesNoHeap(negatePosEli(candPosEli))
-
-                burstCount += 1
-
-                if (conflictNogi != -1 && dynamicallyAdaptMaxBurst) // we keep track of how much bursting triggers conflicts
-                  updateburstsBeforeConflictsRatios(maxBurst, burstCount)
-
-              } else
-                maxTry -= 1
-
-            }
-
-          } else {
-
-            while (burstCount < maxBurst && maxTry >= 0) {
-
-              val candPosEli = rngLocalL.nextPosEli()
-
-              if (isPosEliNotAbsSetInPass(candPosEli)) {
-
-                if (passPrevious.getBoolean(candPosEli))
-                  forceElis.addv(candPosEli)
-                else
-                  forceElis.addv(negatePosEli(candPosEli))
-
-                burstCount += 1
-
-              } else
-                maxTry -= 1
-
-            }
-
-          }
-
-        }
-
-        val noOfPosElisPlus1 = noOfPosElis + 1
-
-        while (incompleteModuloConflict && !stopSolverThreads) { // inner loop of solver ----------------------------
-          // Behind this loop, we have a single supported model (as a truth assignments to elis)
+          // After this loop, we have a single supported model (as a truth assignments to elis), or
+          // model candidate (in the ASP case) which needs to be checked for stable-ness, or UNSAT
 
           trials += 1
 
-          if (!noHeap) {
+          if(enforceImmediateFullRestart) {  // in case of reentry reusing the solver data structures from a previous sampled model
 
-            unitPropsHeap(burstCount) // BCP
+            enforceImmediateFullRestart = false
 
-            forceElis.reset
+            restart(trials, -1, temporaryDisableReusedTrailRestarts = true)
 
           }
 
-          if (conflictNogi == -1) {
+          if (absEliScoringApproach == 1 && playStackStartOrderNumber >= 0) { // see Liang et al: Exponential RecencyWeighted Average Branching Heuristic for SAT Solvers
+            // Based on Exponential Recency Weighted Average (ERWA) (an approach to multi-armed bandits)
 
-            incompleteModuloConflict = orderNo != noOfPosElisPlus1
+            val multiplier: Float = if (violatedNogoodReducible == 0l) 0.9f else 1f // we give extra rewards for triggering conflicts
 
-            if (incompleteModuloConflict) {
+            var i = orderNumber - 1
 
-              // Branching...
+            while (i >= playStackStartOrderNumber) { // the absElis we are examining in this loop are exactly those which
+              // have been assigned by the most recent setEliWithNogoodUpdatesNoHeap() call:
 
-              burstCount = 0
+              val absEli = toAbsEli(rmiStoreG.get(i))
 
-              // Parameter literal bursting (optional). Has a more pronounced effect with noHeap = false.
-              // Notice the similar effect of uncertainEliSearchStart.
+              //   println("rmiStoreG i = " + i + ", absEli = " + absEli)
 
-              if (noHeap) {
+              //assert(!isNotAbsSetInPass(absEli))
 
-                if (!ignoreParamVariables) {
+              val d = (getNoOfConflictsForERWA - getLastConflictOfAbsEli(absEli)) + 1
 
-                  bi = uncertainEliSearchStart
+              if (d != 0) {
 
-                  while (bi < deficitOrderedUncertainLiteralsHalf && burstCount < maxBurst && conflictNogi == -1) {
+                val reward = multiplier / d.toFloat
 
-                    val uncertainEli = deficitOrderedUncertainLiteralsForJava(bi)
+                val newQValue = (1f - alpha) * getAbsEliScore(absEli) + alpha * reward
 
-                    if (isNotAbsSetInPass(uncertainEli)) {
+                setScoreOfAbsEli(absEli, newQValue)
 
-                      uncertainEliSearchStart = if (bi + 1 >= deficitOrderedUncertainLiteralsHalf) 0 else bi + 1
+              }
 
-                      setDecisionLevel(dl + 1)
+              i -= 1
 
-                      setEliWithNogoodUpdatesNoHeap(uncertainEli)
+            }
 
-                      burstCount += 1
+            // println("----------------------------------------------")
+
+          }
+
+          if (violatedNogoodReducible != 0l) { // conflict...
+
+            if (dl == 0) { // nowhere to go back
+
+              // if (debug2)
+              // println("\nUnsat; conflicting nogood: " + generateRefToNogoodInReducible(violatedNogoodReducible).toArray.mkString(","))
+
+              unsat
+
+              if (collectOffHeapGarbage)
+                queueOffHeapGarbageInSingleSolver
+
+              return None
+
+            }
+
+            noOfConflictsTotal += 1
+
+            noOfConflictsAfterRestart += 1
+
+            noOfConflictsAfterLastRephasing += 1
+
+            if (scoringForRemovalOfLearnedNogoods == 1 || scoringForRemovalOfLearnedNogoods == 10 || scoringForRemovalOfLearnedNogoods == 11)
+              nogoodActivityBump += nogoodActivityDecay // Minisat 2: nogoodActivityBump *= (1f / nogoodActivityDecay)
+
+            uncertainEliSearchStart = 0
+
+            incompleteModuloConflict = true
+
+            //weaklyRephase
+
+            val performRegularRestart = !localRestarts && decideDoRegularRestart
+
+            if (!removeLearnedNogoodAtRegularRestarts || performRegularRestart)
+              possiblyRemoveLearnedNogoods(trials)
+
+            //val restarted = possibleRestart(trials)
+
+            if (true /*!restarted*/ ) { // conflict analysis and backtracking...
+              // Observe that we decide whether or not to restart _after_ conflict analysis, because we can utilize
+              // the backtracking level for reused trail restarts.
+
+              {
+
+                // println("\ncurrent dec level (before conflict analysis): " + dl)
+
+                // The following estimation is very important - if the initial size of the new nogood is underestimated, we'll
+                // require a costly resizing later in conflictAnalysis. If it's overestimated, we waste space and harm
+                // cache locality. If in doubt, overestimate.
+                //val initialWorkingNogoodSizeInConflictAnalysis = 3 * avgSizeLearnedNogoods.max(getNogoodSizeFromReducible(violatedNogoodReducible))
+                val workingReducibleSizeInConflictAnalysisInNoOfInts = if (defaultNogoodAllocationSize == -1) {
+
+                  val r = /*next2Pow*/ (workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts.max(getNogoodSizeFromReducible(violatedNogoodReducible) + 20) /* -
+                    offsetIntsOfNogoodInReducible - closingIntsAfterNogoodInReducible*/)
+
+                  if (noOfConflictsTotal % 500 == 0) {
+
+                    workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts =
+                      (workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts - 5 +
+                        (100 * reducibleSlotSizeEnlargementsEMA.toDouble).toInt).max(64).min(1024)
+                    // ^while the reducibleSlotSizeEnlargementsEMA (exponential moving average over reducible slot enlargement event frequency) remains
+                    // close to 0, workingReducibleSizeInConflictAnalysisAutoValue goes slowly down over time, creating larger slots in the beginning and refilling
+                    // these slots later after nogoods have been deleted. But if the ema is signifiantly above 0, the slot size
+                    // for new nogoods increases proportionally. NB: this heuristics has a significant influence on performance,
+                    // as off-heap memory allocation is rather slow using many JDK's UNSAFE compared to C/C++-malloc.
+
+                    //println("\nworkingReducibleSizeInConflictAnalysisAutoValue= " + workingReducibleSizeInConflictAnalysisAutoValue + ", initialWorkingNogoodSizeInConflictAnalysis = " + initialWorkingNogoodSizeInConflictAnalysis + ", getNogoodSizeFromReducible(violatedNogoodReducible): " + getNogoodSizeFromReducible(violatedNogoodReducible))
+
+                  }
+
+                  r
+
+                } else
+                  defaultNogoodAllocationSize.max(getNogoodSizeFromReducible(violatedNogoodReducible) * 2)
+
+                val newNogoodReducibleInitial: NogoodReducible = reserveReducibleSpace(requiredReducibleSpaceSizeInNoOfInts = workingReducibleSizeInConflictAnalysisInNoOfInts)
+
+                /*val /*(jumpBackLevelFromConflict: Int, sigmaEli: Eli, newLearnedNogoodReducible)*/conflictAnalysisResult: ConflictAnalysisResult =*/
+                conflictAnalysis(violatedNogoodReducible, newNogoodReducibleInitial,
+                  workingReducibleSizeInConflictAnalysisInNoOfInts)
+                /*
+                              println("\n  want to jump back to: " + newLevel)
+
+                              println("\n  sigmaEli = " + sigmaEli + ", neg(sigmaEli) = " + negateEli(sigmaEli))
+
+                              println("\n  dec level of sigmaEli = " + decisionLevelOfEli(sigmaEli))
+
+                              println("\n  is sigma not abs-assigned (before jumping back)? " + isNotAbsSetInPass(sigmaEli))
+                */
+
+                if (debug2) {
+
+                  println("\n\n *********** From conflictAnalysis, conflictAnalysisResult_sigmaEli = " + conflictAnalysisResult_sigmaEli)
+
+                  //println("From conflictAnalysis, new nogood = " + newNogood.toArray.mkString(","))
+
+                }
+
+                assert(decisionLevelOfEli(conflictAnalysisResult_sigmaEli) == dl)
+
+                if (absEliScoringApproach == 1 || absEliScoringApproach == 2) {
+
+                  if (alpha > alphaTh)
+                    alpha -= alphaStep
+
+                }
+
+                if (extReducibles == 1) { // TODO: why is this here but for the other extReducibles further below??
+
+                  setupNewReducibleForExt1(conflictAnalysisResult_conflictNogoodReducible, beforeSolvingstarted = false)
+
+                  possiblyAddLearnedNogoodToReducibleLists(trials, conflictAnalysisResult_conflictNogoodReducible)
+
+                }
+
+                if (!isClarkReducible(violatedNogoodReducible)) {
+
+                  val lbd: Eli = if (useLBD) getLBDFromReducible /*computeLBD*/ (/*violatedNogoodReducible*/ conflictAnalysisResult_conflictNogoodReducible) else -1
+                  // ^differently from glucose, we use lbd of violatedNogoodReducible, as we don't have the lbd of the conflictAnalysisResult_conflictNogoodReducible
+
+                  //println("lbd for lbdEma = " + lbd)
+
+                  if (enforceLBDemaComputation) { // exponential moving averages of the learnt clause LBD
+
+                    // Biere, Fröhlich: Evaluating CDCL Restart Schemes @POS'15 (http://fmv.jku.at/biere/talks/Biere-POS15-talk.pdf):
+
+                    lbdEmaSlow += (lbd - lbdEmaSlow) / (1 << 14).toDouble
+
+                    lbdEmaFast += (lbd - lbdEmaFast) / (1 << 5).toDouble
+
+                  }
+
+                  if (absEliScoringApproach == 0 && !evsids /*&& adaptiveVSIDSFact != 1f*/ ) { // variant of adaptVSIDS (Liang et al)
+
+                    if (lbdEmaFast / 1.2d > lbdEmaSlow) {
+
+                      absEliScoreScaleBaseAdaptive = absEliScoreScaleBaseLow
+
+                    } else {
+
+                      absEliScoreScaleBaseAdaptive = absEliScoreScaleBaseHigh
 
                     }
-
-                    bi += 1
 
                   }
 
                 }
 
-                if (burstPlainElis)
-                  setPlainElisByBurst
+                val performLocalRestart = localRestarts && { // based on Ryvchin & Strichman 2008: Local Restarts in SAT
 
-              } else {
+                    if(removeLearnedNogoodAtRegularRestarts)
+                      stomp(-5009, "localRestarts cannot be combined with removeLearnedNogoodAtRegularRestarts")
 
-                if (!ignoreParamVariables) {
+                    val df = noOfConflictsTotal - getConflictsAtDecisionLevel(conflictAnalysisResult_newDecisionLevel)
 
-                  bi = uncertainEliSearchStart
-
-                  while (bi < deficitOrderedUncertainLiteralsHalf && burstCount < maxBurst) {
-
-                    val uncertainEli = deficitOrderedUncertainLiteralsForJava(bi).toInt
-
-                    if (isNotAbsSetInPass(uncertainEli)) {
-
-                      uncertainEliSearchStart = if (bi + 1 >= deficitOrderedUncertainLiteralsHalf) 0 else bi + 1
-
-                      forceElis.addv(uncertainEli)
-
-                      burstCount += 1
-
-                    }
-
-                    bi += 1
-
-                  }
+                    df > noOfConflictsBeforeRestart * localRestartsTriggerThreshFactor
 
                 }
 
-                if (burstPlainElis) {
+                val restarted = if(performRegularRestart || performLocalRestart || forceRestart) {
 
-                  bi = 0
+                  if(forceRestart)
+                    possiblyRemoveLearnedNogoods(trials, all = true) // TODO: necessary?
 
-                  while (burstCount < maxBurst && bi < noOfPosElis) {
+                  forceRestart = false
 
-                    if (isPosEliNotAbsSetInPass(bi)) {
+                  restart(trials, jumpBackLevelFromConflict = conflictAnalysisResult_newDecisionLevel)
 
-                      forceElis.addv(bi)
+                  true
 
-                      burstCount += 1
+                } else
+                  false
+
+                if (!restarted) {
+
+                  if (debug2) {
+
+                    println("BEFORE jumping back:")
+
+                    var countUnset = 0
+
+                    var kkkk = 0
+
+                    while (kkkk < getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)) {
+
+                      println("   index " + kkkk + ", eli = " + getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk) + ", isSetInPass?: " + isSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk)) /*+ ", absEliScore: " + getAbsEliScore(toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)))*/)
+
+                      if (isNotSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk)))
+                        countUnset += 1
+
+                      kkkk += 1
 
                     }
 
-                    bi += 1
+                  }
+
+                  jumpBack(conflictAnalysisResult_newDecisionLevel, trials)
+
+                  assert(isNotAbsSetInPass(conflictAnalysisResult_sigmaEli)) // sigmaEli had been assigned on the previous decision level, so must have
+                  // been unassigned when jumping back given that newLevel < prevLevel
+
+                }
+
+                if (debug2) println("conflictAnalysisResult_sigmaEli = " + conflictAnalysisResult_sigmaEli + "")
+
+                if (debug2 && false) {
+
+                  println("\nLearned nogood:")
+
+                  var kkk = 0
+
+                  while (kkk < getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)) {
+
+                    println("   index " + kkk + ", eli = " + getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk) + ", isSetInPass?: " + isSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)) /*+ ", absEliScore: " + getAbsEliScore(toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)))*/)
+
+                    kkk += 1
 
                   }
+
+                  println("-----------------")
+
+                }
+
+
+                if (extReducibles == 2 || extReducibles == 4 || extReducibles == 3 || extReducibles == 5 || extReducibles == 0) {
+
+                  if (extReducibles == 2)
+                    setupNewReducibleForExt2(conflictAnalysisResult_conflictNogoodReducible)
+
+                  possiblyAddLearnedNogoodToReducibleLists(trials, conflictAnalysisResult_conflictNogoodReducible) // TODO: why is this not at same location as possyiblyAdd for extReducibles=1?
+
+
+                }
+
+                val satFoundDuringRephasing = if (rephasePhaseMemo) {
+
+                  val satFoundDuringRephasing = possibleRephasing(trials)
+
+                  if (satFoundDuringRephasing)
+                    incompleteModuloConflict = false
+
+                  satFoundDuringRephasing
+
+                } else
+                  false
+
+                if (!restarted && !satFoundDuringRephasing &&
+                  getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible) > 0) {
+
+                  setEliWithNogoodUpdatesNoHeap(negateEli(conflictAnalysisResult_sigmaEli), conflictAnalysisResult_conflictNogoodReducible)
+
+                }
+
+                nogoodRemovalThreshAdjustConflictCount -= 1
+
+                if (nogoodRemovalThreshAdjustConflictCount <= 0) {
+                  nogoodRemovalAdjustNoOfConflicts *= nogoodRemovalAdjustInc;
+                  nogoodRemovalThreshAdjustConflictCount = nogoodRemovalAdjustNoOfConflicts.toInt;
+                  nogoodRemovalThreshAdapted *= nogoodRemovalThreshRatio
 
                 }
 
               }
 
-              progressCheckEveryTrialsState -= 1 // (before full compilation checking this is faster than trials % ... == 0)
+            }
 
-              val freeEliW = if (burstCount > 0) Int.MaxValue else findFreeEli // invokes branching heuristics or finds free parameter literal using differentiation
+          } else { // no nogood is in conflict...
 
-              if (freeEliW != Int.MaxValue) {
+            incompleteModuloConflict = orderNumber != noOfPosElisPlus1
 
-                val branchingEli: Eli = if (freeEliW < 0)
-                  -freeEliW - 1
-                else {
+            if (incompleteModuloConflict) { // satisfiability still unknown
 
-                  // we end up here if freeEliW is abs-unassigned without preference for any polarity
+                val freeEliW = findDecisionEli // invokes branching heuristics (nondeterministic decision literal choice)
+                // or finds free parameter literal using differentiation
 
-                  if (passPrevious != null) {
+                if (freeEliW != 0) {
 
-                    if (isPosEli(freeEliW)) {
+                  if (debug2)
+                    println("\nbranching eli = " + freeEliW + " (decision level " + dl + ", trial " + trials + ")")
 
-                      if (passPrevious.get(freeEliW) == 0x00.toByte)
-                        negatePosEli(freeEliW)
-                      else
-                        freeEliW
+                  //if (extraChecks) assert(isNotAbsSetInPass(freeEliW))
 
-                    } else {
+                  val assignedBeforeBranching = orderNumber
 
-                      if (passPrevious.get(negateNegEli(freeEliW)) == 0xFF.toByte)
-                        negateNegEli(freeEliW)
-                      else
-                        freeEliW
+                  if(localRestarts)
+                    updateConflictsAtDecisionLevel(dl + 1, noOfConflictsTotal)
 
-                    }
+                  setDecisionLevelTo(dl + 1)  // the next eli needs to be set on the new decision level
 
-                  } else {
+                  if (reusedTrailRestarts) {
 
-                    if (nextFloatRngLocal() <= 0.5f /* rngLocal.nextBoolean() <- inaccurate */ )
-                      freeEliW
-                    else
-                      negateEli(freeEliW)
+                    updateDecisionAbsEliSeqForRTR(dl, (freeEliW))
 
                   }
 
-                }
+                  setEliWithNogoodUpdatesNoHeap(freeEliW, reason = 0l)
 
-                setDecisionLevel(dl + 1)
+                  val noOfPropagationsInBCP = orderNumber - assignedBeforeBranching
 
-                assert(isNotAbsSetInPass(branchingEli))
+                  noOfPropagationsSinceLastProgressPrinted += noOfPropagationsInBCP
 
-                if (noHeap)
-                  setEliWithNogoodUpdatesNoHeap(branchingEli)
-                else
-                  forceElis.addv(branchingEli)
+                  //  println("progressThresh = " + progressThresh + ", noOfAbsElis - orderNo = " + (noOfAbsElis - orderNo) + ", minUnassignedThisThread = " + minUnassignedThisThread + ", minUnassignedThisThread - progressThresh = " + (minUnassignedThisThread - progressThresh) + ", noOfAbsElis - orderNo <= minUnassignedThisThread - progressThresh = " + (noOfAbsElis - orderNo <= minUnassignedThisThread - progressThresh))
 
-                if (progressCheckEveryTrialsState == 0) {
+                  if (trials > minimumTrialsBeforeFirstProgressCheck) {
 
-                  progressCheckEveryTrialsState = progressCheckEveryTrials
+                    if (noOfAbsElis - orderNumber <= (minUnassignedThisThread >> 1) || fastModByPow2(trials, enforceProgressChecksEveryTrials) == 0) {
 
-                  threadChangeCheckFreqState -= 1
+                      noOfProgressChecks += 1 // (in this thread)
 
-                  if (abandonOrSwitchSlowThreads != 0 && threadChangeCheckFreqState == 0) {
+                      if(System.currentTimeMillis() > maxSamplingTimeMs) {
 
-                    threadChangeCheckFreqState = threadChangeCheckFreq
+                        unknown()
 
-                    if (abandonOrSwitchSlowThreads > 0) { // we sample and average progress
+                        return null
 
-                      val norm = (if (threadmxBean.isCurrentThreadCpuTimeSupported) threadmxBean.getCurrentThreadCpuTime() / 10000000 else trials).toDouble
+                      }
 
-                      val normalizedProgress = orderNo.toDouble / norm.toDouble
+                      if (noOfAbsElis - orderNumber <= minUnassignedThisThread) {
 
-                      val n = trials.toDouble / (noOfPosElis / Math.abs(abandonOrSwitchSlowThreads * 100)).toDouble
+                        progress = true
 
-                      avgNormProgress = (normalizedProgress + n * avgNormProgress) / (n + 1) // cumulative moving average
+                        minUnassignedThisThread = noOfAbsElis - orderNumber
 
-                    }
+                        if (minUnassignedThisThread < minUnassignedGlobal) {
 
-                    val stagn = trialsSinceLastProgress / progressCheckEveryTrials.toDouble / 100d
+                          progressGlobal = true
 
-                    lazy val remainingSolverThreads: collection.Set[Int] = progressNormalizedPerThread.keySet
+                          minUnassignedGlobal = minUnassignedThisThread
 
-                    val abCrit2 = (abandonOrSwitchSlowThreads < 0 || maxCompetingSolverThreads == 1) &&
-                      maxApproachSwitches > 0 &&
-                      stagn > (if (abandonOrSwitchSlowThreads > 0) 0.1 else -(abandonOrSwitchSlowThreads - Math.ceil(abandonOrSwitchSlowThreads)))
+                          sharedAmongSingleSolverThreads.greedilyBestThread = threadNo
 
+                        } else
+                          progressGlobal = false
 
-                    val abCrit1 = abandonOrSwitchSlowThreads > 0 && !abCrit2 && maxCompetingSolverThreads > 1 &&
-                      avgNormProgress > 0 && {
+                      } else {
 
-                      progressNormalizedPerThread.synchronized {
+                        progress = false
 
-                        remainingSolverThreads.size >= 2 && {
+                        progressGlobal = false
 
-                          progressNormalizedPerThread.put(threadNo, new SolverThreadInfo(progressNormalizedPerThread.get(threadNo).get.thread, avgNormProgress))
+                      }
 
-                          lazy val avgNormProgressAllThreads = remainingSolverThreads.map(progressNormalizedPerThread.get(_).get.progressNormalized).sum /
-                            remainingSolverThreads.size.toDouble
+                      if (bestPhasesQueue != null && noOfConflictsTotal > 100000 /*since this is very costly*/ &&
+                        (globalBestPhaseMemo && progressGlobal || !globalBestPhaseMemo && progress)) {
 
-                          //println("normalized progress for thread " + threadNo + " = " + avgNormProgress + ", avg: " + avgNormProgressAllThreads)
+                        sharedAmongSingleSolverThreads.refreshedBestPhasesGlobal += 1
 
-                          avgNormProgressAllThreads > avgNormProgress
+                        val newBestPhases = new ByteArrayUnsafeS(noOfAbsElis + 1, initialValue = if (rngLocal.nextBoolean()) 0x01.toByte else 0x00.toByte)
+
+                        var absEli = 1
+
+                        /*bestPhasesForAbsElis.synchronized*/
+                        {
+
+                          while (absEli <= noOfAbsElis) {
+
+                            if (isPosOrNegSetInPass(absEli)) {
+
+                              newBestPhases.update(absEli, if (isSetInPass(absEli)) 0x01.toByte else 0x00.toByte)
+
+                              //updateInPhasePreviousForAbsElis(absEli, if (isSetInPass(absEli)) 0x01.toByte else 0x00.toByte)
+
+                            }
+
+                            absEli += 1
+
+                          }
+
+                        }
+
+                        bestPhasesQueue.synchronized {
+
+                          bestPhasesQueue.enqueueFinite(newBestPhases, maxSize = 1) // keeping >1 "best" states doesn't seem to improve things, but more tests required
 
                         }
 
                       }
 
-                    }
 
-                    if (abCrit2 || abCrit1) {
+                      preReportedMinUnassignedGlobal = minUnassignedGlobal
 
-                      val identicalApproaches = false && (maxCompetingSolverThreads == 1 || threadConfs.map(conf => conf.freeEliSearchApproach).distinct.length == 1
-                        /*^ deactivated; even if all approaches are the same, switching the "slowest" to a different approach can make sense. */)
+                      threadChangeCheckFreqState -= 1
 
-                      if (slowThreadAction != 3 || identicalApproaches) {
+                      if (abandonOrSwitchSlowThreads != 0 && threadChangeCheckFreqState == 0) { // TODO: ??remove all thread switch stuff:
 
-                        progressNormalizedPerThread.synchronized {
+                        threadChangeCheckFreqState = threadChangeCheckFreq
 
-                          if (slowThreadAction == 0 && remainingSolverThreads.size >= 2) {
+                        if (true) { // we sample and average progress
 
-                            progressNormalizedPerThread.remove(threadNo)
+                          val norm = (if (threadmxBean.isCurrentThreadCpuTimeSupported) threadmxBean.getCurrentThreadCpuTime() / 10000000 else trials).toDouble
 
-                            if (verbose && showProgressStats) {
+                          val normalizedProgress = ((/*lbdEmaSlow.toDouble*/ noOfConflictsTotal.toDouble * 10d * orderNumber.toDouble)) /
+                            norm.toDouble
 
-                              println("\n>> >> >> Abandoning solver thread $" + threadNo + " after " + trials + " trials")
+                          val n = trials.toDouble / (noOfAbsElis / Math.abs(abandonOrSwitchSlowThreads * 100)).toDouble
 
-                              println("   Current #threads total: " + (java.lang.Thread.activeCount))
+                          avgNormProgress = (normalizedProgress + n * avgNormProgress) / (n + 1) // cumulative moving average
 
-                              return null
+                          //println("\n avgNormProgress = " + avgNormProgress)
 
-                            }
+                        }
 
-                          } else {
+                        lazy val remainingSolverThreads: collection.Set[Eli] = progressNormalizedPerThread.keySet
 
-                            val newPriority: Int = if (slowThreadAction == 2) (Thread.currentThread().getPriority + 1).min(Thread.MAX_PRIORITY) else (Thread.currentThread().getPriority() - 1).max(Thread.MIN_PRIORITY)
+                        val threadShouldChange = maxCompetingSolverThreads > 1 && avgNormProgress > 0 && {
 
-                            if (newPriority != Thread.currentThread().getPriority()) {
+                          progressNormalizedPerThread.synchronized {
 
-                              if (verbose)
-                                println("\nChanging priority of thread $" + threadNo + " after " + trials + " trials\n from " + Thread.currentThread().getPriority() + " to " + newPriority)
+                            remainingSolverThreads.size >= 2 && {
 
-                              Thread.currentThread().setPriority(newPriority)
+                              val tt: Option[SolverThreadInfo] = progressNormalizedPerThread.get(threadNo)
 
-                            } else {
+                              val t: SolverThreadInfo = new SolverThreadInfo(tt.get.thread, avgNormProgress)
 
-                              if (verbose)
-                                println("\n" + (if (slowThreadAction == 2) "Decreasing" else "Increasing") + " priorities of threads other than thread $" + threadNo + " after " + trials + " trials")
+                              progressNormalizedPerThread.put(threadNo, t)
 
-                              progressNormalizedPerThread.foreach(ti => {
+                              lazy val avgNormProgressAllThreads = remainingSolverThreads.map(progressNormalizedPerThread.get(_).get.progressNormalized).sum /
+                                remainingSolverThreads.size.toDouble
 
-                                val thread = ti._2.thread
+                              //println("\nnormalized progress for thread " + threadNo + " = " + avgNormProgress + ", avg: " + avgNormProgressAllThreads)
 
-                                if (slowThreadAction == 1)
-                                  thread.setPriority((thread.getPriority + 1).min(Thread.MAX_PRIORITY))
-                                else
-                                  thread.setPriority((thread.getPriority - 1).max(Thread.MIN_PRIORITY))
-
-                              })
+                              avgNormProgressAllThreads > avgNormProgress * 1.1d
 
                             }
 
@@ -3136,194 +1684,95 @@ class SolverMulti(prep: Preparation) {
 
                         }
 
-                      } else if (!identicalApproaches) {
+                        if (threadShouldChange) { // a (seemingly) "slow" thread (progress beyond average), so we take action:
 
-                        maxApproachSwitches -= 1
+                          threadChangeActions += 1
 
-                        val newApproach = freeEliSearchConfigsP((freeEliSearchConfigsP.indexOf(freeEliSearchApproach) + 1) % freeEliSearchConfigsP.length)
+                          val identicalApproaches = false && (maxCompetingSolverThreads == 1 || threadConfs.map(conf => conf.freeEliSearchApproach).distinct.length == 1
+                            /*^ deactivated; even if all approaches are the same, switching the "slowest" to a different approach can make sense. */)
 
-                        if (verbose && showProgressStats)
-                          println("\n>> >> >> Switching solver thread $" + threadNo + " to decision heuristics " + newApproach + "... (after " + trials + " trials)")
+                          if (slowThreadAction == 4) {
 
-                        freeEliSearchApproach = newApproach
+                            forceRestart = true
 
-                        threadConfs(threadNo - 1).freeEliSearchApproach = newApproach
+                          } else if (slowThreadAction != 3 || identicalApproaches) {
 
-                        freeEliSearchApproach4or1or5or9 = freeEliSearchApproach == 1 || freeEliSearchApproach == 5 || freeEliSearchApproach == 4 || freeEliSearchApproach == 9
+                            progressNormalizedPerThread.synchronized {
 
-                        freeEliSearchApproach3or10 = freeEliSearchApproach == 3 || freeEliSearchApproach == 10
+                              if (slowThreadAction == 0 && remainingSolverThreads.size >= 2) {
+
+                                progressNormalizedPerThread.remove(threadNo)
+
+                                if (verbose && showProgressStats) {
+
+                                  println("\n\n>> >> >> Abandoning solver thread $" + threadNo + " after " + trials + " trials")
+
+                                  if(debug) println("   Current #threads in JVM in total (including non-solver threads): " + (java.lang.Thread.activeCount))
+
+                                  return null
+
+                                }
+
+                              } else {
+
+                                val newPriority: Eli = if (slowThreadAction == 2) (Thread.currentThread().getPriority + 1).min(Thread.MAX_PRIORITY) else (Thread.currentThread().getPriority() - 1).max(Thread.MIN_PRIORITY)
+
+                                if (newPriority != Thread.currentThread().getPriority()) {
+
+                                  //if (verbose) println("\nChanging priority of thread $" + threadNo + " after " + trials + " trials\n from " + Thread.currentThread().getPriority() + " to " + newPriority)
+
+                                  Thread.currentThread().setPriority(newPriority)
+
+                                } else {
+
+                                  //if (verbose) println("\n" + (if (slowThreadAction == 2) "Decreasing" else "Increasing") + " priorities of threads other than thread $" + threadNo + " after " + trials + " trials")
+
+                                  progressNormalizedPerThread.foreach(ti => {
+
+                                    val thread = ti._2.thread
+
+                                    if (slowThreadAction == 1)
+                                      thread.setPriority((thread.getPriority + 1).min(Thread.MAX_PRIORITY))
+                                    else
+                                      thread.setPriority((thread.getPriority - 1).max(Thread.MIN_PRIORITY))
+
+                                  })
+
+                                }
+
+                              }
+
+                            }
+
+                          } else if (!identicalApproaches) { // TODO: remove?
+
+                            stomp(-10000, "slowThreadAction 3 currently not available")
+
+                            freeEliSearchApproachP.synchronized {
+
+                              maxApproachSwitches -= 1
+
+                              val newApproach = freeEliSearchApproachP.getAllAlternativeValues((freeEliSearchApproachP.getAllAlternativeValues.indexOf(freeEliSearchApproach) + 1) % freeEliSearchApproachP.getAllAlternativeValues.length)
+
+                              if (verbose && showProgressStats)
+                                println("\n>> >> >> Switching solver thread $" + threadNo + " to decision heuristics " + newApproach + "... (after " + trials + " trials)")
+
+                              freeEliSearchApproach = newApproach
+
+                              threadConfs(threadNo - 1).freeEliSearchApproach = newApproach
+
+                              setThreadParams()
+
+                            }
+
+                          }
+
+                        }
 
                       }
 
-                    }
+                      printSingleLineProgress(trials, noOfRemovedNogoods = -1)
 
-                  }
-
-                  progressCheckEveryTrialsState = progressCheckEveryTrials
-
-                  // We adapt the burst rate, depending on how quick bursted elis lead to a conflict (ri.e., indirectly how independent parameter variables are from each other):
-                  if (dynamicallyAdaptMaxBurst && burstsBeforeConflictsRatios > 0d) {
-
-                    // The larger burstsBeforeConflictsRatios is, the larger maxBurst can be:
-
-                    val oldMaxBurst = maxBurst
-
-                    maxBurst = (maxBurst * (burstsBeforeConflictsRatios / 2 + maxBurstAdaptOffset)).toInt // we can use the offset to ensure that
-                    // maxBurst can grow
-
-                    if (maxBurst <= 1) {
-
-                      burstPlainElis = false
-
-                      maxBurst = 0
-
-                      dynamicallyAdaptMaxBurst = false
-
-                    }
-
-                    println("\n\nnew maxBurst: " + maxBurst + "  [old: " + oldMaxBurst)
-
-                    burstsBeforeConflictsRatiosN = 0
-
-                  }
-
-                  if (noOfPosElis - orderNo < prevUnassi) {
-
-                    prevUnassi = noOfPosElis - orderNo
-
-                    if (abandonOrSwitchSlowThreads != 0) {
-
-                      trialsSinceLastProgress = trials - trialsAtLastImprovement
-
-                      trialsAtLastImprovement = trials
-
-                    }
-
-                    if (showProgressStats && trials % (progressCheckEveryTrials * 10) == 0) {
-
-                      val peak = ((noOfPosElis - prevUnassi).toDouble / noOfPosElis.toDouble * 100).toInt
-
-                      if (singleLineProgress) {
-
-                        printSingleLineProgress(peak, trials)
-
-                      } else {
-
-                        println("\n##### Assigned (peak, all threads): " + peak + "%  @ " + timerToElapsedMs(solverTimer) / 1000 + " sec")
-
-                        println("  remaining unassigned atoms thread $" + threadNo + ": ca. " + prevUnassi + ", conflictNogi: " + conflictNogi)
-                        // note that prevUnassi <= 0 doesn't mean we are finished since conflictNogi might be != -1
-
-                        println("  conflicts after restart: thread $" + threadNo + ": " + noOfConflictsAfterRestart)
-
-                        println("  Learned nogoods: " + (nogiToRemainder.size - firstRecordedNogi))
-
-                        //println("  Time since last progress: " + timeSinceLastProgressNs + " ms")
-
-                      }
-
-                    }
-
-                  } else if (showProgressStats && trials % (progressCheckEveryTrials * 3) == 0) {
-
-                    printSingleLineProgress(peak = ((noOfPosElis - prevUnassi).toDouble / noOfPosElis.toDouble * 100).toInt, trials)
-
-                  }
-
-                }
-
-              }
-
-            }
-
-          } else {
-
-            if (dl == 0) {
-
-              unsat
-
-              return None
-
-            }
-
-            if (noOfConflictsAfterRestart >= noOfConflictsBeforeRestart) { // Restart
-
-              if (showProgressStats) {
-
-                if (singleLineProgress) {
-
-                  printSingleLineProgress(peak = ((noOfPosElis - prevUnassi).toDouble / noOfPosElis.toDouble * 100).toInt, trials)
-
-                } else {
-
-                  println("Restarting... (Thread: " + threadNo + "$, #conflicts: " + noOfConflictsTotal +
-                    ", #restarts: " + noOfRestarts + " @ " + timerToElapsedMs(solverTimer) / 1000 + " sec, " +
-                    //"rndmBranch = " + rndmBranch +
-                    //", savePhases = " + savePhases +
-                    //", maxBurst = " + maxBurst +
-                    //", absEliScoreFact = " + absEliScoreFact +
-                    //", rndmIgnLearnedNogoodThreshold = " + rndmIgnLearnedNogoodThresholdP +
-                    ", thread time: " + (if (threadmxBean.isCurrentThreadCpuTimeSupported) (threadmxBean.getCurrentThreadCpuTime / 1e9).toInt + "sec" else "??") + ")")
-
-                }
-
-              }
-
-              noOfRestarts += 1
-
-              noOfTrialsAtLastRestart = trials
-
-              if (rearrangeEliPoolOnRestart) {
-
-                if (elisArranged != null)
-                  shuffleArrayUnsafe(elisArranged, rngLocal)
-
-                if (unassignedAbsElisPool != null)
-                  rearrangeUnassignedAbsElisPool
-
-              }
-
-              if (restartTriggerConf._1 == 2)
-                noOfConflictsBeforeRestart *= restartTriggerConf._3
-              else {
-
-                val bsr = java.util.Arrays.binarySearch(l2km1ForLuby, noOfRestarts + 1)
-
-                val k = if (bsr >= 0) bsr + 1 else -(bsr + 1) + 1
-
-                lubySeq.append(if (bsr >= 0)
-                  1 << (k - 1)
-                else
-                  lubySeq(noOfRestarts + 1 - (1 << (k - 1)) + 1))
-
-                noOfConflictsBeforeRestart = lubySeq(noOfRestarts + 1) * restartTriggerConf._3
-
-              }
-
-              if (nogoodShareProbability > 0f && maxCompetingSolverThreads > 1 && !stopSolverThreads) {
-
-                nogoodExchangePool.synchronized {
-
-                  // TODO: in rare cases there is still toAbsEli race related to nogood exchange - fix without introducing locking in remainder updates or BCP
-
-                  import scala.collection.JavaConverters._
-                  val moveoverNogoods = nogoodExchangePool.entrySet().asScala.filter((value: Map.Entry[IntArrayUnsafeS, Int]) => {
-
-                    nextFloatRngLocal() <= nogoodShareProbability && value.getValue != threadNo && value.getKey.size() < nogoodShareSizeThresh
-
-                  })
-
-                  if (moveoverNogoods.size > 0) {
-
-                    log("  This thread: $" + threadNo + ", fetching " + moveoverNogoods.size + " nogoods from other threads...")
-
-                    moveoverNogoods.foreach { case (value: Map.Entry[IntArrayUnsafeS, Int]) => {
-
-                      nogoodExchangePool.remove(value.getKey)
-
-                      addNogood(value.getKey)
-
-                    }
 
                     }
 
@@ -3331,563 +1780,617 @@ class SolverMulti(prep: Preparation) {
 
                 }
 
-              }
-
-              val jbt = if (levelledRestarts) rngLocalL.nextTriangular(xForLevelledRestarts, dl, xForLevelledRestarts).toInt.max(-1) else -1
-
-              jumpBack(jbt)
-
-              if (unassignedAbsElisQueue != null)
-                unassignedAbsElisQueue.changed()
-
             }
-
-          }
-
-          if (conflictNogi != -1) { // Conflict handling
-
-            uncertainEliSearchStart = 0
-
-            incompleteModuloConflict = true
-
-            if (dl == 0) {
-
-              unsat
-
-              return None
-
-            }
-
-            val (newLevel: Int, newNogood: IntArrayUnsafeS, sigma: Eli) = conflictAnalysis(conflictNogi)
-
-            if (useScoresInFreeEliSearch && noOfConflictsAfterRestart % reviseScoreFreq == 0) {
-
-              var absEliAddr = absEliScore.addr
-
-              val absEliAddrMax = absEliAddr + (noOfPosElis << 2)
-
-              var activSum = 0d
-
-              while (absEliAddr < absEliAddrMax) {
-
-                unsafe.putFloat(absEliAddr, unsafe.getFloat(absEliAddr) * reviseScoreFact)
-
-                activSum += unsafe.getFloat(absEliAddr)
-
-                absEliAddr += 4
-
-              }
-
-              //println("activSum = " + activSum)
-
-              if (activSum == 0f || activSum.isInfinite || activSum.isNaN || activSum <= 1E-30d) {
-
-                if (verbose && !warnMessageEliScoreOutOfRangeShown) {
-
-                  stomp(-5010, "activSum: " + activSum + ", eliScoreUpdateFact = " + eliScoreUpdateFact + "; thread: $" + threadNo)
-
-                  warnMessageEliScoreOutOfRangeShown = true
-
-                }
-
-                if (activSum == 0f)
-                  eliScoreUpdateFact *= scaleScoreUpdateFactOutOfRange
-                else if (activSum.isInfinite)
-                  eliScoreUpdateFact /= scaleScoreUpdateFactOutOfRange
-
-                resetAbsEliActi(clearUnassignedPool = true)
-
-              }
-
-            }
-
-            val newNogi = addNogood(newNogood)
-
-            jumpBack(newLevel)
-
-            assert(nogiToRemainder.get(newNogi).notsetCounter > 0)
-
-            if (noHeap)
-              setEliWithNogoodUpdatesNoHeap(negateEli(sigma))
-            else
-              forceElis.addv(negateEli(sigma))
 
           }
 
         } // -------------------------------------------------------------------------------------------------------------
 
-        if (!stopSolverThreads) {
+        stopSolverThreads.synchronized {
 
-          log("\nEnd of inner loop reached! SolverTimer end: " + timerToElapsedMs(solverTimer) + " ms\n")
+          if (!stopSolverThreads) {
 
-          assert(orderNo - 1 == noOfAllElis / 2)
+            if(debug) println("\n\nModel candidate found. SolverTimer: " + timerToElapsedMs(solverTimer) + " ms\nReporting thread: $" + threadNo + "\n")
 
-          val modelCandidate: (Array[Eli], IntOpenHashSet) = { // we don't just return an array here but also a hash set, since we might use the result as a cache key
+            assert(orderNumber - 1 == noOfAllElis / 2)
 
-            import scala.collection.JavaConverters._
+            val modelCandidate: (Array[Eli], IntOpenHashSet) = { // we don't just return an array here but also a hash set, since we might use the result as a cache key
 
-            lazy val restoredNogoods: ArrayBuffer[IntArrayUnsafeS] = nogiToNogood.asScala.toArray.to[ArrayBuffer]
+              @inline def retranslateMappedEli(oldEli: Eli): Eli = {
 
-            removedNogoodsPerAtomOpt.foreach { removedNogoodsPerAtom: mutable.TreeMap[Eli /*atom*/ , ArrayBuffer[IntArrayUnsafeS]] => {
-              // we've performed variable elimination in class Preparation and need to restore
-              // now the removed variables (atoms) with their correct polarities:satmo
+                if (!preProcesssVariableElimConfig._1 || !preProcesssVariableElimConfig._5)
+                  oldEli
+                else {
 
-              val removedNogoodsPerAtomArray = removedNogoodsPerAtom.toArray
+                  {
 
-              removedNogoodsPerAtomArray.foreach { case (atom: Eli, _) => {
+                    val translatedEli = if (isPosEli(oldEli)) {
 
-                clearInPass(atom)
+                      absEliUndoChangeMap(oldEli)
 
-                clearInPass(negatePosEli(atom))
+                    } else {
 
-              }
-              }
+                      negateEli(absEliUndoChangeMap(negateNegEli(oldEli)))
 
-              removedNogoodsPerAtomArray.reverse.foreach { case (atom: Eli, removedNogoods: ArrayBuffer[IntArrayUnsafeS]) => {
+                    }
 
-                restoredNogoods.appendAll(removedNogoods)
+                    translatedEli
 
-                setInPass(atom)
-
-                val isAtomPos = restoredNogoods.forall((nogood: IntArrayUnsafeS) => {
-
-                  nogood.toArray.exists(!isSetInPass(_)) // TODO: optimize restoredNogoods handling
-
-                })
-
-                if (!isAtomPos) {
-
-                  clearInPass(atom)
-
-                  setInPass(negatePosEli(atom))
+                  }
 
                 }
 
-                log(" ok restored eliminated positive toAbsEli " + atom)
-
-              }
               }
 
-            }
+              if (preProcesssVariableElimConfig._1 && !satMode)
+                stomp(-5009, "Preproc currently not available in ASP mode") // TODO: more tests required, then activate
+
+              val assignmentAsHashSet = new IntOpenHashSet(noOfPosAtomElis) // can (initially) contain positive as well as negative literals (elis)
+
+              var absElii: Eli = 1
+
+              while (absElii <= noOfPosAtomElis /*i.e., this doesn't comprise blits*/ ) {
+
+                if (isSetInPass(absElii)) {
+
+                  assignmentAsHashSet.add(retranslateMappedEli(absElii))
+
+                } else {
+
+                  assignmentAsHashSet.add(negateEli(retranslateMappedEli(absElii)))
+
+                }
+
+                absElii += 1
+
+              }
+
+              val test = false
+
+              var noOfRestoredOriginalPosAtoms = 0
+
+              assert(!test || !preProcesssVariableElimConfig._5)
+
+              removedNogoodsPerAtomOpt.foreach { removedNogoodsPerAtom: mutable.TreeMap[Eli /*atom*/ , mutable.HashSet[IntArrayUnsafeS]] => {
+                // We've performed variable elimination (materially or non-materially - i.e. just ignoring "eliminated" variables) in class Preparation and need to restore
+                // now the removed variables (atoms) with their correct polarities.
+                // This must be done even if the "eliminated" variables (the removedNogoodsPerAtom keys) have not materially been
+                // removed from symbols (preProcesss_variableOrNogoodElimConfig._5 = false).
+
+                // TODO: optimize:
+
+                val removedNogoodsPerAtomArray: Array[(Eli, mutable.HashSet[IntArrayUnsafeS])] = removedNogoodsPerAtom.toArray
+
+                removedNogoodsPerAtomArray.foreach { case (removedPosAtom: Eli, _) => {
+
+                  assert(isPosEli(removedPosAtom)) // (must also be an atom eli (no blit), however, the isPosAtomEli() check wouldn't
+                  // always work here because of the translation if preProcesss_variableOrNogoodElimConfig._5=true)
+
+                  if (test) {
+
+                    clearInPass(removedPosAtom, calledWhen = 2)
+
+                    clearInPass(negatePosEli(removedPosAtom), calledWhen = 2)
+
+                  }
+
+                  assignmentAsHashSet.remove(removedPosAtom)
+
+                  assignmentAsHashSet.remove(negatePosEli(removedPosAtom))
+
+                }
+                }
+
+                removedPosAtomsOrderedOpt.get.reverse.foreach { case removedPosAtom: Eli => {
+                  // it's important that we restore the variables in reverse order (because the nogoods of variables removed earlier
+                  // might contain variables removed later)
+
+                  val removedNogoods: mutable.HashSet[IntArrayUnsafeS] = removedNogoodsPerAtom.get(removedPosAtom).get
+
+                  if (test)
+                    setInPassAfterSolvePhase(removedPosAtom)
+
+                  assignmentAsHashSet.add(removedPosAtom)
+
+                  // We check if the extended formula (i.e., restoredNogoods) is satisfied:
+
+                  var noFulfilledNogoods = true
+
+                  val rnit = removedNogoods.iterator
+
+                  while (noFulfilledNogoods && rnit.hasNext) {
+
+                    val nogood: IntArrayUnsafeS = rnit.next()
+
+                    var nj = 0
+
+                    do {
+
+                      val eli = nogood.get(nj)
+
+                      noFulfilledNogoods = !assignmentAsHashSet.contains(eli) // if yes, the nogood cannot be fulfilled, so,
+                      // if this is also the case for all the other nogoods in restoredNogoods, we keep
+                      // the assignment (assignmentHashSetForVarRestoration.add(removedPosAtom)) of the restored variable.
+
+                      nj += 1
+
+                    } while (!noFulfilledNogoods && nj < nogood.sizev)
+
+                  }
+
+                  if (!noFulfilledNogoods) { // we must revert the assignment of the restored variable to negative
+
+                    if (test) {
+
+                      clearInPass(removedPosAtom, calledWhen = 2)
+
+                      setInPassAfterSolvePhase(negatePosEli(removedPosAtom))
+
+                    }
+
+                    assignmentAsHashSet.remove(removedPosAtom)
+
+                    assignmentAsHashSet.add(negatePosEli(removedPosAtom))
+
+                  }
+
+                  noOfRestoredOriginalPosAtoms += 1
+
+                  if (debug2) println(" Restored eliminated positive eli " + removedPosAtom)
+
+                }
+                }
+
+              }
+
+              }
+
+              if (test) {
+
+                val modelCand = new IntArrayList(noOfAbsElis)
+
+                var mci: Eli = 1
+
+                while (mci <= noOfPosAtomElis) { // the atom elis in the model candidate must be in increasing numerical order
+                  // (as we use toAbsEli subset of toAbsEli bounced model directly as toAbsEli cache key)
+
+                  if (isSetInPass(mci))
+                    modelCand.add(mci)
+
+                  mci += 1
+
+                }
+
+                val modelCandArray: Array[Eli] = modelCand.toIntArray
+
+                println("modelCandArray (test):\n " + modelCandArray.sorted.mkString(" "))
+
+                (modelCandArray, new IntOpenHashSet(modelCandArray))
+
+
+              }
+
+              val r = {
+
+                assignmentAsHashSet.removeIf(isNegEli(_))
+
+                val modelCandArray: Array[Eli] = assignmentAsHashSet.toIntArray // modelCand.toIntArray
+
+                if(debug) println("modelCandArray:\n " + modelCandArray.sorted.mkString(" ") + "\nassignmentAsHashSet:\n" + assignmentAsHashSet.toIntArray.mkString(" "))
+
+                (modelCandArray, assignmentAsHashSet)
+
+              }
+
+              if(debug) println("\nRestored eliminated variables: " + noOfRestoredOriginalPosAtoms)
+
+              r
 
             }
 
-            val modelCand = new it.unimi.dsi.fastutil.ints.IntArrayList(noOfPosElis)
+            val checkResult: (Boolean, Array[Eli]) = if ((satMode || (assureProgIsTight && !performSanityChecks)))
+              (true, Array[Eli]())
+            else {
 
-            var mci: Eli = 0
+              assert(!preProcesssVariableElimConfig._1 || !preProcesssVariableElimConfig._5)
 
-            while (mci < noOfPosAtomElis) { // the atom elis in the model candidate must be in increasing numerical order
-              // (as we use toAbsEli subset of toAbsEli bounced model directly as toAbsEli cache key)
+              if(debug) println("Checking if stable model...")
 
-              if (isSetInPass(mci))
-                modelCand.add(mci)
+              val r = checkASPWithEliRules(modelCandidate, rulesOpt.get)
 
-              mci += 1
+              if (!r._1) {
+
+                if(debug) println("Answer set check fail. Remainder:\n" + r._2.mkString("\n"))
+
+              } else
+                if(debug) println("Answer set check OK")
+
+              r
 
             }
 
-            val modelCandArray = modelCand.toIntArray
+            if (checkResult._1) {
 
-            (modelCandArray, new IntOpenHashSet(modelCandArray))
-
-          }
-
-          val checkResult: (Boolean, Array[Eli]) = if ((satMode || (progIsTight && !enforceSanityChecks)))
-            (true, Array[Eli]())
-          else {
-
-            log("Checking if stable model...")
-
-            val r = checkASPWithEliRules(modelCandidate, rulesOpt.get)
-
-            if (!r._1) {
-
-              log("Answer set check fail. Remainder:\n" + r._2.mkString("\n"))
-
-            } else
-              log("Answer set check OK")
-
-            r
-
-          }
-
-          if (checkResult._1) {
-
-            assert(checkResult._2.isEmpty)
-
-            def sanityChecks = { // we perform a few simple tests with the discovered model. Not a correctness proof - for debugging purposes only.
-
-              // TODO: due to incomplete locking (takes some time to propagate stopSolverThreads), we occasionally end up here >= twice
+              assert(checkResult._2.isEmpty)
 
               stopSolverThreads = true
 
-              println("\n\nPerforming informal sanity checks on resulting model candidate... (free eli search approach was: " + freeEliSearchApproach + ")\n")
+              def threadSanityChecks: Unit = { // we perform a few simple tests with the discovered model. Not a correctness proof - for debugging purposes only.
 
-              if (!satMode) {
+                // TODO: due to incomplete locking on stopSolverThreads, we occasionally end up here >= twice
 
-                val r = checkASPWithEliRules(modelCandidate, rulesOpt.get)
+                //stopSolverThreads = true  // we should not set this to true here as then later certain code contingent on false would be omitted
 
-                if (!r._1) {
+                println("\nPerforming informal in-thread sanity checks on resulting model candidate...")
+                // (There is another sanity check called in object delSAT (for sat mode only)
 
-                  println("Answer set check fail!") // indicates that tightness recognition gave wrong result, as otherwise the model would have
-                  // been bounced back
+                if (!satMode) {
 
+                  assert(!preProcesssVariableElimConfig._1 || !preProcesssVariableElimConfig._5)
+
+                  val r = checkASPWithEliRules(modelCandidate, rulesOpt.get)
+
+                  if (!r._1) {
+
+                    println("Answer set check fail!") // indicates that tightness recognition gave wrong result, as otherwise the model would have
+                    // been bounced back
+
+                    sys.exit(-1)
+
+                  } else
+                    println("Answer set check OK")
+
+                }
+
+                val assignment /* In contrast to modelCandidate, this also includes blits (ASP-mode) and negative elis! */ =
+                  ((-noOfAbsElis to -1) ++ (1 to noOfAbsElis)).filter(eli => {
+
+                    isSetInPass(eli)
+
+                  }).to(mutable.HashSet)
+
+                val expectedAssignmentSize = noOfAllElis / 2
+
+                println("#assignment = " + assignment.size)
+                println("   should be: " + expectedAssignmentSize)
+
+                val assignmentSizeCorrect = assignment.size == expectedAssignmentSize
+
+                println("Assignment size correct?: " + assignmentSizeCorrect)
+
+                if (!assignmentSizeCorrect)
                   sys.exit(-1)
 
-                } else
-                  println("Answer set check OK")
+                val (allElitsCovered, noInconsistencies) = {
 
-              }
+                  var allCovered = true
 
-              val assignment /*in contrast to modelCandidate, this also includes blits and negative elits*/ =
-                (0 until noOfAllElis).filter(eli => isSetInPass(eli)).to[mutable.HashSet]
+                  var noInconsistencies = true
 
-              println("#assignment = " + assignment.size)
-              println("   should be: " + noOfAllElis / 2)
+                  ((-noOfAbsElis to -1) ++ (1 to noOfAbsElis)).foreach { eli =>
 
-              val assignmentSizeCorrect = assignment.size == noOfAllElis / 2
+                    val posIncl = assignment.contains(eli)
 
-              println("Assignment size correct?: " + assignmentSizeCorrect)
+                    val negIncl = assignment.contains(negateEli(eli))
 
-              if (!assignmentSizeCorrect)
-                sys.exit(-1)
+                    if (!posIncl && !negIncl)
+                      allCovered = false
 
-              val (allElitsCovered, noInconsistencies) = {
+                    if (posIncl && negIncl) {
 
-                var eli = 0
+                      noInconsistencies = false
 
-                var allCovered = true
+                      println("Inconsistency: both " + eli + " and " + negateEli(eli) + " (negateEli(_)) are set")
 
-                var noInconsistencies = true
-
-                while (eli < noOfAllElis) {
-
-                  val posIncl = assignment.contains(eli)
-
-                  val negIncl = assignment.contains(negateEli(eli))
-
-                  if (!posIncl && !negIncl)
-                    allCovered = false
-
-                  if (posIncl && negIncl) {
-
-                    noInconsistencies = false
-
-                    println("Inconsistency: both " + eli + " and " + negateEli(eli) + " (negateEli(_)) are set")
+                    }
 
                   }
-                  eli += 1
+
+                  (allCovered, noInconsistencies)
 
                 }
 
-                (allCovered, noInconsistencies)
+                println("All elis covered?: " + allElitsCovered)
 
-              }
+                println("No inconsistencies?: " + noInconsistencies)
 
-              println("All elis covered?: " + allElitsCovered)
+                var violatedNogoods = 0
 
-              println("No inconsistencies?: " + noInconsistencies)
+                var checkedNg = 0
 
-              var violatedNogoods = 0
+                //if(debug) println("Reentry: " + reentry)
 
-              var checkedNg = 0
+                var nogi = 0
 
-              var nogi = 0
+                while (nogi < nogiClarkToNogoodReducible.size) { // if preProcesss_variableOrNogoodElimConfig._5=true, we
+                  // are using the translated nogoods here (i.e., as used during solving), and also the solver's assignment.
 
-              while (nogi < nogiToNogood.size()) {
+                   @inline def nogoodInReducibleToEliArrayBuffer(addr: NogoodReducible): ArrayBuffer[Eli] = {
 
-                val nogood = nogiToNogood.get(nogi).toArray
+                    val sb = new ArrayBuffer[Eli]()
 
-                checkedNg += 1
+                    val ngs = getNogoodSizeFromReducible(addr)
 
-                assert(!nogood.isEmpty)
+                    var i = 0
 
-                if (nogood.forall(assignment.contains(_))) {
+                    while (i < ngs) {
 
-                  violatedNogoods += 1
+                      sb.append(getEliFromNogoodInReducible(addr, i))
 
-                  println("Violated nogood (internal error, please report): nogi: " + nogi + " = " + nogood.mkString(","))
+                      i += 1
+
+                    }
+
+                    sb
+
+                  }
+
+                  val nogoodArrayBuffer = nogoodInReducibleToEliArrayBuffer(nogiClarkToNogoodReducible.get(nogi))
+
+                  //println(" checked nogood: " + nogood.mkString(" "))
+
+                  checkedNg += 1
+
+                  assert(!nogoodArrayBuffer.isEmpty)
+
+                  if (nogoodArrayBuffer.forall(assignment.contains(_))) {
+
+                    violatedNogoods += 1
+
+                    println("Violated nogood (internal error, please report): nogi: " + nogi + " = " + nogoodArrayBuffer.mkString(","))
+
+                  }
+
+                  nogi += 1
 
                 }
 
-                nogi += 1
+                assert(checkedNg == nogiClarkToNogoodReducible.size)
 
-              }
+                println("#Violated nogoods: " + violatedNogoods)
 
-              assert(checkedNg == nogiToNogood.size())
+                if (!satMode) {
 
-              println("#Violated nogoods: " + violatedNogoods)
+                  var ruleViols = 0
 
-              if (!satMode) {
+                  rulesOpt.foreach(rules => rules.foreach(rule => {
 
-                var ruleViols = 0
+                    assert(rule.headAtomsElis.length == 1)
 
-                rulesOpt.foreach(rules => rules.foreach(rule => {
+                    if (!satMode)
+                      assert(isPosAtomEli(rule.headAtomsElis.head))
 
-                  assert(rule.headAtomsElis.length == 1)
+                    val bodyFlAll = rule.bodyPosAtomsElis.forall(modelCandidate._2.contains(_)) && !rule.bodyNegAtomsElis.exists(atom => modelCandidate._2.contains(negateEli(atom)))
 
-                  if (!satMode)
-                    assert(isPosAtomEli(rule.headAtomsElis.head))
+                    val headFl = rule.headAtomsElis.forall(assignment.contains(_))
 
-                  val bodyFlAll = rule.bodyPosAtomsElis.forall(modelCandidate._2.contains(_)) && !rule.bodyNegAtomsElis.exists(atom => modelCandidate._2.contains(negateEli(atom)))
+                    val viol1 = bodyFlAll && !headFl
 
-                  val headFl = rule.headAtomsElis.forall(assignment.contains(_))
+                    val viol2 = headFl && !rules.exists(ruleB => ruleB.bodyPosAtomsElis.forall(assignment.contains(_)) && ruleB.bodyNegAtomsElis.forall(assignment.contains(_)))
 
-                  val viol1 = bodyFlAll && !headFl
+                    if (viol1) {
 
-                  val viol2 = headFl && !rules.exists(ruleB => ruleB.bodyPosAtomsElis.forall(assignment.contains(_)) && ruleB.bodyNegAtomsElis.forall(assignment.contains(_)))
+                      ruleViols += 1
 
-                  if (viol1) {
+                      println("ASP rule violated: " + rule)
 
-                    ruleViols += 1
+                    }
 
-                    println("ASP rule violated: " + rule)
+                    if (viol2) {
 
-                  }
+                      ruleViols += 1
 
-                  if (viol2) {
+                      println("ASP rule ignored: " + rule)
 
-                    ruleViols += 1
 
-                    println("ASP rule ignored: " + rule)
-
-
-                  }
-
-                }))
-
-                println("#Violated ASP rules: " + ruleViols)
-
-              }
-
-              var violatedDNogoods = 0
-
-              val dimacsDirectClauseNogoodsOpt = aspifOrDIMACSParserResult.directClauseNogoodsOpt
-
-              dimacsDirectClauseNogoodsOpt.foreach((directDIMACSClauseNogoods: Array[IntArrayUnsafeS]) => {
-
-                var dnogi = 0
-
-                while (dnogi < directDIMACSClauseNogoods.length) {
-
-                  val dnogood: Array[Int /*"symbol" integers pos/neg, not elis*/ ] = directDIMACSClauseNogoods(dnogi).toArray
-
-                  assert(!dnogood.isEmpty)
-
-                  if (dnogood.forall(assignment.contains(_))) {
-
-                    violatedDNogoods += 1
-
-                    println("  Violated direct clauses nogood (must not happen): dnogi: " + dnogi + " = " + dnogood.mkString(","))
-
-                  }
-
-                  dnogi += 1
-
-                }
-
-              })
-
-              println("#Violated direct clauses nogoods: " + violatedDNogoods)
-
-              // NB: There is a further (and for satMode/DIMACS the most important) informal enforceSanityChecks check in delSAT.scala
-
-              if (!allElitsCovered || !noInconsistencies || violatedNogoods > 0 || violatedDNogoods > 0) {
-
-                println("\n\\/\\/\\/\\/ Internal error: Initial sanity checks failed on model candidate!\n")
-
-                sys.exit(-5)
-
-              }
-
-            }
-
-            //log("pass:\n " + pass.mkString(","))
-
-            if (enforceSanityChecks || debug)
-              sanityChecks
-
-            if (satMode) log("+++ ++ + Found toAbsEli satisfying assignment") else log("*** ** * Found an answer set ")
-
-            //println("  with symbols: " + modelCandidate.map(symbols(_)).mkString(" "))
-
-            log("  at solverTimer " + timerToElapsedMs(solverTimer) + " ms")
-
-            modelOpt = Some(modelCandidate)
-
-          } else { // Model candidate bounced back, so we need to retry...
-
-            log("\\\\\\\\\\\\\\\\ \nNot an answer set: " + modelCandidate + "\n Remainder: " + checkResult._2)
-
-            log("Model cand with symbols: " + modelCandidate._1.map(predI => symbols(predI)).mkString(" "))
-
-            if (progIsTight)
-              stomp(-10000, "Answer set check of tight program failed in first attempt")
-
-            // We add loop nogoods and try again (required only for non-tight programs).
-
-            // We use a modified variant of the ASSAT approach; see the revised paper http://www.cs.ust.hk/~flin/papers/assat-aij-revised.pdf
-            // for the latter (not the earlier version of this paper). But in contrast to ASSAT, we use regular CDNL conflict handling on loop nogood violations.
-
-            val mMinusR = checkResult._2
-
-            val loopsOverMminus: mutable.Seq[ArrayBuffer[Eli]] = {
-
-              sccCache.getOrElseUpdate(mMinusR, {
-
-                val t = {
-
-                  val tR = new Int2ObjectOpenHashMap[List[Eli]]() // this is ugly, but Java's HashMaps are in this case faster than Scala's (as of 2.12)
-
-                  /*
-                  val dgEntries = positiveDependencyGraph.entrySet.iterator
-
-                  while (dgEntries.hasNext) {
-
-                    val entry: util.Map.Entry[Eli, List[Eli]] = dgEntries.next()
-
-                    if (mMinusR.contains(entry.getKey))
-                      tR.put(entry.getKey, entry.getValue)
-                    else
-                      tR.put(-1, Nil)
-
-                  }*/
-
-                  val dgEntriesIterator = dependencyGraph.keySet().iterator()
-
-                  while (dgEntriesIterator.hasNext()) {
-
-                    val key = dgEntriesIterator.nextInt()
-
-                    if (mMinusR.contains(key /*.value*/))
-                      tR.put(key /*.value*/ , dependencyGraph.get(key /*.value*/))
-                    else
-                      tR.put(-1, Nil)
-
-                  }
-
-                  tR
-
-                }
-
-                /*val tKeys: java.util.Set[Eli] = t.keySet
-
-                val dependencyGraphInducedByMminus: IntObjectHashMap[Eli, List[Eli]] = {
-
-                  val dgmR = new IntObjectHashMap()
-
-                  val tEntries = t.entrySet.iterator
-
-                  while (tEntries.hasNext) {
-
-                    val entry: util.Map.Entry[Eli, List[Eli]] = tEntries.next()
-
-                    dgmR.put(entry.getKey, entry.getValue.filter(tKeys.contains(_)))
-
-                  }
-
-                  dgmR
-
-                }*/
-
-                val tKeys: IntSet = t.keySet()
-
-                val tKeysIterator = t.keySet().iterator()
-
-                val dependencyGraphInducedByMminus = new Int2ObjectOpenHashMap[List[Eli]]()
-
-                while (tKeysIterator.hasNext()) {
-
-                  val key = tKeysIterator.nextInt()
-
-                  dependencyGraphInducedByMminus.put(key, t.get(key).filter((eli: Eli) => {
-
-                    tKeys.contains(new Integer(eli)) // ??? TODO
+                    }
 
                   }))
 
+                  println("#Violated ASP rules: " + ruleViols)
+
                 }
 
-                val sccs: ArrayBuffer[ArrayBuffer[Eli]] = Tarjan.trajanRec(dependencyGraphInducedByMminus)
+                // NB: There is a further (and for satMode/DIMACS the most important) informal enforceSanityChecks check in delSAT.scala
 
-                sccs
+                if (!allElitsCovered || !noInconsistencies || violatedNogoods > 0) {
 
-              })
+                  println("\n\\/\\/\\/\\/ Internal error: Initial sanity checks failed on model candidate!\n")
 
-            }
+                  sys.exit(-5)
 
-            val maximalLoopsOverMinus =
-              loopsOverMminus /*.filter(candidateLoop => {  // not worth the hassle (?)
-
-            !loopsOverMminus.exists(loop => loop.length > candidateLoop.length && candidateLoop.forall(loop.contains(_)))
-
-          }
-          )*/
-
-            var noOfGenLoopNogoods = 0
-
-            var i = 0
-
-            val mll = maximalLoopsOverMinus.length
-
-            val jumpBackAfterFirstViolatedLoopNogood = false
-
-            while (i < mll && (conflictNogi == -1 || !jumpBackAfterFirstViolatedLoopNogood)) {
-
-              val loop: mutable.Seq[Eli] = maximalLoopsOverMinus(i)
-
-              val relevantNogis: mutable.Seq[Nogi] = loop.flatMap(loopPosAtomEli => eliToNogis(loopPosAtomEli).getContent)
-
-              val externalBodiesOfLoopAtoms: Set[Eli] = relevantNogis.flatMap(nogi => {
-
-                val negBlits = ruliformNogiToNegBlits.get(nogi)
-
-                Option(negBlits)
-
-              }).flatten.filter(negBlit => {
-
-                val posBodyElis: Array[Eli] = negBlitToPosBodyElis.get(negBlit)
-
-                !loop.exists(posBodyElis.contains(_))
-
-              }).toSet
-
-              var j = 0
-
-              val ll = loop.length
-
-              while (j < ll && (conflictNogi == -1 || !jumpBackAfterFirstViolatedLoopNogood)) {
-
-                val eli = loop(j)
-
-                val newLoopNogood: Set[Eli] = externalBodiesOfLoopAtoms.+(eli)
-
-                assert(!newLoopNogood.contains(-1))
-
-                val newLoopNogoodUnsafe = new IntArrayUnsafeS(newLoopNogood.size, aligned = false)
-
-                newLoopNogoodUnsafe.setFromIntArray(newLoopNogood.toArray)
-
-                log("Adding loop nogood: " + newLoopNogoodUnsafe)
-
-                addNogood(newLoopNogoodUnsafe)
-
-                if (emitClauses)
-                  loopNogoods.add(newLoopNogoodUnsafe)
-
-                noOfGenLoopNogoods += 1
-
-                j += 1
+                }
 
               }
 
-              i += 1
+              //if(debug) println("pass:\n " + pass.mkString(","))
+
+              if (performSanityChecks) {
+
+                if(sampledModels.length <= 2 || sampledModels.length % 100 == 0)
+                  threadSanityChecks
+
+              }
+
+              if (debug) { if (satMode) println("\nFound a satisfying assignment") else println("\nFound an answer set") }
+
+              //println("  with symbols: " + modelCandidate.map(symbols(_)).mkString(" "))
+
+              if(debug) println("  at solverTimer " + timerToElapsedMs(solverTimer) + " ms")
+
+              modelOpt = Some(modelCandidate)
+
+            } else { // Model candidate bounced back in ASP mode, so we need to retry with added loop nogoods (this
+              // enhancement and re-bouncing possibly needs to be repeated several times)...
+
+              if(debug) println("\\\\\\\\\\\\\\\\ \nNot an answer set: " + modelCandidate._1.mkString(",") + " (" + modelCandidate._2 + ")\n Remainder: " + checkResult._2.mkString(","))
+
+              if(debug) println("Model cand with symbols: " + modelCandidate._1.map(predI => symbols(predI - 1)).mkString(" "))
+
+              if (assureProgIsTight)  // if the program is tight (i.e., we only need to look for so-called supported models), every model returned
+              // by the SAT solver is an answer set
+                stomp(-10000, "Answer set check of SAT model of presumably tight program failed")
+                // ^if this happens the logic program is either actually not tight (there is a loop in the positive dependency graph)
+                // or the model actually isn't a model (e.g., bug in Clark completion)
+
+              // We add loop nogoods and try again (only for non-tight programs).
+
+              // We use a modified variant of the ASSAT approach with CMODELS-style backjumping (instead of restarting the
+              // SAT solver ("inner loop") from scratch);
+              // ASSAT: see revised paper http://www.cs.ust.hk/~flin/papers/assat-aij-revised.pdf [ASSAT]
+              // for the latter (not the earlier version of this paper).
+              // Note that in contrast to ASSAT and CMODELS, we use CDNL instead of CDCL, e.g., conflict handling on loop nogood violations.
+
+              /* Recall:
+
+                "Loop" (in ASP): a non-empty, non-singletom set of atoms is a loop iff the subgraph of the positive dependency graph
+                  induced by L is strongly connected.
+                A singleton set {p} is a loop iff there is an arc from p to p in the positive dependency graph.
+
+                 Subgraph G(S) "induced" by S is the graph whose node set is S and whose edge set consists of all edges
+                 that have both endpoints in S.
+              */
+
+              val mMinusR = checkResult._2
+
+              val loopsInMminus: mutable.Seq[ArrayBuffer[Eli]] = { // see Def 3 in [ASSAT]
+
+                sccCache.getOrElseUpdate(mMinusR, {
+
+                  val t = {
+
+                    val tR = new Int2ObjectOpenHashMap[List[Eli]]()
+
+                    val dgEntriesIterator = positiveDependencyGraph.keySet().iterator()
+
+                    while (dgEntriesIterator.hasNext()) {
+
+                      val key: Eli = dgEntriesIterator.nextInt()
+
+                      if (mMinusR.contains(key))
+                        tR.put(key, positiveDependencyGraph.get(key))
+
+                    }
+
+                    tR
+
+                  }
+
+                  val tKeys: IntSet = t.keySet()
+
+                  val tKeysIterator = t.keySet().iterator()
+
+                  val dependencyGraphInducedByMminus = new Int2ObjectOpenHashMap[List[Eli]]()
+
+                  while (tKeysIterator.hasNext()) {
+
+                    val key = tKeysIterator.nextInt()
+
+                    dependencyGraphInducedByMminus.put(key, t.get(key).filter((eli: Eli) => {
+
+                      tKeys.contains(new Integer(eli)) // TODO: ?works only with boxed int?
+
+                    }))
+
+                  }
+
+                  val sccs: ArrayBuffer[ArrayBuffer[Eli]] = Tarjan.trajanRec(dependencyGraphInducedByMminus) // we identify strongly connected components
+
+                  sccs
+
+                })
+
+              }
+
+              val maximalLoopsInMminus =
+                loopsInMminus.filter(candidateLoop => { // TODO: ? remove .filter(...) (which ensures that loop is maximal)? filter worth the hassle?
+                  !loopsInMminus.exists(loop => loop.length > candidateLoop.length && candidateLoop.forall(loop.contains(_)))
+
+                }
+                )
+
+              var noOfGenLoopNogoods = 0
+
+              var i = 0
+
+              val mll = maximalLoopsInMminus.length
+
+              val jumpBackAfterFirstViolatedLoopNogood = false // TODO: test true
+              assert(!jumpBackAfterFirstViolatedLoopNogood)
+
+              while (i < mll && (violatedNogoodReducible == 0l || !jumpBackAfterFirstViolatedLoopNogood)) {
+
+                val loop: mutable.Seq[Eli] = maximalLoopsInMminus(i)
+
+                //println("Loop = " + loop.mkString(","))
+
+                val externalBodiesOfLoopAtoms: Set[Eli] = /*blits of rule bodies where the head is in a loop but not any of the body literals*/
+                  loop.flatMap((loopPosAtomEli: Eli) => {
+
+                    val negBlits: Array[Eli] = posHeadAtomToNegBlits.get(loopPosAtomEli) //ruliformNogiToNegBlits.get(nogood)
+
+                    // println("negBlits:  " + negBlits.mkString(","))
+
+                    Option(negBlits)
+
+                  }).flatten.filter(negBlit => {
+
+                    //println("negBlit = " + negBlit)
+
+                    val posBodyElis: Array[Eli] = negBlitToPosBodyElis.get(negBlit)
+
+                    !loop.exists(posBodyElis.contains(_))
+
+                  }).toSet
+
+                //println("externalBodiesOfLoopAtoms = " + externalBodiesOfLoopAtoms.mkString(","))
+
+                var j = 0
+
+                val ll = loop.length
+
+                while (j < ll && (violatedNogoodReducible == 0l /*<-TODO: check redundant by default as by default we don't verify added nogoods anymore*/ ||
+                  !jumpBackAfterFirstViolatedLoopNogood)) {
+
+                  // see Def. 2 in [ASSAT]
+
+                  val eli: Eli = loop(j)
+
+                  val newLoopNogood: Set[Eli] = externalBodiesOfLoopAtoms.+(eli)
+
+                  assert(!newLoopNogood.contains(0 /* *** -1*/))
+
+                  val newLoopNogoodUnsafe = new IntArrayUnsafeS(newLoopNogood.size) // TODO: allocate space directly, without creating an object wrapper
+
+                  newLoopNogoodUnsafe.setFromIntArray(newLoopNogood.toArray)
+
+                  if(debug) println("Adding loop nogood: " + newLoopNogoodUnsafe)
+
+                  val newLoopNogoodReducible = generateNogoodReducibleFromNogoodClarkOrSpecial(
+                    nogoodAddr = newLoopNogoodUnsafe.getAddr,
+                    nogoodSize = newLoopNogoodUnsafe.sizev,
+                    beforeSolvingstarted = false)
+
+                  addLearnedNogoodReducibleToReducibleLists(newLoopNogoodReducible, 0l)
+
+                  if (emitClauses)
+                    loopNogoodsForEmitClauses.add(newLoopNogoodUnsafe)
+
+                  noOfGenLoopNogoods += 1
+
+                  j += 1
+
+                }
+
+                i += 1
+
+              }
+
+              if(debug) println("Restarting after addition of " + noOfGenLoopNogoods + " loop nogoods...\n")
+
+              jumpBack(-1, trials)
 
             }
-
-            log("Restarting after addition of " + noOfGenLoopNogoods + " loop nogoods...\n")
-
-            jumpBack(-1)
 
           }
 
@@ -3895,16 +2398,7 @@ class SolverMulti(prep: Preparation) {
 
       }
 
-      // End bounce back loop for generating a single answer set or SAT model
-
-      if (verbose) {
-
-        if (stopSolverThreads)
-          println("\nSingle model solving time (thread $" + threadNo + "): " + timerToElapsedMs(solverTimer) + " ms (discarded) ")
-        else
-          println("\n***** Single model solving time (thread $" + threadNo + "): " + timerToElapsedMs(solverTimer) + " ms")
-
-      }
+      // ^^^^^ End of bounce back loop for generating a single answer set or SAT model
 
       emitClauses.synchronized {
         if (emitClauses && !stopSolverThreads && !emittedClauses) {
@@ -3933,11 +2427,11 @@ class SolverMulti(prep: Preparation) {
 
           }
 
-          println("p cnf " + noOfPosElis + " " + (clarkNogoods.length + loopNogoods.size))
+          println("p cnf " + noOfAbsElis + " " + (clarkNogoodsFinal.length + loopNogoodsForEmitClauses.size))
 
-          clarkNogoods.foreach((nogood: IntArrayUnsafeS) => printClause(nogood))
+          clarkNogoodsFinal.foreach((nogood: IntArrayUnsafeS) => printClause(nogood))
 
-          loopNogoods.forEach((nogood: IntArrayUnsafeS) => printClause(nogood))
+          loopNogoodsForEmitClauses.forEach((nogood: IntArrayUnsafeS) => printClause(nogood))
 
           println
 
@@ -3945,171 +2439,220 @@ class SolverMulti(prep: Preparation) {
 
       }
 
+      if (showIntermediateTimers)
+        println("$" + threadNo + ": solverTimer 3a: " + timerToElapsedMs(solverTimer) + " ms")
+
+      if(/*!reuseSolverData &&*/ collectOffHeapGarbage)  // otherwise, we collect the model data garbage only after the outer sampling loop
+        queueOffHeapGarbageInSingleSolver
+
+      if (showIntermediateTimers)
+        println("$" + threadNo + ": solverTimer 3e: " + timerToElapsedMs(solverTimer) + " ms")
+
       modelOpt
 
     }
 
     assert(dimacsClauseNogoodsOpt.isDefined || rulesOpt.isDefined)
 
+    lazy val problemDescription = "#Symbols (variables): " + symbols.length +
+      "\n#Literals (including rule body literals): " + noOfAllElis +
+      "\n#Nogoods: " + clarkNogoodsFinal.length +
+      "\n#Parameter atoms: " + parameterAtomsElis.length +
+      "\n#Measured atoms: "+ measuredAtomsElis.length
+
     if (verbose) {
 
-      println("#symbols (variables): " + symbols.length)
+      println("\n" + problemDescription)
 
-      println("#literals (including body literals): " + noOfAllElis)
+      if (clarkNogoodsFinal.length <= 20) {
 
-      println("#initial nogoods = " + clarkNogoods.length)
+        println("Initial nogoods (with eli numbers):")
 
-      println("#Parameter atoms: " + parameterAtomsElis.length)
+        clarkNogoodsFinal.foreach(ng => println(" " + ng.toArray.mkString(",")))
+
+      }
 
       println
 
     }
 
-    nogoodExchangePool.clear()
+    if(writeRuntimeStatsToFile) {
 
-    prevUnassi = Int.MaxValue // not precise even for single solver thread. For statistics/debugging purposes only!
+      stats.writeEntry(key = "problemDescription", value = problemDescription, solverThreadNo = 0)
+
+    }
+
+    sharedAmongSingleSolverThreads.nogoodReducibleExchangePool.clear()
+
+    minUnassignedGlobal = noOfAllElis // not precise even for single solver thread. For statistics/debugging/informal progress report purposes only.
+
+    if(debug) println("\nStarting new set of " + maxCompetingSolverThreads + " inner solver thread(s)...") // optimalSingleSolverConfOpt = " + optimalSingleSolverConfOpt)
 
     stopSolverThreads = false
 
-    val r: Option[(Array[Eli], IntOpenHashSet)] = if (maxCompetingSolverThreads == 1) {
+    def writeSettingsToStatsFile(runThreadNos: scala.Seq[Nogi], threadInfos: => scala.Seq[String]) = {
+      //        prettyPrint(singleSolverConf, omit = List("dependencyGraph") )
 
-      val freeEliSearchApproach = freeEliSearchConfigsP(0)
+      val generalInfoStr = "<span style=\"color:orange\">seedRngGlobal: " + seedRngGlobal + "</span><br>Java version: " + System.getProperty("java.runtime.version") +
+        "<br>Max JVM memory: " + (Runtime.getRuntime.maxMemory / 1073741824l) + " GB" + ", available processors: " + Runtime.getRuntime.availableProcessors +
+        "<br>Command line arguments: <pre>" + commandLineTakeNote + "</pre><p>"
 
-      val singleSolverConf = SingleSolverConf(threadNo = 1,
-        dependencyGraph = positiveDependencyGraph,
-        progIsTight = progIsTight,
-        freeEliSearchApproach = freeEliSearchApproach,
-        restartTriggerConfR = (restartTriggerConfP._1, restartTriggerConfP._2.head, restartTriggerConfP._3.head),
-        arrangeEliPoolR = arrangeEliPoolP.head,
-        noHeapR = noHeapP.head,
-        absEliScoreFact = absEliScoreFactP.head,
-        rndmIgnLearnedNogoodThresholdR = rndmIgnLearnedNogoodThresholdP.head,
-        prep = prep /*<-for debugging/crosschecks only*/ ,
-        seed = seedP.head,
-        rndmBranchR = rndmBranchP.head)
+      val infoHeader = runThreadNos.map(threadNo => "<a href=\"#threadSettings" + threadNo + "\">Jump to settings for thread $" + threadNo + "</a>\n").mkString("\n<br>") + "\n<br>"
 
-      threadConfs(0) = singleSolverConf
+      val infoThreadsStr = runThreadNos.map(threadNo => ("<pre><a name=\"threadSettings" + threadNo + "\"></a>\n" + threadInfos(threadNo - 1) + "</pre>")).mkString("\n").replaceAllLiterally("\n", "<br>")
 
-      if (verbose)
-        println("Single solver thread:\n  freeEliSearchApproach: " + singleSolverConf.freeEliSearchApproach +
-          "\n  arrangeEliPoolR: " + singleSolverConf.arrangeEliPoolR +
-          "\n  rndmBranchR: " + singleSolverConf.rndmBranchR +
-          "\n  restartTriggerConfR._2: " + singleSolverConf.restartTriggerConfR._2 +
-          "\n  restartTriggerConfR._3: " + singleSolverConf.restartTriggerConfR._3 +
-          //"\n  absEliScoreFact: " + singleSolverConf.absEliScoreFact +
-          "\n  rndmIgnLearnedNogoodThreshold: " + singleSolverConf.rndmIgnLearnedNogoodThresholdR +
-          "\n  noHeapR: " + singleSolverConf.noHeapR + "\n")
+      // to include an anchor link use this scheme: <a href="#anchorName">here</a>  --->    <a name="anchorName"></a>
 
-      val modelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingle(singleSolverConf)
+      val infoSharedSettingsStr = "<pre><a name=\"sharedDefs\"></a>\n" +
+        getSharedFieldsUsingReflection().map(nv => nv._1 + " = " + nv._2).mkString("<br>") + "\n</pre>"
 
-      log("\nSolver task complete\n")
+      val infoSharedSettingsHeader = "<a href=\"#sharedDefs\">Jump to shared settings</a>\n"
 
-      modelOpt
+      input.delSAT.stats.writeEntry(key = "settings", value =
+        generalInfoStr + infoHeader + infoSharedSettingsHeader + infoThreadsStr + infoSharedSettingsStr,
+        solverThreadNo = 0)
 
-    } else {
+      stats.writeEntry(key = "noOfThreads", value = runThreadNos.length, solverThreadNo = 0)
+
+    }
+
+    var newReentrySolverDataOpt: Option[SingleSolverThreadData] = None
+
+    val modelFromCompetitiveSolverRunsOpt: Option[(Array[Eli], IntOpenHashSet)] = {
+
+      if(reentrySingleSolverThreadDataOpt.isDefined && maxCompetingSolverThreads > 1) // the reused data from the previous model
+      // cannot be shared among multiple threads (TODO: albeit we might reuse it for one of the threads?)
+        stomp(-5009, "reuseSolverData=true cannot be combined with switchToBestConfigAfterFirstModel=" + switchToBestConfigAfterFirstModel)
 
       uncertainAtomsUpdateExecutorService.purge()
 
       @volatile var firstModelOpt = null.asInstanceOf[Option[(Array[Eli], IntOpenHashSet)]]
 
-      val paramCombs = (for (freeEliSearchApproachR <- freeEliSearchConfigsP;
-                             prearrangeEliPoolR <- arrangeEliPoolP;
-                             rndmBranchR <- rndmBranchP;
-                             restartTriggerConf2 <- restartTriggerConfP._2;
-                             restartTriggerConf3 <- restartTriggerConfP._3;
-                             absEliActivFact <- absEliScoreFactP;
-                             rndmIgnLearnedNogoodThreshold <- rndmIgnLearnedNogoodThresholdP;
-                             noHeapR <- noHeapP;
-                             seed <- seedP)
-        yield (freeEliSearchApproachR, prearrangeEliPoolR, rndmBranchR, restartTriggerConf2, restartTriggerConf3, absEliActivFact, rndmIgnLearnedNogoodThreshold, noHeapR, seed))
+      val paramCombsSeq: Seq[SolverThreadSpecificSettings] = {
 
-      // Remark: we are not using a global thread pool here anymore, since by default we switch to the fastest configuration and a single solver thread
-      // after the first round and the overhead was not justified anymore.
+        if (optimalSingleSolverConfOpt.isDefined) {  // (note: by default, if optimalSingleSolverConfOpt.isDefined we use only a single solver thread)
 
-      val callables = (1 to maxCompetingSolverThreads).map(ci => new Runnable {
-        override def run() = {
+          (1 to maxCompetingSolverThreads).map(_ => optimalSingleSolverConfOpt.get)
 
-          val (freeEliSearchApproachR: Int,
-          prearrangeEliPoolR: Int,
-          rndmBranchR: Double,
-          restartTriggerConf2: Int,
-          restartTriggerConf3: Double,
-          absEliActivFact: Float,
-          rndmIgnLearnedNogoodThreshold: Float,
-          noHeapR: Int, seed: Long) = if (maxCompetingSolverThreads == 1) paramCombs.head else
-            paramCombs((ci - 1) % maxCompetingSolverThreads.min(paramCombs.length))
+        } else {
 
-          val singleSolverConf = SingleSolverConf(threadNo = ci,
-            //costsOpt = costsOpt,
-            dependencyGraph = positiveDependencyGraph,
-            progIsTight = progIsTight,
-            freeEliSearchApproach = freeEliSearchApproachR,
-            arrangeEliPoolR = prearrangeEliPoolR,
-            restartTriggerConfR = (restartTriggerConfP._1, restartTriggerConf2, restartTriggerConf3),
-            absEliScoreFact = absEliActivFact,
-            rndmIgnLearnedNogoodThresholdR = rndmIgnLearnedNogoodThreshold,
-            noHeapR = noHeapR,
-            prep = prep /*<-for debugging/crosschecks only*/ ,
-            seed = seed,
-            rndmBranchR = rndmBranchR)
+          (1 to maxCompetingSolverThreads).map(threadNo => {
 
-          threadConfs(ci - 1) = singleSolverConf
+            SolverThreadSpecificSettings(threadNo = threadNo,
+              positiveDependencyGraph = positiveDependencyGraph,
+              assureProgIsTight = progIsTight,
+              freeEliSearchApproachP.getThreadOrDefaultValue(threadNo),
+              restartTriggerConfR = (restartTriggerConfP._1.getThreadOrDefaultValue(threadNo),
+                restartTriggerConfP._2(restartTriggerConfP._1.getThreadOrDefaultValue(threadNo)),
+                restartTriggerConfP._3(restartTriggerConfP._1.getThreadOrDefaultValue(threadNo))),
+              traverseReduciblesUpwardsInUnitProp = traverseReduciblesUpwardsInUnitPropP.getThreadOrDefaultValue(threadNo),
+              initAbsElisArrangement = initAbsElisArrangementP.getThreadOrDefaultValue(threadNo),
+              prep = prep /*<-for debugging/crosschecks only*/ ,
+              seed = {
+
+                val seedR = seedP.getThreadOrDefaultValue(threadNo)
+
+                if (seedR == -1l) (if(threadNo - 1 < threadPRNGSeedPool.length) threadPRNGSeedPool(threadNo - 1) else rngGlobal.nextLong()) else seedR
+
+              },
+              restartFrequencyModifierFactorR = restartFrequencyModifierFactorP.getThreadOrDefaultValue(threadNo),
+              useSLSinPhaseMemoRephasingR = useSLSinPhaseMemoRephasingP.getThreadOrDefaultValue(threadNo),
+              nogoodRemovalThreshRatio = nogoodRemovalThreshRatioP.getThreadOrDefaultValue(threadNo),
+              absEliScoringApproach = absEliScoringApproachP.getThreadOrDefaultValue(threadNo),
+              nogoodRemovalThreshInit = nogoodRemovalThreshInitP.getThreadOrDefaultValue(threadNo),
+              noisePhaseMemoR = noisePhaseMemoP.getThreadOrDefaultValue(threadNo),
+              localRestarts = localRestartsP.getThreadOrDefaultValue(threadNo)
+            )
+
+          })
+
+        }
+
+      }
+
+      var paramCombs: Array[SolverThreadSpecificSettings] = {
+
+        val cbsArray = (if (maxCompetingSolverThreads < paramCombsSeq.length) paramCombsSeq.distinct else paramCombsSeq).toArray
+
+        //shuffleArray(cbsArray, rngGlobal)  // cannot be used anymore!
+
+        cbsArray
+
+      }
+
+      if (paramCombs.length > maxCompetingSolverThreads)
+        stomp(-5015, "from " + paramCombs.length + " different configurations. Specified number of solver threads = " + maxCompetingSolverThreads)
+
+      if (paramCombs.length < maxCompetingSolverThreads) // we must ensure that memory-wise at least maxCompetingSolverThreads different copies are in paramCombs,
+      // to avoid overwriting of values when we later patch individual configurations with different field values.
+        paramCombs = Array.tabulate(maxCompetingSolverThreads)(i => paramCombs((i) % paramCombs.length).copy())
+
+      (1 to maxCompetingSolverThreads).foreach(threadNo => {
+
+        val singleSolverConf: SolverThreadSpecificSettings = paramCombs((threadNo - 1) % maxCompetingSolverThreads) //.min(paramCombs.length))
+
+        singleSolverConf.threadNo = threadNo
+
+        threadConfs(threadNo - 1) = singleSolverConf
+
+      })
+
+      if(debug && !ignoreThreadConfs.isEmpty) println("Ignored threads for debugging: " + ignoreThreadConfs)
+
+      val runThreadNos = (1 to maxCompetingSolverThreads).toSeq.filterNot(ignoreThreadConfs.contains(_))
+
+      lazy val threadInfos: scala.Seq[String] = runThreadNos.map(threadNo => prettyPrint(threadConfs(threadNo - 1), omit = List("dependencyGraph")))
+
+      if(writeRuntimeStatsToFile)
+        writeSettingsToStatsFile(runThreadNos, threadInfos)
+
+      val callables: Seq[Runnable] = runThreadNos.map(threadNo => new Runnable {
+
+        override def run(): Unit = {
+
+          val singleSolverConf = threadConfs(threadNo - 1)
 
           if (verbose)
-            println("Starting solver thread $" + ci + ":\n  freeEliSearchApproachR: " + freeEliSearchApproachR +
-              "\n  arrangeEliPoolR: " + singleSolverConf.arrangeEliPoolR +
-              "\n  rndmBranchR: " + singleSolverConf.rndmBranchR +
-              "\n  restartTriggerConfR._2: " + singleSolverConf.restartTriggerConfR._2 +
-              "\n  restartTriggerConfR._3: " + singleSolverConf.restartTriggerConfR._3 +
-              //"\n  absEliScoreFact: " + singleSolverConf.absEliScoreFact +
-              "\n  rndmIgnLearnedNogoodThreshold: " + singleSolverConf.rndmIgnLearnedNogoodThresholdR +
-              "\n  noHeapR: " + singleSolverConf.noHeapR + "\n")
+            println("Starting solver thread $" + singleSolverConf.threadNo + ":\n" + threadInfos(threadNo - 1) + "\n")
 
-          val modelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingle(singleSolverConf)
+          val singleSolverThreadData: SingleSolverThreadData = reentrySingleSolverThreadDataOpt.getOrElse(new SingleSolverThreadData(prep = prep, singleSolverConf, tempFacts = Nil, maxCompetingSolverThreads = maxCompetingSolverThreads, sharedAmongSingleSolverThreads = sharedAmongSingleSolverThreads))
+
+          val reentry = reentrySingleSolverThreadDataOpt.isDefined
+
+          val modelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingle(singleSolverConf,
+            maxSamplingTimeMs = maxSamplingTimeMs,
+            collectOffHeapGarbage = collectOffHeapGarbage,
+            singleSolverThreadData = singleSolverThreadData, reentry = reentry)
 
           if (modelOpt != null) {
 
             stopSolverThreads.synchronized {
 
-              if (!stopSolverThreads) {
+              if (true || !stopSolverThreads) {
 
                 if (verbose)
-                  println("Successful portfolio thread: $" + ci)
+                  println("\nSuccessful portfolio thread: $" + singleSolverConf.threadNo)
+
+                if(writeRuntimeStatsToFile)
+                  stats.writeEntry(key = "successfulThread", value = singleSolverConf.threadNo, solverThreadNo = 0)
+
+                newReentrySolverDataOpt = Some(singleSolverThreadData)
 
                 if (sampledModels.size == 0 /*<- if > 0, we would switch after the nth model this way, to minimize influence from JVM hotspot compilation */ &&
                   switchToBestConfigAfterFirstModel > 0) { // we switch to a singleton portfolio, but we could theoretically also switch to some other subset:
 
-                  freeEliSearchConfigsP = freeEliSearchConfigsP.map(_ => freeEliSearchApproachR)
-
-                  arrangeEliPoolP = arrangeEliPoolP.map(_ => prearrangeEliPoolR)
-
-                  rndmIgnLearnedNogoodThresholdP = rndmIgnLearnedNogoodThresholdP.map(_ => rndmIgnLearnedNogoodThreshold)
-
-                  absEliScoreFactP = absEliScoreFactP.map(_ => absEliActivFact)
-
-                  noHeapP = noHeapP.map(_ => noHeapR)
-
-                  seedP = seedP.map(_ => seed)
-
-                  restartTriggerConfP = (restartTriggerConfP._1, restartTriggerConfP._2, restartTriggerConfP._3.map(_ => restartTriggerConf3))
+                  optimalSingleSolverConfOpt = Some(singleSolverConf)
 
                   if (verbose)
-                    println("\nFor additional models, switching to portfolio set\n freeEliSearchConfigsP: " + freeEliSearchConfigsP +
-                      "\n  arrangeEliPoolP: " + arrangeEliPoolP +
-                      "\n  rndmIgnLearnedNogoodThreshold: " + rndmIgnLearnedNogoodThreshold +
-                      //"\n  absEliScoreFactP: " + absEliScoreFactP +
-                      "\n  restartTriggerConfP._2: " + restartTriggerConfP._2 +
-                      "\n  restartTriggerConfP._3: " + restartTriggerConfP._3 +
-                      "\n  seed: " + seed +
-                      "\n  rndmBranchR: " + rndmBranchR +
-                      "\n  noHeapP: " + noHeapP)
+                    println("\nFor sampling any further models, switching to single configuration\n" + prettyPrint(singleSolverConf, omit = List("dependencyGraph")) + "\n")
 
                   if (switchToBestConfigAfterFirstModel == 2)
                     maxCompetingSolverThreads = 1
 
                 }
 
-                stopSolverThreads = true
+                //stopSolverThreads = true   // too late; would for very small problems allow other threads to continue
+                // past sanity checks.
 
               }
 
@@ -4119,32 +2662,42 @@ class SolverMulti(prep: Preparation) {
 
           }
 
+          if(debug) println("End of thread $" + threadNo)
+
         }
+
       })
 
-      val solverThreads = callables.map(c => {
+      val solverThreads = ArrayBuffer[Thread]()
 
-        val t = new Thread(c)
+      solverThreads.append(Thread.currentThread)
+
+      for (threadNo <- 2 to callables.size) {
+
+        val t = new Thread(callables(threadNo - 1))
 
         t.setDaemon(false)
 
+        solverThreads.append(t)
+
         t.start()
 
-        t
+      }
 
-      })
+      callables(1 - 1).run()
 
-      solverThreads.foreach(_.join())
+      solverThreads.drop(1).foreach(_.join())
 
       firstModelOpt
 
     }
 
-    log("sampleSingleRacing complete: r = " + r)
+    if(debug) println("sampleSingleRacing complete: r = " + modelFromCompetitiveSolverRunsOpt)
 
-    assert(r != null)
-
-    r
+    if(modelFromCompetitiveSolverRunsOpt == null)
+      (None /*this means that the caller of this method cannot distinguish UNKNOWN from UNSAT*/, newReentrySolverDataOpt)
+    else
+      (modelFromCompetitiveSolverRunsOpt, newReentrySolverDataOpt)
 
   }
 
