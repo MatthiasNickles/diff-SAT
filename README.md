@@ -2,6 +2,11 @@
 
 ### Latest releases, changelog ###
 
+0.5.1
+
+
+
+
 0.5.0 (major update)
 
 - Optimized SAT solver core with significantly improved performance (and thus also improved sampling performance)
@@ -62,13 +67,13 @@ delSAT can be used for plain SAT and Answer Set solving too, but has a wider ran
   knowledge as well as probabilistic/subsymbolic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
   approaches, delSAT doesn't require any independence assumptions or other restrictions for random variables.
 
-- As an instance of the previous: weighting of Boolean variables, clauses and rules with probabilities
+- As an instance of the previous: probabilistic logic programming (probabilistic answer set programming) and probabilistic satisfiability solving (weighting of Boolean variables, clauses, facts and rules with probabilities)
 
 - Distribution-aware sampling of models (answer sets or satisfying truth assignments) 
    
 - Efficient search for models of _satisfiable_ CPA and PSAT (Probabilistic Satisfiability) instances given in PSAT normal form 
 
-- Highly configurable multithreaded regular SAT and Answer Set solving on the JVM 
+- Highly configurable multithreaded regular SAT and Answer Set solving on the Java VM 
 
 The non-probabilistic part of the solver algorithm is, like the ASP and SAT solver [clasp](https://github.com/potassco/clasp) and the JVM SAT solver [SAT4j](http://www.sat4j.org/), 
 a complete solver based on CDNL (Conflict-Driven Nogood Learning), which is itself based on CDCL (Conflict-Driven Clause Learning). However, delSAT's CDNL variant differs from clasp in that for non-tight ASP programs, loop handling follows the older ASSAT approach (Lin, Zhao 2004) whereas clasp integrates loop handling in the propagation core. 
@@ -178,7 +183,7 @@ The possible formats of input files is described in the following section. To in
 
 ##### User API #####
 
-delSAT can be used from the commandline or as a library, i.e., using its User API. The User API allows to build enhanced Boolean formulas and answer set programs (consisting of various types of rules, including probabilistic and non-ground rules) 
+delSAT can be used from the commandline or as a library, i.e., using its User API. The User API allows to build enhanced boolean formulas and answer set programs (consisting of various types of rules, including probabilistic and non-ground rules) 
 programmatically, to call the solver, and to print and examine the resulting sample. 
 
 (For complex non-ground ASP rules, firstly an aspif file needs to be generated from the answer set program using, e.g., clingo, as preprocessor, then one of the textual input formats described in section [File input formats](#File-input-formats) can be used.)
@@ -664,10 +669,10 @@ delSAT uses the following third-party libraries, besides the Scala and JVM stand
   Copyright (c) 2002-2017 Sebastiano Vigna  
   License: https://github.com/vigna/fastutil/blob/master/LICENSE-2.0
 
-- Apache Commons Math (https://commons.apache.org/proper/commons-math/)
+- Apache Commons Math (https://commons.apache.org/proper/commons-math/)  
   License: https://github.com/apache/commons-math/blob/master/LICENSE.txt 
   
-- jsoniter (https://jsoniter.com/)
+- jsoniter (https://jsoniter.com/)  
   Copyright (c) 2016 Tao Wen
   License: https://github.com/json-iterator/java/blob/master/LICENSE
 
