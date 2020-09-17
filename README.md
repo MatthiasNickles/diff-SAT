@@ -1,25 +1,28 @@
-<img src="project/delSAT1.jpg" width=140 align="right" style="margin-left: 0px;margin-top: 0px;padding: 0px;clear:top">
+<img src="project/delSAT1.jpg" width=160 align="right" style="margin-left: 0px;margin-top: 0px;padding: 0px;clear:top">
 
 ### Latest releases, changelog ###
 
- 0.4.1
+0.5.0 (major update)
 
-- Support for clauses annotated with probabilities in DIMACS CNF (Probabilistic CNF)
-- `_eval_` for ad hoc querying of probabilities and other statistics (e.g., remaining costs/errors)
-- Argument `-s` for sampling uniformly from a multisolution
-- Argument `-n` -k for padding a multisolution with models sampled uniformly from that solution 
-- Improved and automatically activated (if needed) finite differences approach 
-- Typically higher solution entropy for the same sample size 
-- Support for non-quoted `_cost_` and `_eval_` terms using plain logic programming term notation 
-- Several minor improvements and bug fixes
-- Enhanced documentation (this file)
+- Optimized SAT solver core with significantly improved performance (and thus also improved sampling performance)
 
-0.4.0  
+- User API for solving problems with probabilistic or non-probabilistic CNF clauses and ASP ground rules
 
-- Simplified usage; support for parameter atom and cost function specification using special logical predicates
-- Support for distinct sets of parameter atoms and measured atoms, enabling preliminary support for inductive/abductive inference.
+- User API support for probabilistic _non-ground_ normal rules and free loss function terms
 
-See [CHANGELOG.md](CHANGELOG.md) for details.
+- Aspif and User API support for weight and choice rules, double default negation in rule bodies, and double and single negation in rule heads 
+
+- User API documentation (not very detailed yet, but should be sufficient to get started)
+
+- Probabilistic Answer Set Programming Intermediate Format (PASPIF) (Aspif enhanced with a new probabilistic rule type) 
+
+- CDNL interleaved with Stochastic Local Search (WalkSAT or Simulated Annealing (SASAT-style)) for regular SAT solving
+
+- Bug fixes and several minor improvements
+
+- Some code cleanup and refactoring 
+
+See [CHANGELOG.md](CHANGELOG.md) for details and previous updates.
 
 ### User guide ###
 
@@ -29,13 +32,13 @@ See [CHANGELOG.md](CHANGELOG.md) for details.
 
 - [References](#references)
 
-- [Build and Run](#build-and-run)
+- [Installation](#installation)
 
 - [Usage](#usage)
 
 - [Miscellanea](#miscellanea)
 
-- [Author contact details, feedback](#author-contact-details)
+- [Author contact details, Feedback](#author-contact-details)
 
 - [delSAT Copyright & License](#delsat-copyright--license)
 
@@ -43,47 +46,51 @@ See [CHANGELOG.md](CHANGELOG.md) for details.
 
 #### Synopsis ####
 
-delSAT is a probabilistic Answer Set and SAT solver targeted at _multimodel_ optimization, probabilistic inference and sampling. It is named after the del (aka nabla) operator &#8711;.  
+delSAT (&#8711;SAT) is a probabilistic Answer Set and SAT solver targeted at _multi-models_ optimization, probabilistic inference and model sampling. It is named after the del (a.k.a. nabla) operator &#8711;.  
 
 delSAT uses an approach called _Differentiable Satisfiability_ respectively _Differentiable Answer Set Programming_ (&#8706;SAT/ASP). Basically, this
 means SAT or ASP solving using automatic differentiation and a form of gradient descent to find an optimal multiset of models (interpretations), given a 
 user-defined cost function (loss function, multimodel objective function) over weighted Boolean variables (see [References](#references) for details). 
 
-[Answer set programming](https://www.cs.utexas.edu/users/vl/papers/wiasp.pdf) is a form of logic programming, with a syntax similar to Prolog and Datalog. It is mainly oriented towards difficult (primarily NP-hard) combinatorial search problems and relational knowledge representation. ASP is closely related to SAT, constraint programming and Satisfiability Modulo Theories (SMT).  
+[Answer set programming](https://www.cs.utexas.edu/users/vl/papers/wiasp.pdf) is a form of logic programming, with a syntax very similar to Prolog and Datalog. It is mainly oriented towards difficult (primarily NP-hard) combinatorial 
+search problems and relational knowledge representation. ASP is closely related to SAT, Constraint Satisfaction Problems (CSP) and Satisfiability Modulo Theories (SMT).  
 
 delSAT can be used for plain SAT and Answer Set solving too, but has a wider range of use cases. For example: 
 
-- Associating differentiable cost functions (representing, e.g., smooth probabilistic weights) with rules, clauses and other formulas or individual Boolean variables.
+- Associating differentiable cost functions with rules, clauses and other formulas or individual Boolean variables.
   This way, delSAT can be used as a "hybrid" inference engine which makes use of symbolic/logical, graph or other relational 
   knowledge as well as probabilistic/subsymbolic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
   approaches, delSAT doesn't require any independence assumptions or other restrictions for random variables.
+
+- As an instance of the previous: weighting of Boolean variables, clauses and rules with probabilities
 
 - Distribution-aware sampling of models (answer sets or satisfying truth assignments) 
    
 - Efficient search for models of _satisfiable_ CPA and PSAT (Probabilistic Satisfiability) instances given in PSAT normal form 
 
-- Parallelized regular SAT or Answer Set solving on the JVM, using DIMACS-CNF or AnsProlog/Clingo-compatible 
-  syntax (by using Clingo as grounder)
+- Highly configurable multithreaded regular SAT and Answer Set solving on the JVM 
 
-The non-probabilistic part of the solver algorithm is, like the ASP and SAT solver clasp (https://github.com/potassco/clasp), 
-a complete solver, based on CDNL (Conflict-Driven Nogood Learning, which is itself based on CDCL (Conflict-Driven Clause Learning)).  
+The non-probabilistic part of the solver algorithm is, like the ASP and SAT solver [clasp](https://github.com/potassco/clasp) and the JVM SAT solver [SAT4j](http://www.sat4j.org/), 
+a complete solver based on CDNL (Conflict-Driven Nogood Learning), which is itself based on CDCL (Conflict-Driven Clause Learning). However, delSAT's CDNL variant differs from clasp in that for non-tight ASP programs, loop handling follows the older ASSAT approach (Lin, Zhao 2004) whereas clasp integrates loop handling in the propagation core. 
 
 #### Introduction ####
 
-delSAT's output is a _sample_ (or UNSAT). A sample is here a multiset (bag) of sampled models, i.e., answer sets 
-(aka _stable models_) or satisfying truth assignments (aka _witnesses_ or _interpretations_) of the input propositional formula or answer set program. From 
+delSAT's output is a _sample_ (or UNSAT). A sample is here a multiset (bag) of models sampled under probabilistic and logical constraints. Each model is an answer sets 
+(aka _stable model_) or a satisfying truth assignment (aka _witness_ or _interpretation_) of the input answer set program respectively propositional formula. From 
 a probability theoretical point of view, the individual models in the sample are the _possible worlds_ and their frequencies in the sample are the possible worlds' probabilities.  
 
 The generated sample minimizes a user-defined arbitrary differentiable cost function down to a user-specified threshold or until the cost didn't change anymore. The threshold allows 
-to trade-off accuracy against speed. 
+to trade-off accuracy against speed. The cost function is given as an arithmetic expression defined over certain statistics of the entire sample.  
 
-Such a sample is called a _multisolution_ (or just _solution_ if there is no ambiguity) of the given cost function and the 
-logical rules/clauses. In contrast to traditional optimization in SAT or ASP, a cost function refers to the entire multiset of models, 
+Such a sample - respectively the  probability distribution over models it represents - is called an (exact or approximate) _multisolution_ of the given cost function and the 
+logical rules/clauses.      
+
+In contrast to traditional optimization in SAT or ASP, a cost function refers to the entire multiset of models, 
 and the sampled multiset of models as a whole minimizes the cost function. If multiple cost functions are provided, they are combined 
 into a single overall cost function (see below). The number of sampled models and the precise sampling semantics can be influenced with command line
 options `-n` and `-s` (use `--help` for details). Observe that for the same input problem, multiple multisolutions may exist.   
 
-Cost functions can, for example, be used for the specifcation of the probabilities of Boolean variables (atoms),
+Cost functions can, for example, be used for the specification of the probabilities of Boolean variables (atoms),
 or, by extension, entire clauses, rules and other formulas. This way, delSAT can be used as the "inference engine" for expressive probabilistic 
 logic programming frameworks.  
 
@@ -94,7 +101,7 @@ To solve the described optimization problem efficiently and approximately, delSA
 (respectively _Differentiable Answer Set Programming_) where a variant of Gradient Descent is directly embedded in the core ASP or SAT 
 solving algorithm. Essentially, Differentiable Satisfiability chooses (during the search for a satisfying model) the truth values of 
 nondeterministic Boolean variables depending on the values of partial derivatives of the user-defined cost function. This is used to 
-iteratively generate models until the cost function's minimum is approximately reached. This approach is typically much faster and economic than converting the problem (in those instances where 
+iteratively generate models until the cost function's minimum is approximately reached. This approach works typically much faster than via converting the problem (in those instances where 
 such a conversion would be possible) to Linear Program form or to a regular SAT, CSP (Constraint Satisfaction Problem) or a standard 
 ASP optimization problem using model reification.
 
@@ -109,13 +116,25 @@ http://arxiv.org/abs/1812.11948
   In Fabrizio Riguzzi, Elena Bellodi, Riccardo Zese (Eds.): Proceedings of the 28th International Conference on Inductive Logic Programming (ILP'18). Lecture Notes in Artificial Intelligence (LNAI), Springer, 2018.
 - Matthias Nickles: Distribution-Aware Sampling of Answer Sets. In Davide Ciucci, Gabriella Pasi, Barbara Vantaggi (Eds.): Proceedings of the 12th International Conference on 
   Scalable Uncertainty Management (SUM'18). Lecture Notes in Artificial Intelligence (LNAI), Springer 2018.
-  
-delSAT also furthers ideas from earlier publications where Probabilistic Answer Set Programming was implemented via sampling and counting operations 
+
+To cite delSAT, please use 
+```
+    @inproceedings{DBLP:conf/ilp/Nickles18a,
+      author    = {Matthias Nickles},
+      editor    = {Elena Bellodi and Tom Schrijvers},
+      title     = {Differentiable {SAT/ASP}},
+      booktitle = {Proceedings of the 5th International Workshop on Probabilistic Logic Programming, {PLP} 2018},
+      publisher = {CEUR-WS.org},
+      year      = {2018},
+    }
+```
+
+delSAT furthers ideas from earlier publications where Probabilistic Answer Set Programming was implemented via sampling and counting operations 
 over multiple answer sets, see, e.g.,  
 
 - Matthias Nickles, Alessandra Mileo: A Hybrid Approach to Inference in Probabilistic Non-Monotonic Logic Programming, PLP@ICLP, 2015.
 
-#### Build and Run ####
+#### Installation ####
 
 delSAT is written in Scala and runs on the Java Virtual Machine (JVM). A JRE or JDK 8 or higher (64-bit, with support for Unsafe) is required, e.g., OpenJDK.  
 
@@ -133,48 +152,69 @@ Run delSAT, e.g., like this:
 
 or like this: 
 
-    java -jar delSAT.jar myProbabilisticTask.pcnf -t 0.005 -mse 
+    java -jar delSAT.jar myProbabilisticTask.opt -t 0.005 -mse 
     
 ##### Command line arguments #####
 
 delSAT can be configured using command line arguments. Use `--help` to see the list of the most important arguments. Less frequently required settings are 
 specified using command line arguments of 
 the form `--solverarg "name" "value1 [value2 ...]"` The full list of these settings can be found in source code file 
-[sharedDefs.scala](https://github.com/MatthiasNickles/delSAT/blob/master/src/main/scala/sharedDefs.scala) (more accessible documentation is planned for a forthcoming version).  
+[sharedDefs.scala](https://github.com/MatthiasNickles/delSAT/blob/master/src/main/scala/sharedDefs.scala).  
 
-Another example call: 
+Example call: 
     
-    java -jar delSAT-assembly-0.4.0.jar myInputFile.pASPIF -t 0.1 -n 100 -mse 
+    java -jar delSAT.jar myInputFile.paspif -t 0.1 -n 100 -mse --solverarg maxSolverThreadsR 2
 
 Parameter `-t` specifies the accuracy threshold (lower = more accurate) for the loss. delSAT generates models until the value of 
 the cost function reaches this threshold and, if `-n` is present, the minimum number of models specified with `-n` has been reached.  
-For the meaning of `-mse` see the next section.
+For the meaning of `-mse` see the next section. 
 
-The format of the input files is described in the following section. To increase memory available to delSAT, use java with arguments, e.g., `-Xms2g -Xmx6g -Xss10m` 
+`--solverarg` is used for setting an advanced parameter (here the number of parallel solver threads). Parameters
+such as `maxSolverThreadsR` can have a massive influence on solver performance.
+
+The possible formats of input files is described in the following section. To increase memory available to delSAT, use, e.g., `-Xms3g -Xmx8g -Xss10m`   
 
 #### Usage ####
 
-##### Input formats #####
+##### User API #####
 
-Input is accepted in various alternative forms:
+delSAT can be used from the commandline or as a library, i.e., using its User API. The User API allows to build boolean clauses and answer set programs (consisting of various types of rules, including probabilistic and non-ground rules) 
+programmatically, to call the solver, and to print and examine the resulting sample. 
+
+(For complex non-ground ASP rules, firstly an aspif file needs to be generated from the answer set program using, e.g., clingo, as preprocessor, then one of the textual input formats described in section [File input formats](#File-input-formats) can be used.)
+
+Entry points for documentation of the User API are classes [input.ProbabilisticAnswerSetProgram](doc/input/ProbabilisticAnswerSetProgram.html)
+and [input.BooleanFormulaWithCosts](doc/input/BooleanFormulaWithCosts.html) in package 'input'.
+
+User API example code can also be found in source code file userAPItests.APITests.scala 
+
+##### File input formats #####
+
+Textual file or stdin input is accepted in various forms:
 
 - DIMACS CNF (for plain SAT solving) 
 
-- DIMACS CNF with a list of _parameter atoms_ and cost function (loss function) terms appended to the DIMACS part
+- Enhanced DIMACS CNF with a list of _parameter atoms_ and cost function (loss function) terms appended to the DIMACS part
 
 - Probabilistic DIMACS CNF (PCNF) where each clause can optionally be annotated with a probability
 
-- ASP Intermediate Format (ASPIF), optionally with parameter atoms and cost function terms defined using special predicates
+- ASP Intermediate Format (ASPIF), optionally extended with parameter atoms and cost function terms defined using special predicates
 
-- ASPIF format with a list of parameter atoms and cost function terms appended to the ASPIF part
+- Enhanced ASPIF format with a list of parameter atoms and cost function terms appended to the ASPIF part
 
-Logic programs need to be normalized and grounded into ASPIF format before sending them to delSAT. For this, 
-[Clingo](https://potassco.org/clingo/) can be used as a grounder (observe the required `--trans-ext=all` argument): 
+- Probabilistic ASP Intermediate Format (PASPIF) with a new probabilistic rule type 
+
+Logic programs need to be grounded into ASPIF format before sending them to delSAT. For this, 
+[Clingo](https://potassco.org/clingo/) or Gringo can be used as a grounder: 
     
     clingo myProbLogicProg.lp --trans-ext=all --pre=aspif > myDelSATInputFile.aspif
 
-Observe that Clingo is used here only to generate the proper ground form of the input program, not for solving; delSAT itself doesn't require Clingo 
+Observe that Clingo is used here only to generate the ASPIF form of the input program, not for solving; delSAT itself doesn't require Clingo 
 or any other external Answer set, SAT or SMT solver.  
+
+It is also possible to translate various other constraint and logic languages into ASPIF format and thus 
+into a form delSAT can in principle work with (e.g., MiniZinc/flatzinc constraint satisfaction problem (CSP) or various action languages) - however, we 
+haven't tested this yet. 
 
 ##### Cost functions, parameter atoms and measured atoms #####
 
@@ -247,6 +287,7 @@ Multiple `_pr_` facts can be provided.
 
 If of these only `_pr_` facts are provided (i.e., the problem is purely deductive-probabilistic), it is recommended to use delSAT
 with command line switch `-mse` which activates optimized handling of costs which have the form of inner MSE (Mean Squared Error) terms.  
+
 Note that parameter atoms (the random variables in our framework) need to be logically defined (i.e., occur in some rule head or choice fact) but 
 without completely fixing their truth values, as otherwise they couldn't be varied during sampling. A simple way to ensure this is by using a so-called _spanning rule_ of
 the form `{a}.` However, apart from this, parameter atoms and measured atoms can be freely used in any rules and be interdependent 
@@ -279,14 +320,17 @@ Remark: If the sets of parameter and measured atoms are identical (as above) but
 isn't provided in form of multiple part cost-terms differentiable against one parameter variable each, 
 delSAT needs to be called with `--solverarg partDerivComplete true` and without switch `-mse`.  
 
-Probabilities (or more generally: parameter or measured variables) can also be associated with entire rules; how this can be done is explained in more detail in the second document linked under [References](#references). 
-The basic syntax pattern for probabilistic ground rules is  
+Probabilities (or more generally: parameter or measured variables) can also be associated with entire rules. The basic syntax pattern for probabilistic ground rules is  
 
     aux:- l1, l2, ..., not h.
     h :- l1, l2, ..., not aux.
     _pr_(aux, 10000-pr).
     
 where `aux` is a fresh symbol, `pr` is the desired probability (multiplied with 10000) of rule `h :- l1, l2, ...` and the `l1` etc are literals.
+     
+More details on this can be found in the second document linked under [References](#references).  
+
+How to associate probabilities with entire clauses in SAT mode can be found further below in README.md under "Probabilistic clauses for DIMACS CNF (PCNF)".  
      
 Measured and parameter atoms don't need to overlap, as shown in the following logic program.  
 Example (2):  
@@ -347,7 +391,7 @@ Note that in input for SAT, propositional variables _within cost terms_ need to 
 
 The part before line `pats`... is in plain DIMACS-CNF syntax.  
            
-Example (5), based on ASPIF (for Answer Set solving instead of SAT). It is recommended to use it with switch `-mse`, since
+Example (5), based on an extended form of ASPIF (for Answer Set Programming). It is recommended to use it with switch `-mse`, since
 the cost is provided as multiple inner MSE terms, which can be handled more efficiently with this switch.
 
         asp 1 0 0
@@ -405,6 +449,41 @@ Example grounder call using [Clingo](https://potassco.org/clingo/) (observe the 
  
 The final input file can then be created by appending the `pats` and `cost` lines (if any) to the ASPIF or DIMACS file, each starting in a new line. 
 
+##### Probabilistic rules in PASPIF (Probabilistic ASPIF) #####
+
+Alternatively to the previous extension of ASPIF files with "pats" and "cost" lines, since version 0.5, delSAT also
+understands ASPIF format enhanced with a new rule type - _probabilistic rules_.  
+
+Probabilistic rules are defined using aspif statements of the form
+    
+    1000[space]p[space][rule]
+
+where `[space]` is a single space character and `[rule]` is the aspif format of a normal rule (i.e., there must
+be only a single head atom (a positive literal). Choice heads or weight bodies are also not allowed).
+`p` is either a double number `0<=p<=1` or -1, the latter denoting that the probability is unknown (informally
+meaning 'rule v not rule', i.e., a so-called _spanning rule_ [Nickles,Mileo 2015]).  
+
+**Important**: it is the user's responsibility (or the responsibility of some higher-level tool which generates the paspif file) to ensure that the probabilistic weight is possible (compatible with
+other probabilities defined or implied by the probabilistic logic program and with the axioms of probability) and that all literals in the probabilistic rule are properly defined. E.g., if 
+rule `p :- u,v` (using symbols instead of numeric aspif literals for clarity) is assigned probability 0.5 but `u` or `v` are undefined, the rule has actually probability 1 and thus
+the probabilistic logic program represented by the paspif file is inconsistent (in which case sampling doesn't terminate unless a meaningless error threshold or an upper bound for the number of models is specified). 
+ 
+Examples: the following paspif rule statement declares are normal probabilistic rule with probability 0.5,
+head atom 63 and body literals 67 and -62: 
+    
+    1000 .5 1 0 1 63 0 2 67 -62
+    
+The next paspif statement is a spanning rule which specifies that rule `63 :- 67,62` is uncertain but without
+quantifying the uncertainty:   
+ 
+    1000 -1 1 0 1 63 0 2 67 -62
+    
+Remark: a statement of the form
+    
+    1000 -1 1 0 1 h 0 0
+    
+has the same semantics as an aspif statement representing choice rule `{ hs }` where `hs` is a symbol representing aspif literal `h`.
+
 ##### Probabilistic clauses for DIMACS CNF (PCNF) #####
 
 Alternatively to the previous formats, input is also accepted in an extension of the DIMACS CNF format (called _Probabilistic CNF_ or PCNF) where each
@@ -421,12 +500,12 @@ represents "almost surely" (if the accuracy threshold is set to 0), i.e., it doe
 
 Example (7):
 
-    c An example for probabilistic conjunctive normal form (omit preceding whitespace in lines when trying out this example)
+    c An example for probabilistic conjunctive normal form (omit preceding whitespace in lines)
     p pcnf 6 4
     0.65 1 -2 3 0
     4 5 0
     0.7 6 0
-    0.92 -1 3 0
+	0.92 -1 3 0
     
 This example defines that clause v1 v -v2 v v3 has probability 0.65, that the probability of -v1 v v3 is 0.92 and Boolean variable v6 has probability 0.7 (and that -v6 has probability 0.3). Cost functions and
 auxiliary Boolean variables and their declaration as parameter atoms are automatically generated for these weighted clauses. Clause v4 v v5 is a regular ("hard") clause which must always hold.   
@@ -437,13 +516,14 @@ are subsituted by unweighted clauses which define the parameter variables which 
 
 ##### Performing ad hoc queries #####
 
-delSAT is just a solver and doesn't contain a query tool. However, there are three ways built into delSAT for performing simple queries.   
+delSAT is just a solver and sampler, and as such it doesn't contain a real query tool (a tool which computes from the sample the probabilities of user-specified query formulas). However, there are several ways built into delSAT for 
+performing simple types of queries.   
 
-Firstly, with switch `--solverarg showProbsOfSymbols true` delSAT prints the probabilities of all symbols (ground atoms) in the program,
+Most simply, with switch `--solverarg showProbsOfSymbols true` delSAT prints the probabilities of all symbols (ground atoms) in the program,
 by summing up the probabilities (frequencies) of those models in the sample which contain the respective atom.  
 
-Secondly, Scala variables `addHocConjunctiveQueries` and `addHocDisjunctiveQueries` can be used to specify conjunctive or disjunctive queries, 
-see source code file `sharedDefs.scala`.   
+Secondly, Scala variables `adHocConjunctiveQueries`, `adHocDisjunctiveQueries` and `adHocRuleQueries` can be used to specify 
+queries consisting of conjunctions, disjunctions or normal rules consisting of ground literals. See file `sharedDefs.scala` for details and `APITests.scala` for a few examples for how to use them with the User API.   
 
 Thirdly, `_eval_("term","?")` is a pseudo-predicate which, if stated as a fact in the input program, makes delSAT instantiate `"?"` with
 the numerial value of the given term. The term has the same syntax as the terms in cost functions.   
@@ -465,11 +545,11 @@ Example (8):
     _eval_("f(num) / f(q)", "?").  % queries Pr(p|q)
     _eval_("f(p)", "?").           % queries marginal probability Pr(p)
 
-Observe that `_eval_` isn't a proper predicate, it cannot be used in the condition of rules (more precisely, it can, but then the `"?"` as second argument isn't resolved).
+Observe that `_eval_`, like `_cost_`, `_pr_` and `_pat_`, isn't a proper predicate, it cannot be used in the body of a rule (more precisely, it syntactically can, but then the `"?"` as second argument isn't resolved).
 
 ##### Probabilistic inference without cost functions #####
 
-Perhaps notably, delSAT can also be used for probabilistic inference even if no cost function is present, provided the 
+Perhaps notably, delSAT can also be used for probabilistic inference even if no cost function or parameter atoms are present, provided the 
 random variables (nondeterministic atoms) are mutually independent.  
 
 Example (9):
@@ -482,8 +562,9 @@ After grounding the program to ASPIF format and with delSAT arguments `-n 100 --
 roughly around Pr(heads(1)) ≈ 0.5, Pr(heads(2)) ≈ 0.5, Pr(win) ≈ 0.25. `--solverarg diversify true` isn't strictly necessary,
 but helps achieving a more uniform mix of `heads(1)`, `heads(2)` in the sample.  
 
-How this approach can be used to specify arbitrary weights of mutuably independent probabilistic facts using a _plain_ answer set program is described in the following publication 
-[Matthias Nickles, Alessandra Mileo (2014): Probabilistic Inductive Logic Programming Based on Answer Set Programming. In: Procs. 15th International Workshop on Non-Monotonic Reasoning (NMR'14)](https://arxiv.org/pdf/1405.0720.pdf).
+How this approach can be used to specify _arbitrary_(!) probabilities (in form of fractions) of mutuably independent probabilistic facts using a _plain_ answer set program is described in  
+[Matthias Nickles, Alessandra Mileo (2014): Probabilistic Inductive Logic Programming Based on Answer Set Programming. In Proceedings of the 15th International Workshop on Non-Monotonic Reasoning (NMR'14)](https://arxiv.org/pdf/1405.0720.pdf) (end of Section 4). However,
+this approach is suitable only for small problems, due to the very large number of models that need to be generated to obtain reasonably accurate results.
 
 #### Miscellanea ####
 
@@ -494,6 +575,9 @@ might require a preceeding preprocessing and grounding step as explained above.
 
 - delSAT is not a solver for (weighted) Max-SAT or Min-SAT, nor for finding individually optimal models or an optimality ranking of 
 individual models (these problem categories might be supported in a future version).
+
+- delSAT is also not a Stochastic Local Search (SLS) solver (such as WalkSAT), although it includes a simple WalkSAT implementation for
+speeding up regular CDCL/CDNL-style SAT solving during so-called rephasing.
 
 - In the case where the costs express probabilities of propositional variables (or, by straightforward extension, formulas, as in PSAT), 
 the input to delSAT is similar to the normal representation format used for PSAT (probabilistic satisfiability problem) instances, 
@@ -506,9 +590,9 @@ Also note that delSAT's semantics and purpose are different from SSAT (Stochasti
 command line switch -mse. With that switch, list the instantiated inner MSE terms (of form (wi-f(vari))^2) 
 individually instead of providing a single long MSE formula. delSAT minimizes then the expression (innerCost1+...+innerCostN)/n.
 
-- delSAT is not (or only remotely) related to SGDB (Stochastic Gradient Descent Branching Heuristic, in Jia Hui Liang: 
+- delSAT is not (or only very remotely) related to SGDB (Stochastic Gradient Descent Branching Heuristic, in Jia Hui Liang: 
 Machine Learning for SAT Solvers, 2018). Whereas SGDB provides a branching heuristics for finding decision variables which increase 
-the likeliness of creating partial assignments leading to _conflicts_ (inconsistent partial assignments) and thus improve regular SAT solving performance, 
+the likeliness of _conflicts_ (and thus the CDCL conflict clause learning rate) and thus improves regular SAT solving performance, 
 delSAT's gradient descent-style branching heuristics aims at minimizing a user-defined loss function.
 
 - For certain cost functions, you might need to provide switch --solverarg "partDerivComplete" "true" which activates a 
@@ -522,8 +606,7 @@ Another possible reason for nontermination could be a convergence threshold whic
 case an increase of the threshold (specified with command line argument -t) should solve the problem.  
 Other common reasons are forgotten parameter atom declarations (e.g., using `_pat_(atom).` facts if the input is a logic program) or typos in the cost term.  
 
-- delSAT doesn't require any assumptions about random event independence, but it can to some degree profit from
-probabilistic independence among random variables using option maxBurstR (see sharedDefs.scala) 
+- delSAT doesn't require any assumptions about independence of random events.
 
 - delSAT is not designed as a tool for sampling from the _uniform_ (or a near-uniform) distribution over models, but it supports model set diversification 
 with `--solverarg diversify true`, and delSAT can also be used with arbitary discrete probabiltities (including uniform ones) associated with individual models 
@@ -539,10 +622,11 @@ and their frequencies in the sample with possible world probabilities.
 
 - delSAT never guarantees that the models it prints are different from each other, as sampling is with replacement (so the resulting lists of
 answer sets or propositional models are not duplicate free enumerations as those returned by, e.g., MiniSat, clingo/clasp or smodels). 
-`--solverarg diversify true` just increases the amount of randomness during decision making when generating a model.
+`--solverarg diversify true` just increases the amount of randomness in the selection of decision literals.
 
-- The combination of multiple samples obtained from multiple delSAT invokations doesn't have a (known) meaningful semantics. To
-sample `n` models, use a single delSAT invokation with switch `-n n`.
+- The mixture of multiple samples obtained from multiple delSAT calls doesn't have a (known) meaningful semantics,
+unless the input problem has only a single distribution as its multisolution (in which case repeated calls with 
+`-s` all sample from this distribution). To sample `n` models, use a single delSAT call with switch `-n n`.
 
 - More detailed user and API documentation is planned for the near future.
 
@@ -558,13 +642,13 @@ Feedback and bug reports are welcome!
 
 #### delSAT Copyright & License ####
 
-Copyright (c) 2018-2019 by Matthias Nickles
+Copyright (c) 2018-2020 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/delSAT/blob/master/LICENSE)
 
 #### Dependencies ####
 
-delSAT uses the following third-party libraries:
+delSAT uses the following third-party libraries, besides the Scala and JVM standard libraries:
 
 - JAutoDiff   
   Copyright (c) 2012 uniker9 (https://github.com/uniker9/JAutoDiff)  
@@ -579,4 +663,12 @@ delSAT uses the following third-party libraries:
 - fastutil (http://fastutil.di.unimi.it)  
   Copyright (c) 2002-2017 Sebastiano Vigna  
   License: https://github.com/vigna/fastutil/blob/master/LICENSE-2.0
-    
+
+- Apache Commons Math (https://commons.apache.org/proper/commons-math/)
+  License: https://github.com/apache/commons-math/blob/master/LICENSE.txt 
+  
+- jsoniter (https://jsoniter.com/)
+  Copyright (c) 2016 Tao Wen
+  License: https://github.com/json-iterator/java/blob/master/LICENSE
+
+   
