@@ -178,7 +178,7 @@ The possible formats of input files is described in the following section. To in
 
 ##### User API #####
 
-delSAT can be used from the commandline or as a library, i.e., using its User API. The User API allows to build boolean clauses and answer set programs (consisting of various types of rules, including probabilistic and non-ground rules) 
+delSAT can be used from the commandline or as a library, i.e., using its User API. The User API allows to build enhanced Boolean formulas and answer set programs (consisting of various types of rules, including probabilistic and non-ground rules) 
 programmatically, to call the solver, and to print and examine the resulting sample. 
 
 (For complex non-ground ASP rules, firstly an aspif file needs to be generated from the answer set program using, e.g., clingo, as preprocessor, then one of the textual input formats described in section [File input formats](#File-input-formats) can be used.)
