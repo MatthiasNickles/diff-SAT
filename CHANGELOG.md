@@ -1,3 +1,14 @@
+0.5.0 
+
+- Optimized SAT solver core (and thus improved sampling performance)
+- User API for solving problems with probabilistic or non-probabilistic CNF clauses and ASP ground rules
+- Direct User API support for probabilistic non-ground normal rules
+- aspif and User API support for weight and choice rules, double default negation in rule bodies and for double and single negation in rule heads 
+- Probabilistic ASP Intermediate Format (PASPIF) (ASPIF plus a new probabilistic rule type) 
+- CDNL interleaved with Stochastic Local Search (WalkSAT or Simulated Annealing (SASAT-style)) for regular SAT solving
+- Bug fixes and several minor improvements
+- Some code cleanup and refactoring
+
 0.4.1
 
 - Support for weighted clauses annotated with probabilities in DIMACS CNF (Probabilistic CNF). See [Usage](README.md#usage) for details.
