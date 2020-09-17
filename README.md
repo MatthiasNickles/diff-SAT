@@ -183,7 +183,7 @@ programmatically, to call the solver, and to print and examine the resulting sam
 
 (For complex non-ground ASP rules, firstly an aspif file needs to be generated from the answer set program using, e.g., clingo, as preprocessor, then one of the textual input formats described in section [File input formats](#File-input-formats) can be used.)
 
-Entry points for documentation of the User API are classes [input.ProbabilisticAnswerSetProgram](doc/input/ProbabilisticAnswerSetProgram.html)
+Entry points for documentation of the User API (/doc/index.html) are classes [input.ProbabilisticAnswerSetProgram](doc/input/ProbabilisticAnswerSetProgram.html)
 and [input.BooleanFormulaWithCosts](doc/input/BooleanFormulaWithCosts.html) in package 'input'.
 
 User API example code can also be found in source code file userAPItests.APITests.scala 
