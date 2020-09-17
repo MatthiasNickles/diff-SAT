@@ -12,7 +12,7 @@
 
 - Aspif and User API support for weight and choice rules, double default negation in rule bodies, and double and single negation in rule heads 
 
-- User API documentation (not very detailed yet, but should be sufficient to get started)
+- User API documentation (/doc) (not very detailed yet, but should be sufficient to get started)
 
 - Probabilistic Answer Set Programming Intermediate Format (PASPIF) (Aspif enhanced with a new probabilistic rule type) 
 
