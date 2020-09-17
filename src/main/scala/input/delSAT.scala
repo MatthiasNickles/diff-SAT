@@ -37,10 +37,9 @@ object delSAT extends APITests {
 
   /*
 
-  delSAT command line use example (see README.md and sharedDefs.scala for further examples):
-   C:\Users\Owner\workspaceScala211\prasp2\test_outputForDelSAT_Smokers222.opt -mse -t 0.001 --solverarg stopSamplingOnStagnation false --solverarg showProbsOfSymbols true --solverarg diversify false
-
-  For how to use delSAT using its User API, see doc of [[input.ProbabilisticAnswerSetProgram]].
+  delSAT console use examples see README.md and --help
+  For how to use delSAT using its User API, see doc of [[input.ProbabilisticAnswerSetProgram]] and [[input.BooleanFormulaWithCosts]].
+  For list of global settings see [[sharedDefs]] and --help
 
   */
 
