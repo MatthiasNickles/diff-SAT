@@ -2,11 +2,6 @@
 
 ### Latest releases, changelog ###
 
-0.5.1
-
-
-
-
 0.5.0 (major update)
 
 - Optimized SAT solver core with significantly improved performance (and thus also improved sampling performance)
