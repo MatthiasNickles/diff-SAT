@@ -1,21 +1,10 @@
-/**
- * delSAT
- *
- * Copyright (c) 2018,2019 Matthias Nickles
- *
- * matthiasDOTnicklesATgmxDOTnet
- *
- * This code is licensed under MIT License (see file LICENSE for details)
- *
- */
-
 package utils;
 
 import java.util.Optional;
 
 /**
  * Medium-quality random numbers using a basic XOR-shift algorithm. For underlying basic algorithm see, e.g., http://www.javamex.com/tutorials/random_numbers/xorshift.shtml
- * Not suitable as a source of randomness for cryptography. Not threadsafe.
+ * Not suitable as a source of randomness for cryptography. Not thread-safe.
  * <p>
  * For algo with better quality (longer period) but also not cryptographically secure, consider using a >=128 XOR-Shift,
  * see, e.g., https://www.codeproject.com/Articles/9187/A-fast-equivalent-for-System-Random
@@ -97,13 +86,21 @@ public class XORShift32 extends java.util.Random {
     }
 
     @Override
+    public double nextDouble() {
+
+        //return Math.scalb(nextLong() >>> 1, -63);
+        return (nextLong() >>> (64 - 53)) * 0x1.0p-53;
+
+    }
+
+    @Override
     public boolean nextBoolean() {
 
         return nextLong() >= 0l;
 
     }
 
-    public double nextTriangular(double a, double b, double c) {
+    /*public double nextTriangular(double a, double b, double c) {
 
         double d = (c - a) / (b - a);
 
@@ -114,6 +111,6 @@ public class XORShift32 extends java.util.Random {
         else
             return b - Math.sqrt((1 - rand) * (b - a) * (b - c));
 
-    }
+    }*/
 
 }

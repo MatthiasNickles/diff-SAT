@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018,2019 Matthias Nickles
+  * Copyright (c) 2018,2020 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -11,137 +11,192 @@
 
 package utils
 
+import input.UNSAFEhelper._
 import sun.misc.Unsafe
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only! */
+/** This is not a general-purpose unsafe (off-heap) byte array class - designed for use in project delSAT only! */
 object ByteArrayUnsafeS {
 
-  var unsafe: Unsafe = null
+  //private[this] var unsafe: Unsafe = null
 
-  var alignment = 128 //unsafe.pageSize
+  //var alignment = 128 //UNSAFE.pageSize
 
-  var internalPaddingFact = 1  // multiple of actual alignment (see below)
+  //var internalPaddingFact = 1  // multiple of actual alignment (see below)
 
   var byteArrayOffset = -1l
 
   def init(us: Unsafe): Unit = {
 
-    unsafe = us
-
-    byteArrayOffset = unsafe.arrayBaseOffset(classOf[Array[Byte]])
+    byteArrayOffset = UNSAFE.arrayBaseOffset(classOf[Array[Byte]])
 
   }
+
+  @inline def getUnsafe: Unsafe = UNSAFE
 
 }
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only! */
-class ByteArrayUnsafeS(var sizev: Int, aligned: Boolean) {
+/** This is not a general-purpose unsafe byte array class - designed for use in project delSAT only! */
+class ByteArrayUnsafeS(var sizev: Int /*, aligned: Boolean*/) {
 
-  var isSorted: Boolean = false
+  //var isSorted: Boolean = false
 
-  var addr: Long = 0L
+  private[this] var addr: Long = 0L
 
-  if (!aligned)
-    addr = ByteArrayUnsafeS.unsafe.allocateMemory(sizev)
-  else {
+  //private[this] val unsafe = ByteArrayUnsafeS.getUnsafe
 
-    addr = ByteArrayUnsafeS.unsafe.allocateMemory((sizev) + ByteArrayUnsafeS.alignment + ByteArrayUnsafeS.alignment * ByteArrayUnsafeS.internalPaddingFact)
+  private[this] val stringBuilder: java.lang.StringBuilder = new java.lang.StringBuilder(sizev)
 
-    if (ByteArrayUnsafeS.alignment > 0l && (addr & (ByteArrayUnsafeS.alignment - 1l)) != 0)
-      addr += (ByteArrayUnsafeS.alignment - (addr & (ByteArrayUnsafeS.alignment - 1)))
+  addr = allocateOffHeapMem(sizev)  /*{
+    
+    val alignment = 64
 
-    addr += ByteArrayUnsafeS.alignment * ByteArrayUnsafeS.internalPaddingFact
+    addr = /*UNSAFE.allocateMemory*/allocateOffHeapMem((sizev) + alignment + alignment * 8/*ByteArrayUnsafeS.internalPaddingFact*/)
 
-  }
+    if (alignment > 0l && (addr & (alignment - 1l)) != 0)
+      addr += (alignment - (addr & (alignment - 1)))
 
-  @inline def this(values: Array[Byte], aligned: Boolean) = {
+    addr += alignment * 8/*ByteArrayUnsafeS.internalPaddingFact*/
 
-    this(sizev = values.length, aligned = aligned)
+  }*/
+
+  private[this] val addrMid: Long = addr + ((sizev >> 1))
+
+
+  @inline def this(values: Array[Byte]) = {
+
+    this(sizev = values.length)
 
     setFromArray(values)
 
   }
 
-  @inline def this(s: Int, initValue: Byte, aligned: Boolean) = {
+  @inline def this(s: Int, initialValue: Byte /*, aligned: Boolean*/) = {
 
-    this(sizev = s, aligned = aligned)
+    this(sizev = s /*, aligned = aligned*/)
 
-    fill(initValue)
-
-  }
-
-  @inline def fill(value: Byte): Unit= {
-
-    ByteArrayUnsafeS.unsafe.setMemory(addr, sizev, value)
+    fill(initialValue)
 
   }
 
-  @inline def free(): Unit = ByteArrayUnsafeS.unsafe.freeMemory(addr)
+  @inline def fill(value: Byte, length: Int = sizev): Unit = {
+
+    UNSAFE.setMemory(addr, length, value)
+
+  }
+
+  @inline def free(): Unit = freeOffHeapMem(addr, sizev) //UNSAFE.freeMemory(addr)
+
+  @inline def addToGarbage(): Unit = addAllocOffHeapMemToGarbage(addr, sizev)
 
   @inline def size(): Int = sizev
 
+  @inline override def hashCode(): Int = {
+
+    var h = 1
+
+    var i = 0
+
+    while (i < sizev) {
+
+      h = 31 * h + get(i)
+
+      i += 1
+
+    }
+
+    h
+
+  }
+
+  @inline override def equals(obj: Any): Boolean = {
+
+    if (obj.isInstanceOf[ByteArrayUnsafeS] && obj != null)
+      this.hashCode == obj.asInstanceOf[ByteArrayUnsafeS].hashCode
+    else
+      super.equals(obj)
+
+  }
+
   @inline def setFromArray(values: Array[Byte]): Unit = {
 
-    ByteArrayUnsafeS.unsafe.copyMemory(values, ByteArrayUnsafeS.byteArrayOffset, null, addr, values.length)
+    UNSAFE.copyMemory(values, ByteArrayUnsafeS.byteArrayOffset, null, addr, values.length)
+
+  }
+
+  @inline def setFromUnsafeByteArray(values: ByteArrayUnsafeS): Unit = {
+
+    UNSAFE.copyMemory(values, 0l, null, addr, values.sizev)
 
   }
 
   @inline def get(index: Int): Byte = {
 
-    ByteArrayUnsafeS.unsafe.getByte(addr + index)
+    UNSAFE.getByte(addr + index)
+
+  }
+
+  @inline def getMid(index: Int): Byte = {
+
+    UNSAFE.getByte(addrMid + index)
 
   }
 
   @inline def get(index: Long): Byte = {
 
-    ByteArrayUnsafeS.unsafe.getByte(addr + index)
+    UNSAFE.getByte(addr + index)
 
   }
 
   @inline def getBoolean(index: Int): Boolean = {
 
-    ByteArrayUnsafeS.unsafe.getByte(addr + index) != 0x00.toByte  // NB: caller specific. There is no "norm" for how to represent Booleans as bytes
+    UNSAFE.getByte(addr + index) != 0x00.toByte // NB: caller specific. There is no "norm" for how to represent Booleans as bytes
 
   }
 
   @inline def first: Byte = {
 
-    ByteArrayUnsafeS.unsafe.getByte(addr)
+    UNSAFE.getByte(addr)
 
   }
 
   @inline def update(index: Int, value: Byte): Unit = {
 
-    ByteArrayUnsafeS.unsafe.putByte(addr + index, value)
+    UNSAFE.putByte(addr + index, value)
+
+  }
+
+  @inline def updateMid(index: Int, value: Byte): Unit = {
+
+    UNSAFE.putByte(addrMid + index, value)
 
   }
 
   @inline def update(index: Long, value: Byte): Unit = {
 
-    ByteArrayUnsafeS.unsafe.putByte(addr + index, value)
+    UNSAFE.putByte(addr + index, value)
 
   }
 
+  /*
   @inline def update(index: Int, value: Boolean): Unit = {
 
-    ByteArrayUnsafeS.unsafe.putByte(addr + index, if (value) 0xFF.toByte else 0x00.toByte) // NB: caller specific. There is no "norm" for how to represent Booleans as bytes
+   UNSAFE.putByte(addr + index, if (value) 0xFF.toByte else 0x00.toByte) // NB: caller specific. There is no "norm" for how to represent Booleans as bytes
 
   }
 
-  @inline def remove(index: Int): Unit = {
 
-    ByteArrayUnsafeS.unsafe.copyMemory(addr + ((index + 1)), addr + (index), ({
-      sizev -= 1
-      sizev
-    } - index))
+  @inline def updateMid(index: Int, value: Boolean): Unit = {
 
-  }
+    UNSAFE.putByte(addrMid + index, if (value) 0xFF.toByte else 0x00.toByte) // NB: caller specific. There is no "norm" for how to represent Booleans as bytes
+
+  }*/
+
 
   @inline def toArray: Array[Byte] = {
 
     val array = new Array[Byte](sizev)
 
-    ByteArrayUnsafeS.unsafe.copyMemory(null, addr, array, ByteArrayUnsafeS.byteArrayOffset, sizev)
+    UNSAFE.copyMemory(null, addr, array, ByteArrayUnsafeS.byteArrayOffset, sizev)
 
     array
 
@@ -151,7 +206,7 @@ class ByteArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
     val array = new Array[Byte](l)
 
-    ByteArrayUnsafeS.unsafe.copyMemory(null, addr, array, ByteArrayUnsafeS.byteArrayOffset, l)
+    UNSAFE.copyMemory(null, addr, array, ByteArrayUnsafeS.byteArrayOffset, l)
 
     array
 
@@ -161,13 +216,13 @@ class ByteArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
     val array = new Array[Byte](until - from)
 
-    ByteArrayUnsafeS.unsafe.copyMemory(null, addr + (from), array, ByteArrayUnsafeS.byteArrayOffset, (until - from))
+    UNSAFE.copyMemory(null, addr + (from), array, ByteArrayUnsafeS.byteArrayOffset, (until - from))
 
     array
 
   }
 
-  override def toString: String = {
+  @inline override def toString: String = {
 
     val s: StringBuilder = new StringBuilder
 
@@ -192,11 +247,59 @@ class ByteArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
   }
 
-  @inline def clone(padding: Int): ByteArrayUnsafeS = {
+  @inline def toBitString: String = {
 
-    val bau: ByteArrayUnsafeS = new ByteArrayUnsafeS(sizev + padding, aligned = aligned)
+    stringBuilder.setLength(0)
 
-    ByteArrayUnsafeS.unsafe.copyMemory(addr, bau.addr, sizev)
+    var i = 0
+
+    while (i < sizev) {
+
+      stringBuilder.append(
+        if (get(i) != 0x00.toByte)
+          '1'
+        else
+          '0'
+      )
+
+      i += 1
+
+    }
+
+    stringBuilder.toString
+
+  }
+
+  @inline def toBitStringLocal: String = {
+
+    val stringBuilder: java.lang.StringBuilder = new java.lang.StringBuilder(sizev)
+
+    var i = 0
+
+    while (i < sizev) {
+
+      stringBuilder.append(
+        if (get(i) != 0x00.toByte)
+          '1'
+        else
+          '0'
+      )
+
+      i += 1
+
+    }
+
+    stringBuilder.toString
+
+  }
+
+  @inline def getAddr: Long = addr
+
+  @inline def clone(padding: Int = 0): ByteArrayUnsafeS = {
+
+    val bau: ByteArrayUnsafeS = new ByteArrayUnsafeS(sizev + padding /*, aligned = aligned*/)
+
+    UNSAFE.copyMemory(addr, bau.getAddr, sizev)
 
     bau
 

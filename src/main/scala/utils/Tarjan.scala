@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018,2019 Matthias Nickles
+  * Copyright (c) 2018,2020 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -20,7 +20,7 @@ import scala.collection.mutable
   */
 object Tarjan {
 
-  /** Function and algo based on an answer at http://danlec.com/st4k#questions/18289991 from Travis Brown, modified and amended by M. Nickles */
+  /** Based on code from https://stackoverflow.com/a/18290478, somewhat amended */
   def trajanRec(g: Int2ObjectOpenHashMap[List[Int]]): mutable.ArrayBuffer[mutable.ArrayBuffer[Int]] = {
 
     // TODO: create iterative variant
@@ -61,7 +61,7 @@ object Tarjan {
 
         val scc = mutable.ArrayBuffer.empty[Int]
 
-        var w = -1
+        var w = Int.MinValue  // -1
 
         while(v != w) {
 
@@ -84,7 +84,7 @@ object Tarjan {
 
       val v = gKeysIterator.nextInt()
 
-      if (v >= 0 && !index.keySet.contains(v))
+      if (/*v >= 0 &&*/ !index.keySet.contains(v))
         visit(v)
 
     }

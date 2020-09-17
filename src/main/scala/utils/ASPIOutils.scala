@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018,2019 Matthias Nickles
+  * Copyright (c) 2018, 2020 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -38,7 +38,8 @@ package object aspIOutils {
 
   def auxPredPrefix(kind: String) = auxPredPrefixBase + kind + "_" + parserInstanceCount.get() + "_"
 
-  def newFalsePredsPrefix = auxPredPrefix("F") // prefixes for newly introduced auxiliary atoms for desugaring :- constraints (see aspif parser).
+  def newFalsePredsPrefix = auxPredPrefix("F") // prefixes for newly introduced auxiliary atoms for
+  // desugaring :- integrity constraints (see aspif parser).
 
   def isFalsAuxAtom(pred: String) = pred.startsWith(auxPredPrefixBase) && pred.contains("F")
 
@@ -46,7 +47,11 @@ package object aspIOutils {
 
   def newLatentSymbolAuxAtomPrefix = auxPredPrefix("L") // prefixes for newly introduced auxiliary atom symbols for (re-)introduced atoms from certain #show aspif rules (see aspif parser).
 
+  def newSpanSymbolAuxAtomPrefix = auxPredPrefix("R") // prefixes for newly introduced auxiliary atom symbols for (re-)introduced atoms from certain #show aspif rules (see aspif parser).
+
   def isLatentSymbolAuxAtom(pred: String) = pred.startsWith(auxPredPrefixBase) && pred.contains("L")
+
+  // TODO(?): ^ these don't consider auxiliar variables introduced by the PCNF parser (probabilistic SAT)
 
   @inline def auxAtomSymbol(prefix: String, index: Int, encloseUncertainAuxWithParam: Boolean = false) = if (encloseUncertainAuxWithParam)
     "param_" + prefix + index else prefix + index

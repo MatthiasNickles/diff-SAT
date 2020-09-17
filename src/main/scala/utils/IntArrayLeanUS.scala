@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018-2020 Matthias Nickles
+  * Copyright (c) 2018-2020 by Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -11,22 +11,24 @@
 
 package utils
 
-import it.unimi.dsi.fastutil.ints.{IntArrayList, IntOpenHashSet}
+import it.unimi.dsi.fastutil.ints.IntArrayList
 import sun.misc.Unsafe
 import sharedDefs._
 import input.UNSAFEhelper._
 
-/** This is not code for general-purpose unsafe (off-heap) memory use - designed for use in project delSAT only. */
-object IntArrayUnsafeS {
 
-  val hashForDuplRemGlob = new IntOpenHashSet(2048, 0.75f)
+/** This is not code for general-purpose unsafe (off-heap) memory use - designed for use in project delSAT only. Not thread-safe.
+  * >>> Deprecated: use either IntArrayUnsafeS or direct allocated addresses instead. <<< */
+@deprecated object IntArrayLeanUS {
+
+  //val hashForDuplRemGlob = new IntOpenHashSet(2048, 0.75f)
 
   @inline def getAtAddr(unsafe: Unsafe, addr: Long, index: Int): Int = UNSAFE.getInt(addr + (index << 2))
 
   @inline def updateAtAddr(unsafe: Unsafe, addr: Long, index: Int, value: Int): Unit =
     UNSAFE.putInt(addr + (index << 2), value)
 
-  @inline def sortByInplace(unsafe: Unsafe, addr: Long, by: Int => Float, until: Int): Unit = {
+  @inline def sortByAtAddr(unsafe: Unsafe, addr: Long, by: Int => Float, until: Int): Unit = {
 
     // insertion sort - use only if array is very small (but then it's fast)
 
@@ -134,110 +136,26 @@ object IntArrayUnsafeS {
 
   }
 
-  @inline def removeItemAll(unsafe: Unsafe, addr: Long, item: Int, initialLength: Int): Int= {
-
-    var sizev = initialLength
-
-    var i = sizev - 1
-
-    while (i >= 0) {
-
-      if (getAtAddr(unsafe, addr, i) == item) {
-
-        sizev -= 1
-
-        if (i < sizev)
-          UNSAFE.copyMemory(addr + ((i + 1) << 2), addr + (i << 2), (sizev - i) << 2)
-
-      }
-
-      i -= 1
-
-    }
-
-    sizev
-
-  }
-
 }
 
 
 /** This is not a general-purpose unsafe array class - designed for use in project delSAT only. Not thread-safe. */
-class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArrayUnsafe[Int] {
+@deprecated class IntArrayLeanUS(var sizev: Int) {
+  // Using this class is only efficient if each single instance allocates a large amount of memory off-heap.
+  // Using this class to create small objects is rather inefficient.
 
-  // Important: using this class, which simply combines an JVM off-heap memory address with meta-data (especially size)
-  // into an object is only efficient if each single instance allocates a large amount of memory.
-  // Using this class to create lots of small objects is inefficient - instead, store size and content into a single
-  // off-heap memory slot in adjacent positions (e.g., int for size, at address + 4l the actual content) instead.
+  private[this] val allocated: Long = sizev << 2
 
-  import IntArrayUnsafeS._
-
-  //private[this] val unsafe: Unsafe = sharedDefs.unsafe  // without private[this] the field access in the bytecode is by invokevirtual before
-  // being inlined, however, sharedDefs.unsafe  gets inline, so no (palpable) difference
-
-  /*private[this] val alignment: Int = 0  // observe that unsafe's allocateMemory does some alignment (to value size) by itself
-
-  assert(alignment == 0) // alignment doesn't play well with our off-heap garbage collection and doesn't seem to be
-  // useful anyway (on top of unsafe's built-in alignment)
-  */
-
-  //private[this] val internalPaddingFact = 1 // see below
-
-  //private[this] lazy val intArrayOffs = sharedDefs.UNSAFE.arrayBaseOffset(classOf[Array[Int]]) // we put this here to ensure that scalac makes this a static field
-
-  //var isSorted = false
-
-  //var isAligned = false
-
-  //private[this] var allocated = 0
-  @inline def allocated: Int = sizev << 2
-
-  //private[this] val align = false  // must be false
-
-  private[this] var addr: Long = /*if (sizev == -1) -1l else*/ if (atAddress != -1l) {
-
-    atAddress
-
-  } else /*if (alignment == 0)*/ {
-
-    //allocated = sizev << 2
-
-    //sharedDefs.offHeapAllocatedEstimate += allocated
-
-    allocateOffHeapMem(allocated) // observe that allocateMemory is slow (compared to a direct malloc in C)
-
-  }/* else {
-
-   // assert(false)  // it looks like alignment of this array has in delSAT no beneficial effect
-
-    //isAligned = true
-
-    allocated = (sizev << 2) + alignment //+ alignment * internalPaddingFact
-
-    //sharedDefs.offHeapAllocatedEstimate += allocated
-
-    var addra = allocateOffHeapMem(allocated)
-
-    if (alignment > 0l && (addra & (alignment - 1l)) != 0)
-      addra += (alignment - (addra & (alignment - 1)))
-
-    addra //+ alignment * internalPaddingFact
-
-  }*/
-
-  private[this] val addrMid: Long = addr + ((sizev >> 1) << 2) //nope: addr + (allocated / 2)
-
-  assert((addrMid - addr) % 4 == 0)
+  private[this] val addr: Long = allocateOffHeapMem(allocated) // NB(1): allocateMemory is slow (compared to a direct malloc in C)
+  // NB(2): Without private[this] the field access in the bytecode is by invokevirtual before being inlined, however, sharedDefs.unsafe  gets inline, so no (palpable) difference
 
   @inline def getAddr: Long = addr
 
-  @inline def setAddr(newAddr: Long): Unit = addr = newAddr
+  @inline def this(valuesa: Array[Int]) {
 
-  @inline def this(values: Array[Int]) {
+    this(valuesa.length)
 
-    this(values.length)
-
-    setFromIntArray(values)
+    setFromIntArray(valuesa)
 
   }
 
@@ -285,7 +203,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   @inline def addToGarbage(): Unit = {
 
-      addAllocOffHeapMemToGarbage(addr, allocated)
+    addAllocOffHeapMemToGarbage(addr, allocated)
 
   }
 
@@ -311,9 +229,25 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   override def equals(obj: Any): Boolean = {
 
-    obj.asInstanceOf[IntArrayUnsafeS].sizev == sizev && {
+    obj.asInstanceOf[IntArrayLeanUS].sizev == sizev && {
 
-      java.util.Arrays.equals(toArray, obj.asInstanceOf[IntArrayUnsafeS].toArray)
+      /*if (isSorted) {
+
+        var i = 0
+
+        while (i < sizev) {
+
+          if (obj.asInstanceOf[IntArrayUnsafeS].get(i) != get(i))
+            return false
+
+          i += 1
+
+        }
+
+        true
+
+      } else*/
+      java.util.Arrays.equals(toArray, obj.asInstanceOf[IntArrayLeanUS].toArray)
 
     }
 
@@ -322,15 +256,6 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
   @inline def setFromIntArray(values: Array[Int]): Unit = {
 
     UNSAFE.copyMemory(values, sharedDefs.intArrayOffs, null, addr, values.length << 2)
-
-  }
-
-  @inline def setFromUnsafeIntArray(source: IntArrayUnsafeS, updateSize: Boolean = false): Unit = {
-
-    UNSAFE.copyMemory(source.getAddr, addr, source.sizev << 2)
-
-    if (updateSize)
-      sizev = source.sizev
 
   }
 
@@ -358,12 +283,6 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   }
 
-  @inline def getMid(index: Int): Int = {
-
-    UNSAFE.getInt(addrMid + (index << 2))
-
-  }
-
   @inline def get(index: Long): Int = {
 
     UNSAFE.getInt(addr + (index << 2))
@@ -388,29 +307,9 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   }
 
-  @inline def last: Int = {
-
-    UNSAFE.getInt(addr + ((sizev - 1) << 2))
-
-  }
-
-  @inline def popLast: Int = {
-
-    sizev -= 1
-
-    UNSAFE.getInt(addr + (sizev << 2))
-
-  }
-
   @inline def update(index: Int, value: Int): Unit = {
 
     UNSAFE.putInt(addr + (index << 2), value)
-
-  }
-
-  @inline def updateMid(index: Int, value: Int): Unit = {
-
-    UNSAFE.putInt(addrMid + (index << 2), value)
 
   }
 
@@ -452,18 +351,6 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
       UNSAFE.putInt(a, UNSAFE.getInt(a) >> by)
 
       i += 1
-
-    }
-
-  }
-
-  @inline def removeByIndex(index: Int): Unit = {
-
-    sizev -= 1
-
-    if(index < sizev) {
-
-      update(index, get(sizev))
 
     }
 
@@ -666,74 +553,15 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   }
 
-  @inline def clone(extraSizePre: Int, extraSizePost: Int): IntArrayUnsafeS = {
-
-    val allocated = (extraSizePre + sizev + extraSizePost) << 2
-
-    val bauAddr: Long = allocateOffHeapMem(allocated)
-
-    UNSAFE.copyMemory(addr, bauAddr + (extraSizePre << 2), sizev << 2)
-
-    new IntArrayUnsafeS(sizev = extraSizePre + sizev + extraSizePost, atAddress = bauAddr)
-
-  }
-
   @inline def cloneToNewAddr(extraSizePre: Int, extraSizePost: Int): Long = {
 
     val allocated = (extraSizePre + sizev + extraSizePost) << 2
 
-    val bauAddr: Long = allocateOffHeapMem(allocated)
+    val bauAddr: Long = UNSAFE.allocateMemory(allocated)
 
     UNSAFE.copyMemory(addr, bauAddr + (extraSizePre << 2), sizev << 2)
 
     bauAddr
-
-  }
-
-  @inline def cloneToNewAddrFromUntil(from: Int, until/*excl*/: Int): Long = {
-
-    val allocated = (until - from) << 2
-
-    val bauAddr: Long = allocateOffHeapMem(allocated)
-
-    UNSAFE.copyMemory(addr + (from << 2), bauAddr, allocated)
-
-    bauAddr
-
-  }
-
-  @inline def cloneToNewWithSizeAddrFromUntilRRR(from: Int, until/*excl*/: Int, extraInfo: Int): Long = { //rrr
-
-    val allocated = (until - from + 1/*for size*/ + 1/*for extraInfo*/) << 2
-
-    val bauAddr: Long = allocateOffHeapMem(allocated)
-
-    UNSAFE.putInt(bauAddr, until - from)  // size
-
-    UNSAFE.putInt(bauAddr + 4l, extraInfo)
-
-    UNSAFE.copyMemory(addr + (from << 2), bauAddr + 4l + 4l, allocated - 4l - 4l)
-
-    bauAddr
-
-  }
-
-  @inline def cloneToNew(padding: Int, keep: Int, cutOff: Boolean): IntArrayUnsafeS = {
-
-    val bau: IntArrayUnsafeS = new IntArrayUnsafeS(if(cutOff) keep + padding else sizev + padding)
-
-    UNSAFE.copyMemory(addr, bau.getAddr, /*sizev*/keep << 2)
-
-    bau
-
-  }
-
-
-  @inline def cloneTo(targetAddr: Long, offset: Int = 0): IntArrayUnsafeS = {
-
-    UNSAFE.copyMemory(addr, targetAddr + (offset << 2), sizev << 2)
-
-    new IntArrayUnsafeS(sizev = offset + sizev, atAddress = targetAddr)
 
   }
 
@@ -745,24 +573,13 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   }
 
-  @inline def removeItemAll(item: Int): Unit = {
+  @inline def cloneToIntArrayUnsafeS(): IntArrayUnsafeS = {
 
-    var i = sizev - 1
+    val newIntArrayUnsafeS = new IntArrayUnsafeS(this.sizev)
 
-    while (i >= 0) {
+    UNSAFE.copyMemory(addr, newIntArrayUnsafeS.getAddr, sizev << 2)
 
-      if (get(i) == item) {
-
-        sizev -= 1
-
-        if (i < sizev)
-          UNSAFE.copyMemory(addr + ((i + 1) << 2), addr + (i << 2), (sizev - i) << 2)
-
-      }
-
-      i -= 1
-
-    }
+    newIntArrayUnsafeS
 
   }
 
@@ -777,7 +594,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
         sizev -= 1
 
         if (i < sizev)
-          UNSAFE.copyMemory(addr + ((i + 1) << 2), addr + (i << 2), (sizev - i) << 2)
+          UNSAFE.copyMemory(addr + (size << 2), addr + (i << 2), 1 << 2)
 
         i = -1
 
@@ -806,37 +623,9 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   }
 
-  @inline def removeDuplicates(): Unit = {
-
-    val hashForDuplRem = new IntOpenHashSet()
-
-    var src = 0
-
-    var dest = 0
-
-    while(src < sizev) {
-
-      if(src == 0 || !hashForDuplRem.contains(get(src))) {
-
-        hashForDuplRem.add(get(src))
-
-        update(dest, get(src))
-
-        dest += 1
-
-      }
-
-      src += 1
-
-    }
-
-    sizev = dest
-
-  }
-
   def removeDuplicatesGlob(): Unit = { // not thread-safe
 
-    hashForDuplRemGlob.clear()
+    IntArrayUnsafeS.hashForDuplRemGlob.clear()
 
     var src = 0
 
@@ -844,9 +633,9 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
     while(src < sizev) {
 
-      if(!hashForDuplRemGlob.contains(get(src))) {
+      if(!IntArrayUnsafeS.hashForDuplRemGlob.contains(get(src))) {
 
-        hashForDuplRemGlob.add(get(src))
+        IntArrayUnsafeS.hashForDuplRemGlob.add(get(src))
 
         if(dest != src)
           update(dest, get(src))
@@ -898,11 +687,11 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
     // insertion sort - use only if array is very small (but then it's relatively fast):
 
-    sortByInplace(unsafe, addr, by, sizev)
+    IntArrayUnsafeS.sortByInplace(unsafe, addr, by, sizev)
 
   }
 
-  @inline def subsetOf(nogoodB: IntArrayUnsafeS): Boolean /*true: nogoodA subset of nogoodB*/ = {
+  @inline def subsetOf(nogoodB: IntArrayLeanUS): Boolean /*true: nogoodA subset of nogoodB*/ = {
 
     if (nogoodB.sizev <= sizev)
       false
@@ -925,7 +714,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   }
 
-  @inline def subsetOfExceptOne(nogoodB: IntArrayUnsafeS, ignoreIndexInThis: Int): Boolean
+  @inline def subsetOfExceptOne(nogoodB: IntArrayLeanUS, ignoreIndexInThis: Int): Boolean
   /*true: this (ignoring eli index ignoreIndexInThis) is a subset of nogoodB */ = {
 
     nogoodB.sizev > sizev && {

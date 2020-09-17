@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018,2019 Matthias Nickles
+  * Copyright (c) 2018,2020 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -12,41 +12,52 @@
 package utils
 
 import sun.misc.Unsafe
+import input.UNSAFEhelper._
 
 /** This is not a general-purpose unsafe class - designed for use in project delSAT only! */
 object FloatArrayUnsafeS {
 
-  var unsafe: Unsafe = null
+  //private[this] var unsafe: Unsafe = null
 
-  var alignment = 128 // unsafe.pageSize
+  var alignment = 128 // UNSAFE.pageSize  Observe that unsafe's allocateMemory does some alignment (to value size) by itself
 
   var internalPaddingFact = 1 // multiple of actual alignment (see below)
 
   var floatArrayOffs = -1
 
-  def init(us: Unsafe): Unit = {
+  @inline def init(us: Unsafe): Unit = {
 
-    unsafe = us
+    //unsafe = us
 
-    floatArrayOffs = unsafe.arrayBaseOffset(classOf[Array[Float]])
+    floatArrayOffs = UNSAFE.arrayBaseOffset(classOf[Array[Float]])
 
   }
+
+  @inline def getUnsafe: Unsafe = UNSAFE
 
 }
 
 /** This is not a general-purpose unsafe array class - designed for use in project delSAT only! */
 class FloatArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
-  var isSorted: Boolean = false
+  //private[this] val unsafe = ByteArrayUnsafeS.getUnsafe  // without private[this] the field access in the bytecode would be by invokevirtual
 
-  var addr: Long = 0L
+  private[this] var addr: Long = 0L
 
-  if (!aligned)
-    addr = FloatArrayUnsafeS.unsafe.allocateMemory(sizev << 2)
-  else {
+  private[this] var allocated: Long = 0l
 
-    addr = FloatArrayUnsafeS.unsafe.allocateMemory((sizev << 2) + FloatArrayUnsafeS.alignment +
-      FloatArrayUnsafeS.alignment * FloatArrayUnsafeS.internalPaddingFact)
+  if (!aligned) {
+
+    allocated = sizev << 2
+
+    addr = allocateOffHeapMem(allocated)
+
+  } else {
+
+    allocated = (sizev << 2) + FloatArrayUnsafeS.alignment +
+      FloatArrayUnsafeS.alignment * FloatArrayUnsafeS.internalPaddingFact
+
+    addr = allocateOffHeapMem(allocated)
 
     if (FloatArrayUnsafeS.alignment > 0l && (addr & (FloatArrayUnsafeS.alignment - 1l)) != 0)
       addr += (FloatArrayUnsafeS.alignment - (addr & (FloatArrayUnsafeS.alignment - 1)))
@@ -79,52 +90,59 @@ class FloatArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
   }
 
-  @inline def free(): Unit = FloatArrayUnsafeS.unsafe.freeMemory(addr)
+  @inline def free(): Unit = freeOffHeapMem(addr, allocated)
 
   @inline def size(): Int = sizev
 
   @inline def setFromArray(values: Array[Float]): Unit = {
 
-    FloatArrayUnsafeS.unsafe.copyMemory(values, FloatArrayUnsafeS.floatArrayOffs, null, addr, values.length << 2)
+    UNSAFE.copyMemory(values, FloatArrayUnsafeS.floatArrayOffs, null, addr, values.length << 2)
 
   }
 
   @inline def get(index: Int): Float = {
 
-    FloatArrayUnsafeS.unsafe.getFloat(addr + (index << 2))
+    UNSAFE.getFloat(addr + (index << 2))
 
   }
 
   @inline def get(index: Long): Float = {
 
-    FloatArrayUnsafeS.unsafe.getFloat(addr + (index << 2))
+    UNSAFE.getFloat(addr + (index << 2))
 
   }
 
   @inline def first: Float = {
 
-    FloatArrayUnsafeS.unsafe.getFloat(addr)
+    UNSAFE.getFloat(addr)
 
   }
 
   @inline def update(index: Int, value: Float): Unit = {
 
-    FloatArrayUnsafeS.unsafe.putFloat(addr + (index << 2), value)
+    UNSAFE.putFloat(addr + (index << 2), value)
 
   }
 
   @inline def update(index: Long, value: Float): Unit = {
 
-    FloatArrayUnsafeS.unsafe.putFloat(addr + (index << 2), value)
+    UNSAFE.putFloat(addr + (index << 2), value)
 
   }
 
-  @inline def remove(index: Int): Unit = {
+  @inline final def incBy(index: Int, by: Float): Float = {
 
-    FloatArrayUnsafeS.unsafe.copyMemory(addr + ((index + 1) << 2), addr + (index << 2), ({
-      sizev -= 1
-      sizev
-    } - index) << 2)
+    val newValue = UNSAFE.getFloat(addr + (index << 2)) + by
+
+    UNSAFE.putFloat(addr + (index << 2), newValue)
+
+    newValue
+
+  }
+
+  @inline final def mulBy(index: Int, by: Float): Unit = {
+
+    UNSAFE.putFloat(addr + (index << 2), UNSAFE.getFloat(addr + (index << 2)) * by)
 
   }
 
@@ -132,7 +150,7 @@ class FloatArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
     val array = new Array[Float](sizev)
 
-    FloatArrayUnsafeS.unsafe.copyMemory(null, addr, array, FloatArrayUnsafeS.floatArrayOffs, sizev << 2)
+    UNSAFE.copyMemory(null, addr, array, FloatArrayUnsafeS.floatArrayOffs, sizev << 2)
 
     array
 
@@ -142,7 +160,7 @@ class FloatArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
     val array = new Array[Float](l)
 
-    FloatArrayUnsafeS.unsafe.copyMemory(null, addr, array, FloatArrayUnsafeS.floatArrayOffs, l << 2)
+    UNSAFE.copyMemory(null, addr, array, FloatArrayUnsafeS.floatArrayOffs, l << 2)
 
     array
 
@@ -152,7 +170,7 @@ class FloatArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
     val array = new Array[Float](until - from)
 
-    FloatArrayUnsafeS.unsafe.copyMemory(null, addr + (from << 2), array, FloatArrayUnsafeS.floatArrayOffs, (until - from) << 2)
+    UNSAFE.copyMemory(null, addr + (from << 2), array, FloatArrayUnsafeS.floatArrayOffs, (until - from) << 2)
 
     array
 
@@ -183,11 +201,13 @@ class FloatArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
   }
 
+  @inline def getAddr: Long = addr
+
   @inline def clone(padding: Int): FloatArrayUnsafeS = {
 
     val bau: FloatArrayUnsafeS = new FloatArrayUnsafeS(sizev + padding, aligned = aligned)
 
-    FloatArrayUnsafeS.unsafe.copyMemory(addr, bau.addr, sizev << 2)
+    UNSAFE.copyMemory(addr, bau.getAddr, sizev << 2)
 
     bau
 
