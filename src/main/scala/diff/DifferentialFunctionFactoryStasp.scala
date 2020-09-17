@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018,2019 Matthias Nickles
+  * Copyright (c) 2018-2020 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
