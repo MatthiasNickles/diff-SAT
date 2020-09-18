@@ -5,21 +5,13 @@
 0.5.0 (major update)
 
 - Optimized SAT solver core with significantly improved performance (and thus also improved sampling performance)
-
 - User API for solving problems with probabilistic or non-probabilistic CNF clauses and ASP ground rules
-
 - User API support for probabilistic _non-ground_ normal rules and free loss function terms
-
 - Aspif and User API support for weight and choice rules, double default negation in rule bodies, and double and single negation in rule heads 
-
 - User API documentation (/doc) (not very detailed yet, but should be sufficient to get started)
-
 - Probabilistic Answer Set Programming Intermediate Format (PASPIF) (Aspif enhanced with a new probabilistic rule type) 
-
 - CDNL interleaved with Stochastic Local Search (WalkSAT or Simulated Annealing (SASAT-style)) for regular SAT solving
-
 - Bug fixes and several minor improvements
-
 - Some code cleanup and refactoring 
 
 See [CHANGELOG.md](CHANGELOG.md) for details and previous updates.
@@ -62,7 +54,7 @@ delSAT can be used for plain SAT and Answer Set solving too, but has a wider ran
   knowledge as well as probabilistic/subsymbolic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
   approaches, delSAT doesn't require any independence assumptions or other restrictions for random variables.
 
-- As an instance of the previous: probabilistic logic programming (probabilistic answer set programming) and probabilistic satisfiability solving (weighting of Boolean variables, clauses, facts and rules with probabilities)
+- As an instance of the previous: _probabilistic logic programming_ (_probabilistic answer set programming_) and _probabilistic satisfiability solving_ (weighting of Boolean variables, clauses, facts and rules with probabilities)
 
 - Distribution-aware sampling of models (answer sets or satisfying truth assignments) 
    
