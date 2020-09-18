@@ -1,6 +1,6 @@
 <img src="project/delSAT1.jpg" width=140 align="right" style="margin-left: 0px;margin-top: 0px;padding: 0px;clear:top">
 
-### Latest releases, changelog ###
+### Latest releases ###
 
 0.5.0 (major update)
 
