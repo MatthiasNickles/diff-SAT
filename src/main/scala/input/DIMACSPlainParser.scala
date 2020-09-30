@@ -21,7 +21,7 @@ import utils.Various._
 import scala.collection.mutable.ArrayBuffer
 
 /**
-  * Parser for DIMACS-CNF and PCNF (probabilistic CNF). !! Not a general-purpose DIMACS-CNF parser - designed for use within delSAT only! Work in progress.
+  * Parser for DIMACS-CNF and PCNF (probabilistic CNF). !! Not a general-purpose DIMACS-CNF parser - designed for use within delSAT only
   *
   * @author Matthias Nickles
   *
@@ -52,8 +52,6 @@ object DIMACPlainSparser {
     var (noOfVars, noOfDummySymbols) = {
 
       if (padSymbolsToPow2) { // TODO: remove
-
-        // TODO: next2Pow(noOfVarsR * 2) / 2  ??
 
         val p2 = next2Pow(noOfVarsR)
 
