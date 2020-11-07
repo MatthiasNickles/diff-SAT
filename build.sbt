@@ -11,7 +11,7 @@
 
 name := "delSAT"
 
-version := "0.5.0"
+version := "0.5.1"
 
 scalaVersion := "2.13.2" // (probably still also works with 2.12 with minor modifications)
 
@@ -39,7 +39,7 @@ libraryDependencies += "org.apache.commons" % "commons-math3" % "3.6.1"
 
 // The following dependencies are not required for core functionality:
 
-//libraryDependencies += "com.oracle.substratevm" % "svm" % "19.2.1" % Provided  // only required if you want
+libraryDependencies += "com.oracle.substratevm" % "svm" % "19.2.1" % Provided  // only required if you want
 // to create a native image using GraalVM. Also see RuntimeReflectionRegistrationFeature.java and Target_scala_runtime_Statics.java
 
 libraryDependencies += "com.jsoniter" % "jsoniter" % "0.9.23" // required for stats/persistent logging only
