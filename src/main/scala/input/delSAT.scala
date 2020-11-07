@@ -1,7 +1,7 @@
 /**
   * delSAT
   *
-  * Copyright (c) 2018, 2020 Matthias Nickles
+  * Copyright (c) 2018,2020 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -43,7 +43,7 @@ object delSAT extends APITests {
 
   */
 
-  val version = "0.5.0"
+  val version = "0.5.1"
 
   val copyright = "Copyright (c) 2018-2020 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/DelSAT/blob/master/LICENSE"
 
@@ -218,8 +218,9 @@ object delSAT extends APITests {
 
   /* Internal use only:
 
-      --batchtests <folder>
+      --batchtests <folder>  (don't use with large number of files. Split such a folder into several folders)
       --apitests
+      --timeoutbench <sec> (don't use. Use external script for wall-clock time-based benchmarking instead)
 
    */
 
@@ -648,13 +649,15 @@ object delSAT extends APITests {
     val trialDurations = (1 to warmupTrialNo + noOfMinibenchmarkTrials).map(benchTrial => {
 
       if (verbose || noOfMinibenchmarkTrials > 1)
-        println("\nSolving... " + (if (noOfMinibenchmarkTrials > 1) "(benchmark trial " + benchTrial + ")" else ""))
+        println("\nSolving... " + (if (noOfMinibenchmarkTrials > 1) "(mini-benchmark trial " + benchTrial + ")" else ""))
 
       //System.gc()
 
       val startTrialTimeNs = System.nanoTime()
 
-      val maxSamplingTimeMs = System.currentTimeMillis() + timeoutMs // this must of course be measured against currentTimeMillis calls, not scaled nanoTime
+      val ctms = System.currentTimeMillis()
+
+      val maxSamplingTimeMs = ctms + timeoutMs // this must of course be measured against currentTimeMillis calls, not scaled nanoTime
 
       val solver = new SolverMulti(prep)
 
@@ -699,7 +702,7 @@ object delSAT extends APITests {
 
   type ArgsList = List[(Symbol, List[String])]
 
-  def parseArgs(args: Array[String]): (ArgsList, mutable.HashMap[(String /*param name*/ , Nogi /*<-thread*/ ), String /*param value*/ ]) = {
+  def parseArgs(args: Array[String]): (ArgsList, mutable.HashMap[(String /*param name*/ , Int /*<-thread*/ ), String /*param value*/ ]) = {
 
     val advancedSolverArgs /*from --solverarg arguments*/ =
       mutable.HashMap[(String /*param name*/ , Nogi /*<-thread*/ ), String /*param value*/ ]()
@@ -884,6 +887,18 @@ object delSAT extends APITests {
 
         }
 
+        case "--timeoutbench" :: arg1 :: arg2 :: tail => {  // TODO: doesn't work well (piles up too much waste in memory). Use external script for benchmarking.
+
+          runTimeoutBenchmarks = true
+
+          timeoutBenchmarkTimeoutSec = arg1.toInt
+
+          timeoutBenchmarkDir = arg2
+
+          nextArg(argsList, tail)
+
+        }
+
         case "--apitests" :: tail => {
 
           runAPITests = true
@@ -894,8 +909,8 @@ object delSAT extends APITests {
 
         case fileName :: tail if !isSwitch(fileName) => {
 
-          if (runBatchTests)
-            stomp(-5009, "If runBatchTests=true, no input file names can be specified on the command line")
+          if (runBatchTests || runTimeoutBenchmarks)
+            stomp(-5009, "If runBatchTests=true or runTimeoutBenchmarks=true, no input file names can be specified on the command line")
 
           nextArg(argsList ++ List('inputFile -> List(fileName)), tail)
 
@@ -1000,6 +1015,9 @@ object delSAT extends APITests {
 
     }
 
+    if(runBatchTests && runTimeoutBenchmarks && (noOfMinibenchmarkTrials > 1) || runBatchTests && runTimeoutBenchmarks || runBatchTests && (noOfMinibenchmarkTrials > 1) || runTimeoutBenchmarks && (noOfMinibenchmarkTrials > 1))
+      stomp(-5009, "Only one of the following can be performed: batch testing, timeout benchmarks, mini benchmarks")
+
     val (parsedCommandlineArgs: ArgsList, advancedSolverArgsFromCommandline /*from --solverarg*/ : mutable.HashMap[(String, Nogi), String]) =
       parseArgs(args = args)
 
@@ -1030,6 +1048,15 @@ object delSAT extends APITests {
 
       fl.zipWithIndex.to(ArrayBuffer)
 
+    } else if(runTimeoutBenchmarks) {
+
+      val fl = recursiveAllFiles(new File(timeoutBenchmarkDir)).filter(file =>
+        !file.isDirectory && timeoutBenchmarkFileEndings.contains(file.getName.substring(file.getName.lastIndexOf('.'))))
+
+      println("\n**** Running timeout benchmark (" + fl.size + " files from directory " + new File(timeoutBenchmarkDir).getAbsolutePath + ")...\nTimeout per file: " + timeoutBenchmarkTimeoutSec + " seconds\n")
+
+      fl.zipWithIndex.to(ArrayBuffer)
+
     } else {
 
       if (parsedCommandlineArgs.exists(_._1 == 'enforceReadingFromSTDIN) || !parsedCommandlineArgs.exists(_._1 == 'inputFile))
@@ -1041,7 +1068,7 @@ object delSAT extends APITests {
 
     val originalInputFileListSize = inputFileList.size
 
-    val baseSettingsForBatchTestsOpt: Option[Array[(String, AnyRef)]] = if (runBatchTests)
+    val baseSettingsForBatchProcessingOpt: Option[Array[(String, AnyRef)]] = if (runBatchTests || runTimeoutBenchmarks)
       Some(getSharedFieldsUsingReflection(omitRefType = false, omitScalaGen = true))
     else
       None
@@ -1073,7 +1100,7 @@ object delSAT extends APITests {
         obtainInputFromText(Left(None), mseInCommandLineOpt = if (parsedCommandlineArgsMap.contains('mse)) Some(true) else None) // we read from STDIN
       else {
 
-        if (runBatchTests)
+        if (runBatchTests || runTimeoutBenchmarks)
           println("\n****************************************\n" +
             "**** Next file in batch: " + fileNameOpt.get + " (remaining: " + (originalInputFileListSize - inputFileList.head._2) + ")\n")
 
@@ -1091,25 +1118,29 @@ object delSAT extends APITests {
 
       val parsedArgsMap = (inlineArgsOpt.map(_._1).getOrElse(mutable.HashMap[Symbol, List[String]]())).++(parsedCommandlineArgsMap)
 
-      val advancedSolverArgs /*from inline --solverarg*/ : mutable.HashMap[(String, Nogi), String] =
-        (inlineArgsOpt.map(_._2).getOrElse(mutable.HashMap[(String, Nogi), String]())).++(advancedSolverArgsFromCommandline)
+      val advancedSolverArgs /*from inline --solverarg*/ : mutable.HashMap[(String, Int), String] =
+        (inlineArgsOpt.map(_._2).getOrElse(mutable.HashMap[(String, Int), String]())).++(advancedSolverArgsFromCommandline)
+
+      //val timeoutMs = (if(runTimeoutBenchmarks) timeoutBenchmarkTimeoutSec * 1000 else advancedSolverArgs.get("timeoutMs", )).toLong
+
+      val advancedSolverArgsNewTimeout = if (runTimeoutBenchmarks) advancedSolverArgs.+(("timeoutMs", 0) -> (timeoutBenchmarkTimeoutSec * 1000).toString) else advancedSolverArgs
 
       val solverParametersOverlay = input.SolverParametersOverlay(
         noOfModels = parsedArgsMap.getOrElse('n, List(defaultCmdlNoOfModelsStr)).head.toInt,
         noOfSecondaryModels = parsedArgsMap.getOrElse('s, List(defaultCmdlNoOfModelsStr)).head.toInt,
-        offHeapGarbageCollectionModeR = if (noOfMinibenchmarkTrials > 1 || runBatchTests) 1 else
+        offHeapGarbageCollectionModeR = if (noOfMinibenchmarkTrials > 1 || runBatchTests || runTimeoutBenchmarks) 1 else
           parsedArgsMap.getOrElse('gc, List(defaultCmdlOffHeapGarbageCollectionModeR)).head.toInt,
         thresholdOpt = parsedArgsMap.get('t).map(_.head.toDouble),
         showauxInSATmode = parsedArgsMap.contains('showaux),
         assureMSE = parsedArgsMap.contains('mse),
-        advancedSolverArgs = advancedSolverArgs
+        advancedSolverArgs = advancedSolverArgsNewTimeout
       )
 
-      val (samplingResult: SamplingResult /*(mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)], Long /*time for sampling in nanosec*/ )*/ ,
+      val (samplingResult: SamplingResult,
       parserResult: AspifOrDIMACSPlainParserResult) =
         invokeSampler(inputData = inputData,
           advancedSolverParametersOverlay = solverParametersOverlay,
-          baseSettingsForBatchTestsOpt = baseSettingsForBatchTestsOpt,
+          baseSettingsForBatchTestsOpt = baseSettingsForBatchProcessingOpt,
           satMode = satMode)
 
       if (!samplingResult.modelsSymbolic.isEmpty) {
@@ -1188,7 +1219,7 @@ object delSAT extends APITests {
       if (writeRuntimeStatsToFile)
         stats.writeEntry(key = "samplingTimeMs", value = samplingTimeMs, solverThreadNo = 0)
 
-      if (!runBatchTests) {
+      if (!runBatchTests && !runTimeoutBenchmarks) {
 
         val overallTimeMs = timerToElapsedMs(timerOverallNs) // doesn't include JVM startup time (before actual delSAT code runs)
 
@@ -1215,23 +1246,23 @@ object delSAT extends APITests {
 
     } while (!inputFileList.isEmpty)
 
-    if (runBatchTests) {
+    if (runBatchTests /*|| runTimeoutBenchmarks*/) {
 
-      println("\n****************************************\n**** Batch tests complete (" + originalInputFileListSize + " files).\n")
+      println("\n****************************************\n**** Batch processing complete (" + originalInputFileListSize + " files).\n")
 
       val overallTimeMs = timerToElapsedMs(timerOverallNs) // doesn't include JVM startup time (before actual delSAT code runs)
 
-      println("**** Time for batch tests (incl parsing/pre-/post-processing/printing): " + overallTimeMs + " ms (" + (overallTimeMs / 1000f) + " sec, " + Math.rint(overallTimeMs / 1000f / 60f * 1000f) / 1000f + " min)")
+      println("**** Time for batch processing (incl parsing/pre-/post-processing/printing): " + overallTimeMs + " ms (" + (overallTimeMs / 1000f) + " sec, " + Math.rint(overallTimeMs / 1000f / 60f * 1000f) / 1000f + " min)")
 
       if (writeRuntimeStatsToFile) {
 
-        stats = new Stats(problemFile = "Batch_tests_(" + originalInputFileListSize + " files)")
+        stats = new Stats(problemFile = "Batch_(" + originalInputFileListSize + " files)")
 
         stats.initializeStatsFile()
 
-        stats.writeEntry(key = "overallTimeBatchTestsMs", value = overallTimeMs, solverThreadNo = 0)
+        stats.writeEntry(key = "overallTimeBatchProcessingMs", value = overallTimeMs, solverThreadNo = 0)
 
-        println("\nWriting batch tests overall stats to " + stats.outFile.getAbsolutePath() + "...")
+        println("\nWriting batch processing overall stats to " + stats.outFile.getAbsolutePath() + "...")
 
         stats.writeToFile()
 
@@ -1482,7 +1513,7 @@ object delSAT extends APITests {
       }
 
       if (!modelsSymbolic.isEmpty)
-        System.out.println("SATISFIABLE") // this must be printed _directly_ after the list of answers (no empty line allowed in between)
+        System.out.println("SATISFIABLE ") // this must be printed _directly_ after the list of answers (no empty line allowed in between)
       // ^^^^NB (TODO): "UNSAT" is already printed in the solver thread, since at this later point, there is no information anymore
       // of why the set of models is empty (abort or unsat?)
 
