@@ -39,7 +39,7 @@ libraryDependencies += "org.apache.commons" % "commons-math3" % "3.6.1"
 
 // The following dependencies are not required for core functionality:
 
-libraryDependencies += "com.oracle.substratevm" % "svm" % "19.2.1" % Provided  // only required if you want
+//libraryDependencies += "com.oracle.substratevm" % "svm" % "19.2.1" % Provided  // only required if you want
 // to create a native image using GraalVM. Also see RuntimeReflectionRegistrationFeature.java and Target_scala_runtime_Statics.java
 
 libraryDependencies += "com.jsoniter" % "jsoniter" % "0.9.23" // required for stats/persistent logging only
