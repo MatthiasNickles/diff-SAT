@@ -60,7 +60,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     val rngLocal: RandomGenSuperclass = if (altRandomNumGen)
       new XoRoRNGd(seed)
     else
-      new XORShift32(java.util.Optional.of(seed)) // faster but less random.
+      new XORShift32(java.util.Optional.of(seed)) // faster but less random
 
     var rndmBranchProb = if (rndmBranchProbR < 0) 0.01f/*TODO*/ else rndmBranchProbR
 
@@ -117,14 +117,17 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     else
       null.asInstanceOf[FiniteQueue[ByteArrayUnsafeS]]
 
-    assert(globalBestPhaseMemo) // false not tested well enough (and probably no advantage over global queue)
-
     val violatedNogoodsInSLS: RandomLongSet = if (rephasePhaseMemo && useSLSinPhaseMemoRephasing)
       new RandomLongSet(clarkNogoodsFinal.length)
     else
       null.asInstanceOf[RandomLongSet]
 
-    val nogiClarkToNogoodReducible = new LongArrayUnsafeS(clarkNogoodsFinal.length)
+    val allViolatedNogoodsSoFarInSLS: RandomLongSet = if (rephasePhaseMemo && useSLSinPhaseMemoRephasing)
+      new RandomLongSet(clarkNogoodsFinal.length)
+    else
+      null.asInstanceOf[RandomLongSet]
+
+  val nogiClarkToNogoodReducible = new LongArrayUnsafeS(clarkNogoodsFinal.length)
     // NB(1): nogis (nogood indices) are only defined
     // for the original nogoods ("Clark nogoods"), not for any learned or loop nogoods!
     // NB(2): we cannot make this global for all solver threads, as each competing thread might (depending on BCP method)
@@ -932,37 +935,53 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       }
 
-      @inline def setDecisionLevelTo(newDl: Eli): Unit = dl = newDl
+      @inline def setDecisionLevelTo(newDl: Int): Unit = dl = newDl
 
-      @inline def getIntFromReducible(addr: NogoodReducible, index: Eli): Eli =
+      // Memory layout of reducibles: see Preparation.scala
+
+      @inline def getIntFromReducible(addr: NogoodReducible, index: Int): Int =
         UNSAFE.getInt(addr + (index << 2))
 
-      @inline def updateIntInReducible(addr: NogoodReducible, index: Eli, value: Eli): Unit =
+      @inline def updateIntInReducible(addr: NogoodReducible, index: Int, value: Int): Unit = {
+
+        val maxAllowedIndex = getTotalSizeOfReducibleInBytes(addr) >> 2
+
+        /*if(index > maxAllowedIndex && !safe) {
+
+          println("NOPE  index=" + index + ", maxAllowedIndex=" + maxAllowedIndex)
+
+          println("Nogood size: " + getNogoodSizeFromReducible(addr))
+          println("Slot size: " + getIntFromReducible(addr, offsetIntsOfNogoodInReducible - 3))
+
+        } */
+
         UNSAFE.putInt(addr + (index << 2), value)
 
-      @inline def getLongFromReducible(addr: NogoodReducible, intIndex: Eli): NogoodReducible =
+      }
+
+      @inline def getLongFromReducible(addr: NogoodReducible, intIndex: Int): NogoodReducible =
         UNSAFE.getLong(addr + (intIndex << 2))
 
-      @inline def updateLongInReducible(addr: NogoodReducible, intIndex: Eli, value: NogoodReducible): Unit =
+      @inline def updateLongInReducible(addr: NogoodReducible, intIndex: Int, value: NogoodReducible): Unit =
         UNSAFE.putLong(addr + (intIndex << 2), value)
 
-      @inline def getFloatFromReducible(addr: NogoodReducible, index: Eli): Float =
+      @inline def getFloatFromReducible(addr: NogoodReducible, index: Int): Float =
         UNSAFE.getFloat(addr + (index << 2))
 
-      @inline def updateFloatInReducible(addr: NogoodReducible, index: Eli, value: Float): Unit =
+      @inline def updateFloatInReducible(addr: NogoodReducible, index: Int, value: Float): Unit =
         UNSAFE.putFloat(addr + (index << 2), value)
 
       @inline def getAddrOfNogoodInReducible(addr: NogoodReducible): NogoodReducible = addr + (offsetIntsOfNogoodInReducible << 2)
 
-      @inline def getEliFromNogoodInReducible(addr: NogoodReducible, indexInNogood: Eli): Eli =
+      @inline def getEliFromNogoodInReducible(addr: NogoodReducible, indexInNogood: Int): Eli =
         getIntFromReducible(addr, offsetIntsOfNogoodInReducible + indexInNogood)
 
-      @inline def updateEliInNogoodInReducible(addr: NogoodReducible, indexInNogood: Eli, value: Eli): Unit =
+      @inline def updateEliInNogoodInReducible(addr: NogoodReducible, indexInNogood: Int, value: Eli): Unit =
         UNSAFE.putInt(addr + ((offsetIntsOfNogoodInReducible + indexInNogood) << 2), value)
 
-      @inline def getNogoodSizeFromReducible(addr: NogoodReducible): Eli = getIntFromReducible(addr, 0)
+      @inline def getNogoodSizeFromReducible(addr: NogoodReducible): Int = getIntFromReducible(addr, 0)
 
-      @inline def getTotalSizeOfReducibleInBytes(addr: NogoodReducible): Eli =
+      @inline def getTotalSizeOfReducibleInBytes(addr: NogoodReducible): Int =
         getIntFromReducible(addr, index = offsetIntsOfNogoodInReducible - 3) << 2
 
       @inline def cloneNogoodReducible(addr: NogoodReducible): NogoodReducible = {
@@ -983,13 +1002,13 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       }
 
-      @inline def setNogoodSizeInReducible(addr: NogoodReducible, newSize: Eli): Unit = /*getNogoodFromReducible(addr).sizev*/ {
+      @inline def setNogoodSizeInReducible(addr: NogoodReducible, newSize: Int): Unit = /*getNogoodFromReducible(addr).sizev*/ {
 
         updateIntInReducible(addr, 0, newSize)
 
       }
 
-      @inline def getLBDFromReducible(addr: NogoodReducible): Eli = {
+      @inline def getLBDFromReducible(addr: NogoodReducible): Int = {
 
         // NB: lbd in delSAT not computed for non-learned ("clark") nogood!
 
@@ -1001,7 +1020,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       }
 
-      @inline def setLBDInReducible(addr: NogoodReducible, lbd: Eli): Unit = /*getNogoodFromReducible(addr).sizev*/ {
+      @inline def setLBDInReducible(addr: NogoodReducible, lbd: Int): Unit = /*getNogoodFromReducible(addr).sizev*/ {
 
         updateIntInReducible(addr, offsetIntsOfNogoodInReducible - 1, lbd)
 
@@ -1498,8 +1517,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
         r
 
       }
-
-
 
       @inline def isClarkReducible(reducible: NogoodReducible): Boolean =
         getIntFromReducible(reducible, offsetIntsOfNogoodInReducible - 1) == -1
@@ -2306,7 +2323,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-    @inline def reserveReducibleSpace(requiredReducibleSpaceSizeInNoOfInts: Eli): NogoodReducible = {
+    @inline def reserveReducibleSpace(requiredReducibleSpaceSizeInNoOfInts: Int): NogoodReducible = {
 
       val reducibleSpace = if (freeOrReassignDeletedNogoodMemory && freeDeletedNogoodMemoryApproach == 0) {
         // firstly, we try to find space in the freed memory from deleted nogood reducibles:
@@ -2357,6 +2374,11 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
         }
 
         val r = allocateOffHeapMem(requiredReducibleSpaceSizeInNoOfInts << 2)
+
+        updateIntInReducible(r, index = offsetIntsOfNogoodInReducible - 3, requiredReducibleSpaceSizeInNoOfInts)
+
+        //if(requiredReducibleSpaceSizeInNoOfInts > 16)
+         // println("\nReserved: " + requiredReducibleSpaceSizeInNoOfInts + "  (reducible:" + r + ")")
 
         r
 
@@ -2501,11 +2523,11 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       }
 
+      updateIntInReducible(newReducible, index = offsetIntsOfNogoodInReducible - 3, reducibleSlotSize)
+
       setNogoodSizeInReducible(newReducible, nogoodSize)
 
       updateIntInReducible(newReducible, index = offsetIntsOfNogoodInReducible - 2, 1 /*<-to avoid NaN*/)
-
-      updateIntInReducible(newReducible, index = offsetIntsOfNogoodInReducible - 3, reducibleSlotSize)
 
       if (extReducibles == 2)
         setupNewReducibleForExt2(newReducible)
@@ -2677,6 +2699,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       val oldScore = getAbsEliScore(absEli)
 
       val r = Math.nextUp(getAbsEliScore(absEli))
+
       setScoreOfAbsEli(absEli, r)
 
     }
@@ -3127,7 +3150,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     @inline def setInPassAfterSolvePhase(eli: Eli): Unit = { // this and setInPassIfUnassigned must be the only ways (besides initialization) of assigning True to an eli.
       // ^to be called only(!) after a complete assignment candidate has been found!
 
-      assert(false) // works but not needed anymore
+      assert(false) // works but not needed anymore. TODO: remove after another few weeks
 
       //assert(!isAbsSetInPass(eli))  // must hold when calling this function!
       //assert(orderNo > 0)
@@ -3147,7 +3170,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       orderNumber += 1
 
     }
-
 
     @inline def setInPassIfUnassigned(eli: Eli): Boolean = { // ===> !! This and setInPassEntry and setInPassAfterSolvePhase must be the only ways of assigning True to an eli.
 
@@ -3368,8 +3390,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-
-    @inline def setEliWithNogoodUpdatesNoHeapForExtRed2b(): Unit = {
+    @inline def setEliWithNogoodUpdatesNoHeapForExtRed2b(): Unit = {  // (typically the most expensive method in the solver)
 
       assert(extReducibles == 2)
 
@@ -3428,7 +3449,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
                 UNSAFE.putInt(endRiAddr, negateEli(rmi))
 
-                updateReasonOfEli(toAbsEli(rmi), red) //FLL
+                updateReasonOfEli(toAbsEli(rmi), red)
 
                 setInPassEntry(negateEli(rmi))
 
@@ -3469,8 +3490,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     }
 
     @scala.annotation.tailrec
-    @inline final def setEliWithNogoodUpdatesNoHeapForExtRed5(/*eli: Eli, reason: NogoodReducible /*must be 0l if eli is a branching literal*/ */
-                                                        recursionDepth: Eli = 0): Unit = {
+    @inline final def setEliWithNogoodUpdatesNoHeapForExtRed5(recursionDepth: Eli = 0): Unit = {
       //assert(extReducibles == 5)
 
       val rmiStorePosMax = rmiStorePos
@@ -3631,7 +3651,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-  @inline def nopropSetEliWithNogoodUpdatesNoHeap(eli: Eli): Unit = {
+  /* @deprecated @inline def nopropSetEliWithNogoodUpdatesNoHeap(eli: Eli): Unit = {
 
     rmiStorePos = orderNumber
 
@@ -3870,7 +3890,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     } else
       assert(false)
 
-  }
+  } */
 
     @inline def scoreUpd(eli: Eli, bump: Float): Unit = {
 
@@ -3894,17 +3914,18 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     var conflictAnalysisResult_newDecisionLevel = 0
     var conflictAnalysisResult_sigmaEli = 0
     var conflictAnalysisResult_conflictNogoodReducible = 0l
-
     /** Follows largely Minisat 1/2 (Minisat 2 without putting highest decision level literals in nogood position 0 and 1) but
       * using nogoods instead of clauses (so in some places we need to apply/omit negateEli())
       *
       */
     def conflictAnalysis(violatedNogoodReducible: NogoodReducible,
-                         outSpaceInitial: NogoodReducible, newReducibleInitialSpaceSlotSize: Eli): Unit /*ConflictAnalysisResult*/
+                         outSpaceInitial: NogoodReducible, newReducibleInitialSpaceSlotSize: Int): Unit
     = {
 
-      // if (debug2)
-      //  println("\nConflict analysis... conflicting nogood (reducible " + violatedNogoodReducible + ") = " + generateNogoodFromReducible(violatedNogoodReducible).toArray.mkString(","))
+      val startDEB = false && noOfConflictsTotal > 314
+
+       if (startDEB && (true || debug2))
+        println("\nConflict analysis... conflicting nogood (reducible " + violatedNogoodReducible + "); #conflicts: " + noOfConflictsTotal)
 
       val absEliBump = updScoreInNgElis(getAddrOfNogoodInReducible(violatedNogoodReducible), getNogoodSizeFromReducible(violatedNogoodReducible))
 
@@ -3912,14 +3933,18 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       var newReducibleSpaceSlotSize = newReducibleInitialSpaceSlotSize
 
-      var maxOutSize = newReducibleSpaceSlotSize - offsetIntsOfNogoodInReducible - closingIntsAfterNogoodInReducible // number of Ints
+      var maxOutSizeForElis = newReducibleSpaceSlotSize - offsetIntsOfNogoodInReducible - closingIntsAfterNogoodInReducible // number of Ints
       // available to store the literals of the nogood
+
+      //if (offsetIntsOfNogoodInReducible + maxOutSizeForElis + 2 > getIntFromReducible(conflictAnalysisResult_conflictNogoodReducible, offsetIntsOfNogoodInReducible - 3))
+       // println("UUUUUUUUUUUUUU slot size (Ints): " + getIntFromReducible(conflictAnalysisResult_conflictNogoodReducible, offsetIntsOfNogoodInReducible - 3))
 
       conflictAnalysisResult_newDecisionLevel = 0
 
       var confl = violatedNogoodReducible
+      if (startDEB) println("555")
 
-      var outSize = 1
+      var outSizeForElis = 1
 
       var index = orderNumber - 1
 
@@ -3960,35 +3985,37 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
               } else if (decisionLevelOfEli(toAbsEli(q)) > 0) {
 
-                updateEliInNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, outSize, negateEli(q))
+                updateEliInNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, outSizeForElis, negateEli(q))
 
                 if (decisionLevelOfEli(toAbsEli(q)) > conflictAnalysisResult_newDecisionLevel) {
 
                   conflictAnalysisResult_newDecisionLevel = decisionLevelOfEli(toAbsEli(q))
 
-                  indexOfHighestDl = outSize
+                  indexOfHighestDl = outSizeForElis
 
                 }
 
-                outSize += 1
+                outSizeForElis += 1
 
-                if (outSize >= maxOutSize) {
+                if (outSizeForElis >= maxOutSizeForElis) {
 
-                  val maxOutSizeOld = maxOutSize
+                  val maxOutSizeOld = maxOutSizeForElis
 
-                  maxOutSize = maxOutSize << 1
+                  maxOutSizeForElis = outSizeForElis << 1
 
                   val newReducibleSpaceSlotSizeOld = newReducibleSpaceSlotSize
 
-                  newReducibleSpaceSlotSize = offsetIntsOfNogoodInReducible + maxOutSize + closingIntsAfterNogoodInReducible
+                  newReducibleSpaceSlotSize = offsetIntsOfNogoodInReducible + maxOutSizeForElis + closingIntsAfterNogoodInReducible
 
                   val newRed: NogoodReducible = reserveReducibleSpace(requiredReducibleSpaceSizeInNoOfInts = newReducibleSpaceSlotSize /*offsetIntsOfNogoodInReducible + maxOutSize + offsetIntsOfNogoodInReducible*/)
 
-                  UNSAFE.copyMemory(conflictAnalysisResult_conflictNogoodReducible, newRed, (outSize + offsetIntsOfNogoodInReducible) << 2)
+                  UNSAFE.copyMemory(conflictAnalysisResult_conflictNogoodReducible, newRed, (outSizeForElis + offsetIntsOfNogoodInReducible) << 2)
+
+                  updateIntInReducible(newRed, index = offsetIntsOfNogoodInReducible - 3, newReducibleSpaceSlotSize)
 
                   if (freeOrReassignDeletedNogoodMemory) {
 
-                    updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, index = offsetIntsOfNogoodInReducible - 3, newReducibleSpaceSlotSizeOld)
+                    /*redundant?*/updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, index = offsetIntsOfNogoodInReducible - 3, newReducibleSpaceSlotSizeOld)
 
                     makeNogoodSpaceAvailable(conflictAnalysisResult_conflictNogoodReducible)
 
@@ -4052,7 +4079,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       } */
 
-      setNogoodSizeInReducible(conflictAnalysisResult_conflictNogoodReducible, outSize)
+      setNogoodSizeInReducible(conflictAnalysisResult_conflictNogoodReducible, outSizeForElis)
 
       reducibleSlotSizeEnlargementsEMA -= reducibleSlotSizeEnlargementsEMA / 500f
 
@@ -4065,7 +4092,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         val cng = targetArrayUnsafeForNogoodInConfA
 
-        cng.sizev = outSize
+        cng.sizev = outSizeForElis
 
         var removedByOnTheFlySelfSubsumption = 0
 
@@ -4073,7 +4100,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         var j = 1
 
-        while (i < outSize) {
+        while (i < outSizeForElis) {
 
           var x = toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, i))
 
@@ -4115,12 +4142,12 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         removedByOnTheFlySelfSubsumption = i - j
 
-        outSize -= i - j
+        outSizeForElis -= i - j
 
         // if (removedByOnTheFlySelfSubsumption > 0)
           //println("\nremovedByOnTheFlySelfSubsumption = " + removedByOnTheFlySelfSubsumption + ", outSize = " + outSize)
 
-        setNogoodSizeInReducible(conflictAnalysisResult_conflictNogoodReducible, outSize)
+        setNogoodSizeInReducible(conflictAnalysisResult_conflictNogoodReducible, outSizeForElis)
 
         var k = 0
 
@@ -4136,7 +4163,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         var k = 0
 
-        while (k < outSize) {
+        while (k < outSizeForElis) {
 
           updateInSeen(toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, k)), 0x00.toByte)
 
@@ -4159,7 +4186,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
               var i = 2
 
-              while (i < outSize) {
+              while (i < outSizeForElis) {
 
                 if (getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, i) > getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, indexOfHighestDl))
                   indexOfHighestDl = i
@@ -4208,7 +4235,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
               r
 
-            }, outSize)
+            }, outSizeForElis)
 
         }
 
@@ -4218,7 +4245,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         var iii = 0
 
-        while (iii < outSize) {
+        while (iii < outSizeForElis) {
 
           val eliInNogood = getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, iii)
 
@@ -4247,6 +4274,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       }
 
+      //updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, index = offsetIntsOfNogoodInReducible - 3, newReducibleSpaceSlotSize, safe = true)
 
       if (useLBD) {
 
@@ -4260,12 +4288,12 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, index = offsetIntsOfNogoodInReducible - 2, 1 /*<-to avoid NaN*/)
 
-      updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, index = offsetIntsOfNogoodInReducible - 3, newReducibleSpaceSlotSize)
-
       setLearnedNogoodReducibleActivity(conflictAnalysisResult_conflictNogoodReducible, 0f)
 
       if (scoringForRemovalOfLearnedNogoods == 1 || scoringForRemovalOfLearnedNogoods == 10 || scoringForRemovalOfLearnedNogoods == 11)
         bumpNogoodReducibleActivity(conflictAnalysisResult_conflictNogoodReducible) // (observe that the nogood activity bump increases over time)
+
+      val ns = getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)
 
       totalNoElisInLearnedNogoods += getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)
 
@@ -4598,21 +4626,23 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         val delta = rephasePhaseMemoIntervalInit * (noOfRephasings + 1)
 
-        noOfConflictsBeforeNextRephasing = /*(noOfConflictsBeforeRestart * 3).toInt*/ noOfConflictsTotal / rephasingPhaseMemoIntervalDiv + delta
+        noOfConflictsBeforeNextRephasing = noOfConflictsTotal / rephasingPhaseMemoIntervalDiv + delta
 
         if (debug2) println("\nnoOfConflictsBeforeNextRephasing= " + noOfConflictsBeforeNextRephasing)
 
-        val sw = noOfRephasings % 12 // we use a remotely similar modulo scheme as cadical's "unstable + walk" rephasing, but observe
+        val sw = noOfRephasings % 12 // we use a remotely similar modulo scheme as Cadical's "unstable + walk" rephasing, but observe
         // that we also rephase by using pos/neg polarity ratio (initialPhase >= 2) and that cadical uses a different Stochastic
         // Local Search solver (probSAT/YalSAT) and rephases at different occasions.
 
-        if (((sw == 1 || sw == 4 || sw == 7 || sw == 10 || (!useSLSinPhaseMemoRephasing && (sw == 2 || sw == 5 || sw == 8 || sw == 11)))) && !bestPhasesQueue.isEmpty) {
+        if ((((sw == 1 || sw == 4 || sw == 7 || sw == 10 || (!useSLSinPhaseMemoRephasing && (sw == 2 || sw == 5 || sw == 8 || sw == 11)))) ) && !bestPhasesQueue.isEmpty) {
 
           var absEli = 1
 
+          val targetPhase = bestPhasesQueue.randomElement(bestPhasesQueue.size)
+
           while (absEli <= noOfAbsElis) {
 
-            updateInPhasePreviousForAbsElis(absEli, bestPhasesQueue.front.get(absEli))
+            updateInPhasePreviousForAbsElis(absEli, targetPhase.get(absEli))
 
             absEli += 1
 
@@ -4827,7 +4857,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-
     val intersect = new NogoodReduciblesSequenceUnsafe(initialCapacity = 2048)
 
     @deprecated @inline def possiblyAddLearnedNogoodToReducibleLists(trials: Eli, newLearnedNogoodReducible: NogoodReducible,
@@ -4899,7 +4928,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       var oldNoOfLearnedNogoods = getApproxNoOfLearnedNogoods
 
-      //println("oldNoOfLearnedNogoods = " + oldNoOfLearnedNogoods + ", nogoodRemovalThreshAdapted = " + nogoodRemovalThreshAdapted.toInt)
+      //if(threadNo == 2)
+        //println("oldNoOfLearnedNogoods = " + oldNoOfLearnedNogoods + ", nogoodRemovalThreshAdapted = " + nogoodRemovalThreshAdapted.toInt)
 
       if ((all || removeLearnedNogoodAtRegularRestarts && noOfRestarts % removeLearnedNogoodEveryNthRestart == 0  ||
         !removeLearnedNogoodAtRegularRestarts && (
@@ -5167,7 +5197,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     intersect.addToGarbage()
 
-    def weaklyRephase = {
+    def weaklyRephase: Unit = {
 
       // println("\n" + noOfConflictsTotal)
 
@@ -5204,6 +5234,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
         }
 
       }
+
     }
 
     def restart(trials: Int, jumpBackLevelFromConflict: Int = -1 /*-1 = full restart*/,
@@ -5400,7 +5431,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-
     @inline def addLearnedNogoodReducibleToReducibleLists(newLearnedNogoodReducible: NogoodReducible,
                                                           violatedNogoodReducible: NogoodReducible,
                                                           appendToTotalList: Boolean = true): Unit = {
@@ -5431,7 +5461,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
           eliWatchedToReducibles(eliToJavaArrayIndex(getEliFromNogoodInReducible(newLearnedNogoodReducible, 1))).addReducibleUS(newLearnedNogoodReducible)
 
         } else {
-
+//println("!! " + eliToJavaArrayIndex(getEliFromNogoodInReducible(newLearnedNogoodReducible, 0)) + "\n   eliWatchedToReducibles.size = " + eliWatchedToReducibles.size)
           eliWatchedToReducibles(eliToJavaArrayIndex(getEliFromNogoodInReducible(newLearnedNogoodReducible, 0))).addReducibleUS(newLearnedNogoodReducible)
 
         }
@@ -5510,7 +5540,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       }
 
     }
-        @inline def fetchSharedLearnedNogoodsFromOtherThreads: Unit = {
+
+    @inline def fetchSharedLearnedNogoodsFromOtherThreads: Unit = {
 
       if (nogoodShareNumberMax != 0f && maxCompetingSolverThreads > 1 && !stopSolverThreads) {
 
