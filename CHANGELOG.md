@@ -1,3 +1,7 @@
+0.5.1
+
+- Bug fix: in rare cases, conflict nogood generation messed up the memory layout
+
 0.5.0 
 
 - Optimized SAT solver core (and thus improved sampling performance)
