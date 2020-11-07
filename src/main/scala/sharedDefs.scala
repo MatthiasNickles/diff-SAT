@@ -49,6 +49,9 @@ import scala.collection.mutable
   *
   * Example: --solverarg freeEliSearchApproachP "12 3 11 3 3 7"
   *
+  * Another example (for testing Stochastic Local Search (e.g., Walksat) in isolation):
+  *  --solverarg rephasePhaseMemo true --solverarg useSLSinPhaseMemoRephasingP "true" --solverarg allowEliToClarkReduciblesLookup true --solverarg maxInnerSLSTrials 200000000 --solverarg sasatOuterMaxInSLS 1 --solverarg minNoConflictsBeforeFirstRephasing 0 --solverarg rephasePhaseMemoIntervalInit 0 --solverarg maxSolverThreadsR 1
+  *
   * Optionally, use --thread on the commandline to group --solverargs per solver thread (see --help in delSAT.scala).
   * This is of course only relevant for settings which can differ across threads. Example:
   * --solverarg maxSolverThreadsR 4 ... --thread 3 --solverarg seedP 12345 --thread 4 --solverarg seedP -987654321
@@ -162,7 +165,7 @@ package object sharedDefs {
   // trial duration larger than a single program run without benchmarking. Also observe that a difference
   // between multiple trials and computing multiple models is that the former don't allow for data structure reuse.
   //
-  // NB (2): noOfMinibenchmarkTrials > 1 disables sanity checks (even with runBatchTests=true)
+  // NB (2): noOfMinibenchmarkTrials > 1 or runTimeoutBenchmarks=true disables sanity checks (even with runBatchTests=true)
 
   // -------------------------------------------------------------------------------------
 
@@ -184,13 +187,23 @@ package object sharedDefs {
 
   var runAPITests = false // activate using --apitests
 
-  @inline def performSanityChecks: Boolean = runBatchTests || (debug || areAssertionsEnabled || extraChecks) && noOfMinibenchmarkTrials == 1 // NB: for ASP, any invalid models are first bounced back to
+  var runTimeoutBenchmarks = false  /* activate using --timeoutbench  (not to be confused with noOfMinibenchmarkTrials)
+   TODO: doesn't work well (piles up too much waste in memory). Use external script for benchmarking. */
+
+  var timeoutBenchmarkDir = "C:\\Users\\Owner\\workspaceScala211\\DelSAT\\timeOutBenchmarks\\SAT11_application_track"
+
+  var timeoutBenchmarkTimeoutSec = 5
+
+  var timeoutBenchmarkFileEndings = batchTestFileEndings
+
+  @inline def performSanityChecks: Boolean = (runBatchTests || (debug || areAssertionsEnabled || extraChecks)) &&
+    noOfMinibenchmarkTrials == 1 && !runTimeoutBenchmarks // NB: for ASP, any invalid models are first bounced back to
   // the solver before this check could occur (see SolverMulti.scala).
   // NB: enforceSanityChecks currently doesn't check UNSAT results yet.
 
   // -------------------------------------------------------------------------------------
 
-  val maxAssumedConsoleWidth = if (delSAT.osWin) 210 /*with Windows, we programmatically change the
+  val maxAssumedConsoleWidth = if(debug) 1024 else if (delSAT.osWin) 210 /*with Windows, we programmatically change the
   width to this*/ else 79 // to ensure single-line progress (status) updates correctly (if buffer width too small, console scrolls). Set to 0 to disable.
 
   var showProgressStats: Boolean = true // switch off progress statistics using --solverarg showProgressStats false
@@ -234,13 +247,12 @@ package object sharedDefs {
 
   //@inline def graal: Boolean = System.getProperty("java.vendor.url").toLowerCase.contains("graal") // println("graal = " + graal)  // nope, graal won't set or print that here
 
-  def printAnswers: Boolean = !runBatchTests && !suppressAnswers && noOfMinibenchmarkTrials == 1 //&& !enforceSanityChecks // false only for debugging purposes
+  def printAnswers: Boolean = !runTimeoutBenchmarks && !runBatchTests && !suppressAnswers && noOfMinibenchmarkTrials == 1 //&& !enforceSanityChecks // false only for debugging purposes
 
   @deprecated val showIntermediateTimers = false || debug2
 
   // Advanced solver/sampler settings =================================================================================================
 
-  val ignoreThreadConfs: Set[Int] = Set[Int]() // for debugging purposes only
 
   /** true allows the reentry of the inner SAT solver loop using the data structures from the previous iteration
     * true requires switchToBestConfigAfterFirstModel=2. Should normally be true.  */
@@ -277,6 +289,11 @@ package object sharedDefs {
     * Commandline: --solverarg maxSolverThreadsR n */
   var maxSolverThreadsR: Int = -1
 
+  /** If not empty, only the specified threads will be executed. All other threads will be ignored.
+    * E.g., if a total of 6 threads are specified using maxSolverThreadsR and threadSelect = Seq(2,3),
+    * only threads $2 and $3 are actually started, whereas $1 and $4 are omitted. */
+  var threadSelect: Seq[Int] = Seq()
+
   /** if true, we stop sampling if the total cost doesn't significantly change anymore and
     * at least the requested number of models (switch -n) have been generated. Useful mostly for learning weights. However, in
     * deductive-probabilistic and mixed scenarios, cost stagnation before reaching the threshold can
@@ -298,12 +315,12 @@ package object sharedDefs {
     * Use -1l for a pseudo-randomly choosen global PRNG seed.
     * NB: it's useful to fix a certain seed (for reproducibility and in particular for debugging and development) but keep in
     * mind that any additional or omitted consumption of a random number before obtaining the thread-local PRNG seeds from
-    * the global PRNG leads to a different runtime performance. See threadPRNGSeedPool to mitigate this issue. */
-  var seedRngGlobalR: Long = -1L //5588715852799719102l /*-1l*/
-  //5588715852799719102L
+    * the global PRNG leads to a different runtime performance. See threadPRNGSeedPool to mitigate this issue.
+    * Still, even with a fixed seed, there may be sources of run time unpredictability, such as thread synchronization */
+  var seedRngGlobalR: Long = 0L //-1l //5588715852799719102L
 
   /** Seed for thread-local pseudo-random number generator (PRNG)
-    * in an individual solver thread. -1l: use a random seed generated by the global PRNG (see parameter seedRngGlobalR).
+    * in an individual solver thread. -1l: use a random seed generated by the global PRNG, i.e., depending from seedRngGlobalR.
     * Values != -1 cannot be used with diversify (see below). Also observe that a seed != -1l doesn't guarantee
     * deterministic results if multithreading is active (because of the unpredicability of thread scheduling which influences
     * access to data which is shared among threads, such as bestPhase, or sharing of learned nogoods).
@@ -315,7 +332,7 @@ package object sharedDefs {
     * - for detecting UNSAT (not delSAT's focus), a higher frequency of restarts is often desirable
     * - another way to trigger (additional) restarts is using parameter slowThreadAction (see further below).
     * - reusedTrailRestartsR = false increases number of restarts. */
-  var restartTriggerConfP: (AlternativesForThreads[Int], Seq[Int], Seq[Double]) = (AlternativesForThreads[Int](Map(0 -> 3)) /*
+  var restartTriggerConfP: (AlternativesForThreads[Int], Seq[Int], Seq[Double]) = (AlternativesForThreads[Int](Map(0->3, 2->2)) /*
     0=no restarts, 1=fixed interval, 2=geometric (regular or inner-outer scheme, see outerGeom),
     3=Luby. Try with 3 first if unsure.
     Each of these possibly combined with Glucose-style schedule or adapting factor (see
@@ -328,7 +345,7 @@ package object sharedDefs {
     Seq(0d, /*for approach 1 (fixed):*/ 1d, /*for approach 2 (geom):*/ 1.1d /*1.02d*/
       /*<- MiniSAT 2: 2, but observe
           reusedTrailRestartsR. Also might need to be adapted if parameter outerGeom is used*/ ,
-      /* "luby unit factor" for approach 3:*/ 128d /*256d*/) /* per approach
+      /* "luby unit factor" for approach 3:*/ 256d /*256d*/) /* per approach
     in ._1: multipliers, multiplied also(!) with restartsFactModifier (see below).
     Suggestion: try for ._3 first with about 2 or 4 for geom, and a value between 64 and 512 with Luby */ )
 
@@ -356,7 +373,7 @@ package object sharedDefs {
 
   /** Cannot be combined with removeLearnedNogoodAtRegularRestarts=true. Remark: If localRestarts = true, the trigger value for restarts might
     * have to be changed with restartTriggerConfP or restartsGlucoseAndFactorModifierP or localRestartsTriggerThreshFactor. */
-  var localRestartsP: AlternativesForThreads[Boolean] = AlternativesForThreads[Boolean](Map(0 -> false, 1 -> true))
+  var localRestartsP: AlternativesForThreads[Boolean] = AlternativesForThreads[Boolean](Map(0 -> true, 6 -> false))
 
   /** if localRestarts=true, this specifies the threshold with which the current number of
     * conflicts before a restart according to restartTriggerConfP is multiplied. Must be >= 1.
@@ -394,7 +411,7 @@ package object sharedDefs {
     /*if unsure, try with 15 and 12 first, then 12 and 11 */)
 
   /** Only relevant if absEliScoringApproach=0, otherwise ignored; see source code for details.
-    * If true and absEliScoringApproach=0: use EVSIDS (as in Minisat and others) instead of adaptVSIDS */
+    * If true and absEliScoringApproach=0: use EVSIDS (like in Minisat and others) instead of adaptVSIDS */
   val evsids = true // TODO: make this absEliScoringApproach 3
 
   /** Literal scoring approach for regular (non-parameter atom) branching heuristics (such as LRB) - see source code for details */
@@ -472,7 +489,8 @@ package object sharedDefs {
     * If x < 0, larger -x means fewer nogoods are removed.
     * This (and also nogoodRemovalThreshRatioP) is a pretty influencial parameter but no way to determine a good value automatically from the problem is known.
     */
-  var nogoodRemovalThreshInitP: AlternativesForThreads[Int] = AlternativesForThreads(Map(0 -> -300, 2 -> 1024 * 6, 5 -> 1024 * 6)) //-300 //1024*16  /** approach to determine removal of some amount of learned nogoods (see removeLearnedNogoods)
+  var nogoodRemovalThreshInitP: AlternativesForThreads[Int] = AlternativesForThreads(Map(0 -> -300,
+    2 -> 1024 * 6, 5 -> 1024 * 6)) //-300 //1024*16  /** approach to determine removal of some amount of learned nogoods (see removeLearnedNogoods)
 
   /** base parameter for nogood deletion strategy nogoodRemovalThreshInit=0.
     * Lower value = nogood removal procedure called more frequently. No effect if reduceLearnedNogoodAtRestarts=true */
@@ -485,7 +503,7 @@ package object sharedDefs {
   /** Higher values >= 1 mean fewer learned nogoods will be removed.
     * Semantics: factor for geometric growth of learned nogood removal trigger threshold (1d = no changes).
     * No effect if nogoodRemovalThreshInit=0. No effect if reduceLearnedNogoodAtRestarts=true or nogoodRemovalThreshInit=0. */
-  var nogoodRemovalThreshRatioP: AlternativesForThreads[Double] = AlternativesForThreads(Map(0 -> 1.05d, 2 -> 1.5d, 3 -> 1.5d, 5 -> 1.5d))
+  var nogoodRemovalThreshRatioP: AlternativesForThreads[Double] = AlternativesForThreads(Map(0 -> 1.05d, 2 -> 1.05d, 3 -> 1.05d, 5 -> 1.05d))
 
   /** starting value for number of conflicts after which adaption of nogoodRemovalThreshInit takes place (scheme as in MiniSAT)
     * Not for nogoodRemovalThreshInit=0. No effect if reduceLearnedNogoodAtRestarts=true. */
@@ -584,7 +602,9 @@ package object sharedDefs {
   // TODO: split into max iterations for multimodel sampling and max iterations per single model solving.
 
   /** Default timeout (approximate) for both the inner solver and multimodel sampling (whatever
-    * reaches this time limit first). NB: Time out doesn't work well with very low limits (e.g., <10sec), because of the
+    * reaches this time limit first). Affects only the pure sampling and solving time, doesn't account
+    * for parsing, etc (so it can't be used for standard timeout benchmarks).
+    * NB: Timeout doesn't work well with very low limits (e.g., <10sec), because of the
     * intervals the solver does progress checks. */
   var timeoutMs: Long = 60 /*minutes*/ * 60 * 1000
 
@@ -786,7 +806,7 @@ package object sharedDefs {
 
   /** Every x restarts perform a reset to a (global or thread-local, see globalBestPhaseMemo)
     * "best phase" with some noise added. 0 = off.
-    * Simple kind of rephasing during restarts, unrelated to rephasePhaseMemo. */
+    * Simple kind of rephasing during restarts, unrelated to rephasePhaseMemo. May introduce additional nondeterminism. */
   var weakRephasingAtRestartEvery = 0 //10
   // TODO: make seq
 
@@ -795,29 +815,37 @@ package object sharedDefs {
     * best phase so far, random phase, original phases, run of SLS (if useSLSinPhaseMemoRephasing=true - e.g., WalkSAT, SASAT), and
     * other heuristics (see code). */
   var rephasePhaseMemo: Boolean = false
-  // TODO: make seq. Also see useSLSinPhaseMemoRephasingP
+  // TODO: make seq
 
-  var rephasePhaseMemoIntervalInit: Int = 2000 //10000
+  var rephasePhaseMemoIntervalInit: Int = 5000 //2000 //10000
 
   /** Lower=more frequent rephasings. Also see rephasingPhaseMemoIntervalDiv. */
-  var minNoConflictsBeforeFirstRephasing: Int = 5000
+  var minNoConflictsBeforeFirstRephasing: Int = 5000 // 500 //5000
 
   /** The higher the more often rephasing takes place (details see code;
     * also see rephasePhaseMemoIntervalInit). Ignored if rephasePhaseMemo != true */
-  var rephasingPhaseMemoIntervalDiv: Int = 10 //10
+  var rephasingPhaseMemoIntervalDiv: Int = 1000 //10 //1000
   // TODO: make seq
+
+  /** Size of best phases queue (where previously encountered assignment phases are stored for use
+    * in rephasing). At rephasing, on of the entries in this queue is picked randomly. */
+  var bestPhasesQueueSize: Int = 10
+
+  /** If true, each time a progress check occurs a new "best phase" assignment is added to the best phases queue,
+    * even if it's not a greedy improvement (i.e., if it didn't reduce the number of violated nogoods) */
+  var enforceBestPhaseQueueEntry: Boolean = false
 
   // @deprecated var globalPhaseMemo: Boolean = false && !rephasePhaseMemo // /* && !reusedTrailRestartsR ??*/ // more tests are required to confirm which value is best here
   // Remark: we shouldn't use true if rephasePhaseMemo is also true, as otherwise the code wouldn't be threadsafe without massive speed decrease
   // TODO: bug with true (see val absElisSeqArranged ...)
 
-  @deprecated val globalBestPhaseMemo: Boolean = true // leave at true!
+  @deprecated val globalBestPhaseMemo: Boolean = false // leave at true (false not tested enough and likely no advantage over global queue)
 
   // Rephase-by-SLS (Stochastic Local Search) settings:
 
   /** SLS here means occasionally running WalkSAT (or variants, see below) or SASAT over the phase memo assignment during rephasing.
     * true is often faster, but requires more memory.
-    * >>>> Only relevant if rephasePhaseMemo=true <<<<
+    * >>>> Only relevant if rephasePhaseMemo=true. Also requires allowEliToClarkReduciblesLookup=true <<<<
     * Some problems can profit massively from rephase-by-SLS (e.g., g125.17, ii32d3, f400, f800, etc, random 3-SAT) whereas
     * others are just slowed down by activating SLS-rephasing (e.g., hanoi). Observe that SLS requires more
     * memory because it requires maintainEliToFullReducibles=true. Observe threshNoOfAbsElisForSLSrephasing. */
@@ -853,7 +881,13 @@ package object sharedDefs {
 
   var copyPhasesFromAssignmentInSLS: Boolean = false //false
 
-  var alwaysStartFromRandomPhasesInSLS: Boolean = false // if false, the current memorized phases from CDNL are used for the first outer SLS iteration
+  /** If false, the current memorized phases from CDNL are used for the first outer SLS iteration */
+  var alwaysStartFromRandomPhasesInSLS: Boolean = false
+
+  /** If true, we reset SLS (see resetInnerSLSAfterPercentMaxInnerTrials) to state so far with lowest number of violated nogoods (instead of random assignments) */
+  var resetSLStoStoredBestState: Boolean = false
+
+  var semiLocalSearchInSLS: Boolean = false // experimental
 
   var showSLSprogress: Boolean = singleLineProgress
 
@@ -863,7 +897,10 @@ package object sharedDefs {
 
   /** Observe that in SASAT, each of these iterations takes noOfAbsElis x more steps than in WalkSAT.
     * !!! Remark: the other stop criterion for the inner loop is when the temperature reaches MIN_TEMP (see decayRateSLS...). */
-  var maxInnerSLSTrials: Int = (if (useSASATinSLS) 70000 else if (walkSATwithTempDecl) 2000000000 else 2000000)
+  var maxInnerSLSTrials: Int = (if (useSASATinSLS) 70000 else if (walkSATwithTempDecl) 2000000000 else 20000000)
+
+  /** Resets SLS state every x * maxInnerSLSTrials trial. Resets to random or "best" state so far (see resetSLStoStoredBestState) */
+  var resetInnerSLSAfterPercentMaxInnerTrials = 0.1f
 
   var maxTempInSLS: Double = 0.3d // 0.3d  // for WalkSAT this is only relevant if walkSATwithTempDecl is true
 
@@ -938,7 +975,7 @@ package object sharedDefs {
     * To set the threshold, it is advised to use console argument -t or the User API instead of changing this default. */
   var defaultThreshold: Double = 0.01d
 
-  val allowEliToClarkReduciblesLookup: Boolean = initialPhaseMemo == 2 || initialPhaseMemo == 3 || useSLSinPhaseMemoRephasingP.getAllAlternativeValues.contains(true) // should normally be false, but
+  var allowEliToClarkReduciblesLookup: Boolean = initialPhaseMemo == 2 || initialPhaseMemo == 3 || useSLSinPhaseMemoRephasingP.getAllAlternativeValues.contains(true) // should normally be false, but
   // true is a requirement for Stochastic Local Search (see useSLS) and certain initialPhaseMemo approaches.
 
   /** Default size of a watch list. Changes here can have
