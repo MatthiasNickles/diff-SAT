@@ -1,6 +1,10 @@
 <img src="project/delSAT1.jpg" width=140 align="right" style="margin-left: 0px;margin-top: 0px;padding: 0px;clear:top">
 
-### Latest releases ###
+### Latest versions ###
+
+0.5.1
+
+- Bug fix: in rare cases, conflict nogood generation messed up the memory layout
 
 0.5.0 (major update)
 
