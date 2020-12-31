@@ -179,7 +179,7 @@ package object sharedDefs {
 
   var runBatchTests = false
 
-  var batchTestDir = "C:\\Users\\Owner\\workspaceScala211\\DelSAT\\batchTesting" //"C:/Users/Owner/workspaceScala211/DelSAT/batchTesting/" // command line arguments specified inline
+  var batchTestDir = "C:\\Users\\Owner\\workspaceScala211\\DelSAT\\batchTesting" // example folder - replace as appropriate
   // in the header of a test formula (e.g., .cnf file) using c #cdlargs are overridden by command line arguments in the diffSAT call.
 
   var batchTestFileEndings = Seq(".cnf", ".aspif", ".opt")
@@ -189,7 +189,7 @@ package object sharedDefs {
   var runTimeoutBenchmarks = false  /* activate using --timeoutbench  (not to be confused with noOfMinibenchmarkTrials)
    TODO: doesn't work well (piles up too much waste in memory). Use external script for benchmarking. */
 
-  var timeoutBenchmarkDir = "C:\\Users\\Owner\\workspaceScala211\\DelSAT\\timeOutBenchmarks\\SAT11_application_track"
+  var timeoutBenchmarkDir = "C:\\Users\\Owner\\workspaceScala211\\DelSAT\\timeOutBenchmarks\\SAT11_application_track"  // example folder - replace as appropriate
 
   var timeoutBenchmarkTimeoutSec = 5
 
