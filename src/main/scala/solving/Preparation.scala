@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -20,8 +20,8 @@ import aspIOutils._
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, PolynomialTerm, Sum, Variable}
 
-import input.delSAT
-import input.delSAT._
+import input.diffSAT
+import input.diffSAT._
 
 import diff.UncertainAtomsSeprt
 
@@ -166,15 +166,26 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
   symbolsWithoutTranslation = symbols
 
+  val preProcesssVariableElimConfig: (Boolean, Double, Double, Float, Boolean) = if(!preProcesssVariableElimConfigR._1 || satMode && (parameterAtomsElis == null || parameterAtomsElis.length == 0) && (costsOpt.isEmpty || costsOpt.get.innerCostExpressionInstances.isEmpty) ) preProcesssVariableElimConfigR else {
+
+    if(!satMode)
+      stomp(-5014, "preProcesssVariableElimConfig cannot be used in ASP mode - setting ignored")
+    else
+      stomp(-5014, "preProcesssVariableElimConfig cannot be used in probabilistic settings - setting ignored") // as it may create a bias in the sample
+
+    (false, 0d, 0d, 1f, true)
+
+  }
+
   val (clarkNogoods2: Array[IntArrayUnsafeS], removedNogoodsPerAtomOpt, removedPosAtomsOrderedOpt) = {
 
     if (!preProcesssVariableElimConfig._1 || !satMode) {
 
-      if (preProcesssVariableElimConfig._1 && !satMode) // TODO: make preprocessing work again in ASP mode, at least for tight progs. Should be easy (it already worked at some time)
-      stomp(-5009, "preProcesssVariableElimConfig cannot be used in ASP mode")
+      //if (preProcesssVariableElimConfig._1 && !satMode) // TODO: make preprocessing work again in ASP mode, at least for tight progs. Should be easy (it already worked at some time)
+      //stomp(-5009, "preProcesssVariableElimConfig cannot be used in ASP mode")
 
-      if (preProcesssVariableElimConfig._1 && parameterAtomsElis != null && parameterAtomsElis.length > 0)
-        stomp(-5009, "preProcesssVariableElimConfig cannot be used in probabilistic settings") // as it may create a bias in the sample
+     // if (preProcesssVariableElimConfig._1 && parameterAtomsElis != null && parameterAtomsElis.length > 0)
+      //  stomp(-5009, "preProcesssVariableElimConfig cannot be used in probabilistic settings") // as it may create a bias in the sample
 
       (clarkNogoods1, None, None)
 
@@ -613,16 +624,23 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
               }
             }
 
-            if (posEli % 3 == 0 || posEli == noOfPosAtomElis)
-              print("\rVariables checked for elimination: " + posEli + "/" + noOfPosAtomElis + ", removed: " + elimPosAtoms.size)
+            if (posEli % 10 == 0 || posEli == noOfPosAtomElis) {
 
-            if (false && posEli > 7000) {
+              val statusLine = "Variables checked for elimination: " + posEli + "/" + noOfPosAtomElis + ", removed: " + elimPosAtoms.size
+
+              //print("\rVariables checked for elimination: " + posEli + "/" + noOfPosAtomElis + ", removed: " + elimPosAtoms.size)
+
+              printStatusLine(statusLine)
+
+            }
+
+            /*if (false && posEli > 7000) {
 
               println("\nTTT: " + timerToElapsedMs(startTimeVarElim) + "ms")
 
               sys.exit(0)
 
-            }
+            }*/
 
             posEli += 1
 
@@ -769,8 +787,15 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
             i += 1
 
-            if (verbose && (i % 1000 == 0 || i == finalNogoods.length))
-              print("\r#Nogoods checked for self-subsumption: " + i + "/" + finalNogoods.length + ", strengthened: " + noOfStrengthenedNogoods)
+            if (verbose && (i % 1000 == 0 || i == finalNogoods.length)) {
+
+              //print("\r#Nogoods checked for self-subsumption: " + i + "/" + finalNogoods.length + ", strengthened: " + noOfStrengthenedNogoods)
+
+              val statusLine = "#Nogoods checked for self-subsumption: " + i + "/" + finalNogoods.length + ", strengthened: " + noOfStrengthenedNogoods
+
+              printStatusLine(statusLine)
+
+            }
 
           }
 
@@ -1118,7 +1143,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
     offsetIntsForBitsetWithExtReducibles345 + (spaceInBytesForBitsetWithExtReducibles3 >> 2)
   else if (extReducibles == 2) 3 /*5*/ else if (extReducibles == 1) 5 else 3) + 4
 
-  val closingIntsAfterNogoodInReducible = 2 //FFFF
+  val closingIntsAfterNogoodInReducible = 2
   // ^ number of Ints added after the nogood literals in the reducible (currently
   // used as an endmarker(-s) (akin \0 in C-strings) in some extReducibles=1/2 BCP methods)
 
@@ -1128,19 +1153,20 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
   // find out the number of bytes actually allocated (using UNSAFE) for the reducible's slot in memory.
 
   // Layout of memory at a NogoodReducible **if NOT extReducibles3/4/5** (for extReducibles 3/4/5 see above):
-  // Int at index 0 = length (#elis) of nogood (number of literals),
+  // Int at index 0 = length (#elis) of nogood (number of literals (elis)),
   // Long(!) at index 1 with extReducibles1/2: start address for the next false or unassigned eli search in nogood
   // If extReducibles == 1:
   //     Int at index 3 = W1,
   //     Int at index 4 = W2.
   // Float at index offsetIntsOfNogoodInReducible - 4: Nogood activity (only with appropriate nogood scoring approaches, see scoringForRemovalOfLearnedNogoods)
-  // Int at index offsetIntsOfNogoodInReducible - 3:  size (in number of Ints!) of actually allocated memory slot for reducible of a learned nogood (might be larger than the minimum size needed to store the nogood and its metadata)
+  // Int at index offsetIntsOfNogoodInReducible - 3:  size (in number of Ints!) of entire allocated memory slot for reducible of a learned nogood (might be larger than the minimum size needed to store the nogood and its metadata, because of recycling of deleted old learned reducibles)
   // Int at index offsetIntsOfNogoodInReducible - 2: in some configurations (see code): #usesInBCPs
   // Int at index offsetIntsOfNogoodInReducible - 1: LBD (learned nogoods only)
   // From index offsetIntsOfNogoodInReducible on: the actual nogood (as a sequence of elis (literals) as Ints)
-  // After nogood: closingIntsAfterNogoodInReducible*Int filled with 0 (e.g., as nogood end marker pseudo-eli 0 utilized by some fillUp procedures)
-  // Also see generateNogoodReducible() and conflictAnalysis()
-
+  // After nogood (that is, starting at int-index (offsetIntsOfNogoodInReducible+nogoodSize)):
+  //  closingIntsAfterNogoodInReducible*Int filled with 0 (e.g., as nogood end marker pseudo-eli 0 utilized by some fillUp procedures)
+  //
+  // Also see generateNogoodReducible(), conflictAnalysis() and printInfoAboutReducible()
   //sharedDefs.offsetIntsOfNogoodInReducible = offsetIntsOfNogoodInReducible
 
   val alignmentForClarkNogoodReducibles = 0 // in bytes. > 0 had no visible effect on my machine except using up more memory.

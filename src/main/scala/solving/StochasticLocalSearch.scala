@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018-2020 Matthias Nickles
   *
@@ -11,17 +11,20 @@
 
 package solving
 
-import input.delSAT.{stomp}
-
+import input.diffSAT.stomp
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap
-
 import sharedDefs._
 import utils.Various._
-
-import utils.ByteArrayUnsafeS
+import utils.{ByteArrayUnsafeS, RandomLongSet}
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
+/** To test this approach in isolation, use command line options like this:
+  *
+  * *  --solverarg rephasePhaseMemo true --solverarg useSLSinPhaseMemoRephasingP "true" --solverarg allowEliToClarkReduciblesLookup true --solverarg maxInnerSLSTrials 200000000 --solverarg sasatOuterMaxInSLS 1 --solverarg minNoConflictsBeforeFirstRephasing 0 --solverarg rephasePhaseMemoIntervalInit 0 --solverarg maxSolverThreadsR 1 -n 1
+  *
+  */
 object StochasticLocalSearch {
 
   def stochasticLocalSearch(singleSolverThreadData: SingleSolverThreadData,
@@ -43,11 +46,11 @@ object StochasticLocalSearch {
 
     if (debug2) println("\nmaxInnerSLSTrials:  " + maxInnerSLSTrials)
 
-    val minimumNoInnerItsBeforeNextRestartInSLS = Int.MaxValue //400000
+    val minimumNoInnerItsBeforeNextRestartInSLS = (resetInnerSLSAfterPercentMaxInnerTrials * maxInnerSLSTrials).toInt
 
     var minimumNoInnerItsBeforeNextRestartCounterInSLS = minimumNoInnerItsBeforeNextRestartInSLS
 
-    @inline def copySLSPhasesFromBestPhases = {
+    @inline def copySLSPhasesFromBestPhases: Unit = {
 
       var absEli = 1
 
@@ -78,7 +81,7 @@ object StochasticLocalSearch {
 
     }
 
-    @inline def initializeSLSPhasesPartRandomlyPartBest = {
+    /*@inline def initializeSLSPhasesPartRandomlyPartBest = {
 
       var absEli = 1
 
@@ -101,7 +104,7 @@ object StochasticLocalSearch {
 
       }
 
-    }
+    }*/
 
     if (copyPhasesFromAssignmentInSLS) {
 
@@ -297,7 +300,7 @@ object StochasticLocalSearch {
 
     }
 
-    @inline def printViolatedNogoodsInSLS(): Unit = {
+    /*@inline def printViolatedNogoodsInSLS(): Unit = {
 
       println("\n--------- violated nogood:")
 
@@ -328,7 +331,7 @@ object StochasticLocalSearch {
 
       // println("\n-----------------------------------------------")
 
-    }
+    }*/
 
     @inline def countViolatedNogoodsInSLS: Eli = violatedNogoodsInSLS.size
 
@@ -400,7 +403,7 @@ object StochasticLocalSearch {
                                                           /* ^ those reducibles from which after flipping the eli "would be" removed */ ,
                                                           reduciblesInWhichEliWithOldPhaseDidntOccur: NogoodReduciblesSequenceUnsafe
                                                           /* ^ those reducibles to which after flipping the eli "would be" added */ ,
-                                                          assumptionAbsEli: Eli = 0, assumptionPhase: Byte = 0): Eli /*the predicted change to
+                                                          assumptionAbsEli: Eli = 0, assumptionPhase: Byte = 0): Int /*the predicted change to
                                                          cardinality of current set of violated nogoods*/ = {
 
       var removals = 0
@@ -474,6 +477,11 @@ object StochasticLocalSearch {
 
       //println("Flip: " + absEli)
 
+      //println(getAbsEliScore(absEli))
+
+      if (useScoresInSLS > 0f)
+        bumpUpEVSIDSscoreOfAbsEliMinimally(absEli)
+
       val affectedReduciblesPosEli: NogoodReduciblesSequenceUnsafe = eliToReduciblesClark(eliToJavaArrayIndex(absEli))
 
       val affectedReduciblesNegEli: NogoodReduciblesSequenceUnsafe = eliToReduciblesClark(eliToJavaArrayIndex(negateEli(absEli)))
@@ -500,9 +508,11 @@ object StochasticLocalSearch {
 
     }
 
-    @inline def flipTentativeInSLS(absEli: Eli /*the absEli whose phase we pretend to flip*/): Eli /*the predicted change in #violatedNogoods*/ = {
+    @inline def flipTentativeInSLS(absEli: Eli /*the absEli whose phase we pretend to flip*/): Int /*the predicted change in #violatedNogoods*/ = {
 
       val affectedReduciblesPosEli: NogoodReduciblesSequenceUnsafe = eliToReduciblesClark(eliToJavaArrayIndex(absEli))
+      // NB: eliToReduciblesClark is a data structure which is not normally maintained in CDNL; it needs to be activated
+      // using allowEliToClarkReduciblesLookup=true in sharedDefs.scala
 
       val affectedReduciblesNegEli: NogoodReduciblesSequenceUnsafe = eliToReduciblesClark(eliToJavaArrayIndex(negateEli(absEli)))
 
@@ -528,7 +538,9 @@ object StochasticLocalSearch {
 
     assert(maxInnerSLSTrials > 0)
 
-    do { // SASAT outer loop  (only one iteration for WalkSAT here)
+    var minViolatedNogoodsInSLS = Int.MaxValue
+
+    do { // SASAT outer loop  (for WalkSAT, this is optional. Simply resets assignments to new random truth values)
 
       if (sasaOuterI > 1 || alwaysStartFromRandomPhasesInSLS) { // that means we (differently from original SASAT) use the last regular phase in the first sasaOuterI iteration and
         // only afterwards we use a random assignment
@@ -552,7 +564,9 @@ object StochasticLocalSearch {
 
       var flipsInSASAT = 0
 
-      var minViolatedNogoodsInSLS = Int.MaxValue
+      val bestStateInSLS: Array[Byte] =
+        if (!resetSLStoStoredBestState) null.asInstanceOf[Array[Byte]] else Array.ofDim[Byte](noOfAbsElis + 1)
+
 
       @inline def initTempInSLS: Unit = {
 
@@ -580,10 +594,29 @@ object StochasticLocalSearch {
 
         }
 
-        if (showSLSprogress && noOfInnerSLSTrials % (if (useSASATinSLS) 100 else 10000) == 0) {
+        if (c < minViolatedNogoodsInSLS) {
 
-          if (c < minViolatedNogoodsInSLS)
-            minViolatedNogoodsInSLS = c
+          minViolatedNogoodsInSLS = c
+
+          if (resetSLStoStoredBestState) { // TODO: not useful? Remove?
+
+            println("\nRefreshing bestStateInSLS... ; minViolatedNogoodsInSLS = " + minViolatedNogoodsInSLS)
+
+            var absEli = 1
+
+            while (absEli <= noOfAbsElis) {
+
+              bestStateInSLS.update(absEli, getFromPhasePreviousForAbsElis(absEli))
+
+              absEli += 1
+
+            }
+
+          }
+
+        }
+
+        if (showSLSprogress && noOfInnerSLSTrials % (if (useSASATinSLS) 100 else 10000) == 0) {
 
           val pStr = "\r@ " + timerToElapsedMs(solverTimer) / 1000 + "sec: " + (if (useSASATinSLS)
             ("Stochastic Local Search (SASAT) thread $" + threadNo + " (#rephs: " + noOfRephasings + "): #viol nogoods = " + c + " @ sasaOuterI: " + sasaOuterI + "/" + sasatOuterMaxInSLS + ", noOfInnerSLSTrials: " + noOfInnerSLSTrials + "/" + maxInnerSLSTrials +
@@ -599,7 +632,7 @@ object StochasticLocalSearch {
               " @noOfInnerSLSTrials " + noOfInnerSLSTrials + "/" + maxInnerSLSTrials + ", minViolatedNogoodsInSLS = " + minViolatedNogoodsInSLS)
             )
 
-          printStatusLine(pStr)
+          printStatusLine(pStr, cutOffAt = 256)
 
         }
 
@@ -616,76 +649,72 @@ object StochasticLocalSearch {
 
           if (useSASATinSLS) {
 
-            {
+            if (rngLocal.nextFloat() < randomWalkProbInSASAT) { // we perform a random walk or pseudo-WalkSAT step
 
-              if (rngLocal.nextFloat() < randomWalkProbInSASAT) { // we perform a random walk or pseudo-WalkSAT step
+              val randomNogoodReducible = /*violatedNogoodsInSLS.get(rngLocal.nextInt(violatedNogoodsInSLS.size))*/ violatedNogoodsInSLS.getRandomItem(rngLocal)
 
-                val randomNogoodReducible = /*violatedNogoodsInSLS.get(rngLocal.nextInt(violatedNogoodsInSLS.size))*/ violatedNogoodsInSLS.getRandomItem(rngLocal)
+              val randomNogoodReducibleSize = getNogoodSizeFromReducible(randomNogoodReducible)
 
-                val randomNogoodReducibleSize = getNogoodSizeFromReducible(randomNogoodReducible)
+              if (!SASATwithWalkSATsteps) {
 
-                if (!SASATwithWalkSATsteps) {
+                val randomEliInNogood = getEliFromNogoodInReducible(randomNogoodReducible, rngLocal.nextInt(randomNogoodReducibleSize))
 
-                  val randomEliInNogood = getEliFromNogoodInReducible(randomNogoodReducible, rngLocal.nextInt(randomNogoodReducibleSize))
-
-                  flipInSLS(toAbsEli(randomEliInNogood))
-
-                } else {
-
-                  var minViolationsAbsEli = 0
-
-                  var minViolations = Int.MaxValue
-
-                  var i = 0
-
-                  while (i < randomNogoodReducibleSize) {
-
-                    val testAbsEli = toAbsEli(getEliFromNogoodInReducible(randomNogoodReducible, i))
-
-                    val oldCount = countViolatedNogoodsInSLS
-
-                    val testNoViolations = oldCount + flipTentativeInSLS(testAbsEli)
-
-                    if (testNoViolations < minViolations) {
-
-                      minViolations = testNoViolations
-
-                      minViolationsAbsEli = testAbsEli
-
-                    }
-
-                    i += 1
-
-                  }
-
-                  assert(minViolationsAbsEli != 0)
-
-                  flipInSLS(minViolationsAbsEli)
-
-                }
+                flipInSLS(toAbsEli(randomEliInNogood))
 
               } else {
 
-                var absEli = 1
+                var minViolationsAbsEli = 0
 
-                while (absEli <= noOfAbsElis) {
+                var minViolations = Int.MaxValue
 
-                  val increaseNoViolations = flipTentativeInSLS(absEli) // observe that, since we are using nogoods, this is the "opposite" of the increase/decrease δ in
-                  // W. M. Spears: Simulated Annealing for Hard Satisfiability Problems
+                var i = 0
 
-                  val flipProb = 1d / (1d + Math.exp(increaseNoViolations.toDouble / temperatureInSLS))
+                while (i < randomNogoodReducibleSize) {
 
-                  if (rngLocal.nextDouble() < flipProb) {
+                  val testAbsEli = toAbsEli(getEliFromNogoodInReducible(randomNogoodReducible, i))
 
-                    flipsInSASAT += 1
+                  val oldCount = countViolatedNogoodsInSLS
 
-                    flipInSLS(absEli)
+                  val testNoViolations = oldCount + flipTentativeInSLS(testAbsEli)
+
+                  if (testNoViolations < minViolations) {
+
+                    minViolations = testNoViolations
+
+                    minViolationsAbsEli = testAbsEli
 
                   }
 
-                  absEli += 1
+                  i += 1
 
                 }
+
+                assert(minViolationsAbsEli != 0)
+
+                flipInSLS(minViolationsAbsEli)
+
+              }
+
+            } else {
+
+              var absEli = 1
+
+              while (absEli <= noOfAbsElis) {
+
+                val increaseNoViolations = flipTentativeInSLS(absEli) // observe that, since we are using nogoods, this is the "opposite" of the increase/decrease δ in
+                // W. M. Spears: Simulated Annealing for Hard Satisfiability Problems
+
+                val flipProb = 1d / (1d + Math.exp(increaseNoViolations.toDouble / temperatureInSLS))
+
+                if (rngLocal.nextDouble() < flipProb) {
+
+                  flipsInSASAT += 1
+
+                  flipInSLS(absEli)
+
+                }
+
+                absEli += 1
 
               }
 
@@ -695,20 +724,44 @@ object StochasticLocalSearch {
 
             minimumNoInnerItsBeforeNextRestartCounterInSLS -= 1
 
-            if (minimumNoInnerItsBeforeNextRestartCounterInSLS < 0 && violatedNogoodsInSLS.size > minViolatedNogoodsInSLS * 5) {
+            if (minimumNoInnerItsBeforeNextRestartCounterInSLS < 0 /*&& violatedNogoodsInSLS.size > minViolatedNogoodsInSLS * 5*/ ) {
 
-              //println("\nResetting SLS...")
+              println("\nResetting SLS...")
 
               minimumNoInnerItsBeforeNextRestartCounterInSLS = minimumNoInnerItsBeforeNextRestartInSLS
 
-              initializeSLSPhasesRandomly
+              if (!resetSLStoStoredBestState)
+                initializeSLSPhasesRandomly
+              else { // TODO: not useful? Remove?
+
+                var absEli = 1
+
+                while (absEli <= noOfAbsElis) {
+
+                  //minViolCache.update(absEli, getFromPhasePreviousForAbsElis(absEli))
+
+                  if (rngLocal.nextFloat() < 0.001f) {
+
+                    if (rngLocal.nextBoolean())
+                      updateInPhasePreviousForAbsElis(absEli, 0x00.toByte)
+                    else
+                      updateInPhasePreviousForAbsElis(absEli, 0x01.toByte)
+
+                  } else
+                    updateInPhasePreviousForAbsElis(absEli, bestStateInSLS(absEli))
+
+                  absEli += 1
+
+                }
+
+              }
+
 
               initializeViolatedNogoodsInSLS
 
               initTempInSLS
 
             }
-
 
             @inline def findHighestScoredNogood: NogoodReducible = {
 
@@ -789,22 +842,24 @@ object StochasticLocalSearch {
             val randomNogoodReducibleSize = getNogoodSizeFromReducible(randomNogoodReducible)
 
             if (useScoresInSLS > 0f)
-              bumpNogoodReducibleActivity(randomNogoodReducible)
+              bumpNogoodReducibleActivity(randomNogoodReducible) // observe we do this also for clark nogoods here, since purpose here isn't just scoring for learned nogood removal
 
-            if (rngLocal.nextFloat() <= pr) {
+
+            if (!semiLocalSearchInSLS && rngLocal.nextFloat() <= pr /*||
+              semiLocalSearchInSLS && rngLocal.nextFloat() <= 0.3f*/ ) {
 
               val randomEliInNogood = findHighestScoredOrRandomEliInNogood(randomNogoodReducible, randomNogoodReducibleSize)
 
-              if (useScoresInSLS > 0f)
-                bumpUpEVSIDSscoreOfAbsEliMinimally(toAbsEli(randomEliInNogood))
+              //if (useScoresInSLS > 0f)
+              // bumpUpEVSIDSscoreOfAbsEliMinimally(toAbsEli(randomEliInNogood))
 
               flipInSLS(toAbsEli(randomEliInNogood))
 
             } else {
 
-              var minViolationsAbsEli = 0
+              if (!semiLocalSearchInSLS) {
 
-              {
+                var minViolationsAbsEli = 0
 
                 var minViolations = Int.MaxValue
 
@@ -814,9 +869,7 @@ object StochasticLocalSearch {
 
                   val testAbsEli = toAbsEli(getEliFromNogoodInReducible(randomNogoodReducible, i))
 
-                  val increaseNoViolations = flipTentativeInSLS(testAbsEli)
-
-                  val testNoViolations = increaseNoViolations
+                  val testNoViolations = flipTentativeInSLS(testAbsEli)
 
                   if (testNoViolations < minViolations) {
 
@@ -834,15 +887,120 @@ object StochasticLocalSearch {
 
                 }
 
+                //assert(minViolationsAbsEli != 0)
+
+                if (minViolationsAbsEli != 0)
+                  flipInSLS(minViolationsAbsEli)
+
+              } else { // Experimental (allows for taking into account previously violated nogoods and also
+                // to test flipping literals from multiple violated nogoods):
+
+                val violatedNogoods: RandomLongSet = violatedNogoodsInSLS
+
+                if (allViolatedNogoodsSoFarInSLS.size > 100) {
+
+                  while (allViolatedNogoodsSoFarInSLS.size > 10) {
+
+                    allViolatedNogoodsSoFarInSLS.removeAt(rngLocal.nextInt(allViolatedNogoodsSoFarInSLS.size))
+
+                  }
+
+                }
+
+                var k = 0
+
+                while (k < violatedNogoods.size) {
+
+                  allViolatedNogoodsSoFarInSLS.add(violatedNogoods.get(k))
+
+                  k += 1
+
+                }
+
+                if (rngLocal.nextFloat() <= 0.2f) {
+
+                  if (allViolatedNogoodsSoFarInSLS.size == 0 || rngLocal.nextFloat() <= 0.2f) {
+
+                    flipInSLS(rngLocal.nextInt(noOfAbsElis) + 1)
+
+                    /*   val randomEliInNogood = findHighestScoredOrRandomEliInNogood(randomNogoodReducible, randomNogoodReducibleSize)
+
+                       flipInSLS(toAbsEli(randomEliInNogood))
+   */
+                  } else {
+
+                    val randomNogoodReducible: NogoodReducible = allViolatedNogoodsSoFarInSLS.
+                      getRandomItem(rngLocal)
+
+                    val randomNogoodReducibleSize = getNogoodSizeFromReducible(randomNogoodReducible)
+
+                    //val randomEliInNogood: Eli = toAbsEli(getEliFromNogoodInReducible(randomNogoodReducible, rngLocal.nextInt(randomNogoodReducibleSize)))
+
+                    val randomEliInNogood = findHighestScoredOrRandomEliInNogood(randomNogoodReducible, randomNogoodReducibleSize)
+
+                    flipInSLS(toAbsEli(randomEliInNogood))
+
+                  }
+
+                } else if (violatedNogoods.size > 0) {
+
+                  var minViolations = violatedNogoodsInSLS.size * 2 // Int.MaxValue
+
+                  var minViolationsTestAbsElis = mutable.HashSet[Eli]()
+
+                  @inline def noOfConfigsToTest: Int = violatedNogoodsInSLS.size.min(minViolations) * 3
+
+                  var ci = 0
+
+                  while (ci < noOfConfigsToTest) {
+
+                    val testAbsElis = mutable.HashSet[Eli]()
+
+                    var i = 0
+
+                    while (testAbsElis.size <= 3 && i < 5000 && violatedNogoodsInSLS.size > 0) {
+
+                      val testAbsEli = {
+
+                        val randomNogoodReducible: NogoodReducible = violatedNogoods /*allViolatedNogoodsSoFarInSLS*/ .getRandomItem(rngLocal)
+
+                        val randomNogoodReducibleSize = getNogoodSizeFromReducible(randomNogoodReducible)
+
+                        toAbsEli(getEliFromNogoodInReducible(randomNogoodReducible, rngLocal.nextInt(randomNogoodReducibleSize)))
+
+                      }
+
+                      val doTest = testAbsElis.add(testAbsEli)
+
+                      if (doTest)
+                        flipInSLS(testAbsEli)
+
+                      i += 1
+
+                    }
+
+                    if (violatedNogoods.size < minViolations) {
+
+                      minViolations = violatedNogoods.size
+
+                      minViolationsTestAbsElis = testAbsElis
+
+                    }
+
+                    testAbsElis.foreach(flipInSLS(_))
+
+                    ci += 1
+
+                  }
+
+                  if (!minViolationsTestAbsElis.isEmpty)
+                    minViolationsTestAbsElis.foreach(flipInSLS(_))
+
+                }
+
               }
 
-              //assert(minViolationsAbsEli != 0)
-
-              if (minViolationsAbsEli != 0)
-                flipInSLS(minViolationsAbsEli)
-
             }
-
 
           }
 
@@ -856,7 +1014,7 @@ object StochasticLocalSearch {
 
       sasaOuterI += 1
 
-    } while (sasaOuterI < sasatOuterMaxInSLS && useSASATinSLS && !stopSolverThreads)
+    } while (sasaOuterI < sasatOuterMaxInSLS /*&& useSASATinSLS */ && !stopSolverThreads)
 
     if (copySLSPhasesToBestPhasesInSLS) {
 

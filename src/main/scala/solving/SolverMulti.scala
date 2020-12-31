@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018-2020 Matthias Nickles
   *
@@ -13,20 +13,22 @@ package solving
 
 import java.util
 import java.util.concurrent._
-import sun.misc.Contended
+
+//import jdk.internal.vm.annotation.Contended
+//import sun.misc.Contended
 
 import aspIOutils._
 
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, Variable}
 
-import input.delSAT._
+import input.diffSAT._
 import it.unimi.dsi.fastutil.ints.{IntOpenHashSet, _}
 
 import sharedDefs._
 
 import input.UNSAFEhelper._
-import input.{UNSAFEhelper, delSAT}
+import input.{UNSAFEhelper, diffSAT}
 
 import utils._
 import utils.Various._
@@ -50,7 +52,7 @@ class SolverMulti(prep: Preparation) {
                                     noOfSecondaryModels: Int,
                                     prep: Preparation,
                                     requestedNumberOfModels: Int /*-1: stopSolverThreads at minimum number of models required to reach threshold*/ ,
-                                    costThreshold: Double,  // the target cost
+                                    costThreshold: Double, // the target cost
                                     maxIt: Int,
                                     maxSamplingTimeMs: Long,
                                     offHeapGarbageCollectionMode: Int /*0: never do any off-heap ("unsafe memory") garbage collection,
@@ -61,18 +63,17 @@ class SolverMulti(prep: Preparation) {
     sampling tasks (since these typically generate small models and need to be fast) or if only
     a single model has been requested by the user, in which case occupied off-heap memory is simply released by the OS on program exit)*/);
 
-
   val localSingleSamplerThreadPool = /*Executors.newFixedThreadPool(3)*/
     if (false /*localSolverParallelThresh == localSolverParallelThreshMax*/ )
-    null.asInstanceOf[ThreadPoolExecutor] else
-    new ThreadPoolExecutor(3 /*TODO: set depending on whether parallel unit propagation specified*/ ,
-      8 /*<- TODO: set depending on unit prop config and #CPUs*/ , 10, TimeUnit.SECONDS,
-      new LinkedBlockingQueue[Runnable](256) /*new SynchronousQueue[Runnable]*/) // used for various local (within a solver thread) multithreading
+      null.asInstanceOf[ThreadPoolExecutor] else
+      new ThreadPoolExecutor(3 /*TODO: set depending on whether parallel unit propagation specified*/ ,
+        8 /*<- TODO: set depending on unit prop config and #CPUs*/ , 10, TimeUnit.SECONDS,
+        new LinkedBlockingQueue[Runnable](256) /*new SynchronousQueue[Runnable]*/) // used for various local (within a solver thread) multithreading
 
 
   val parallelBCPThreadPool: ExecutorService = localSingleSamplerThreadPool
 
-  @Contended val sampledModels = ArrayBuffer[(Array[Eli], IntOpenHashSet)]()
+  /*@Contended*/ val sampledModels = ArrayBuffer[(Array[Eli], IntOpenHashSet)]()
 
   //@volatile var refreshedBestPhasesGlobal: Int = 0
 
@@ -157,11 +158,11 @@ class SolverMulti(prep: Preparation) {
 
         var j = 0
 
-        while(j < sampledModels.length) {
+        while (j < sampledModels.length) {
 
           val model = sampledModels(j)
 
-          if(model._2.contains(measuredAtomEli))
+          if (model._2.contains(measuredAtomEli))
             count += 1
 
           j += 1
@@ -273,7 +274,6 @@ class SolverMulti(prep: Preparation) {
 
   }
 
-
   @inline def tempUpdMeasuredAtomsFreqs(appending: Boolean,
                                         newModel: IntOpenHashSet,
                                         measuredAtomElis: Array[Eli],
@@ -281,7 +281,7 @@ class SolverMulti(prep: Preparation) {
 
     assert(appending)
 
-    if(appending) {
+    if (appending) {
 
       var i = 0
 
@@ -304,7 +304,7 @@ class SolverMulti(prep: Preparation) {
 
       }
 
-    }/* nope, gives NaN for #models = 0
+    } /* nope, gives NaN for #models = 0
     else {  // undoes one previous appending call
 
       var i = 0
@@ -335,7 +335,7 @@ class SolverMulti(prep: Preparation) {
   @inline def predictTotalCostWithHypotheticalModel(newModel: IntOpenHashSet,
                                                     measuredAtomElis: Array[Eli]): Double = {
 
-  //  println("\nBefore:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
+    //  println("\nBefore:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
 
     val originalMeasuredAtomValues: Array[Double] = measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal)
 
@@ -344,13 +344,13 @@ class SolverMulti(prep: Preparation) {
       measuredAtomElis = measuredAtomElis,
       sampledModels.length)
 
-   // println("  With hypothetical update:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
+    // println("  With hypothetical update:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
 
     val predictedNewTotalCost = currentCosts(costFctsInner)
 
-    measuredAtomElis.zipWithIndex.map{ case (eli, index) => eliToVariableInCostFunctions(eli).set(new DoubleReal(originalMeasuredAtomValues(index))) }
+    measuredAtomElis.zipWithIndex.map { case (eli, index) => eliToVariableInCostFunctions(eli).set(new DoubleReal(originalMeasuredAtomValues(index))) }
 
-   // println("\nAfter reverting to original:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
+    // println("\nAfter reverting to original:\n" + measuredAtomElis.map(eli => eliToVariableInCostFunctions(eli).getReal).mkString(","))
 
     predictedNewTotalCost._1
 
@@ -387,7 +387,7 @@ class SolverMulti(prep: Preparation) {
     * @param sampleMultiConf
     * @return (sequence of sampled symbolic models, sequence of pairs (model as array of elis, model as eli hash set))
     */
-  def sampleMulti(sampleMultiConf: SampleMultiModelsConf): SamplingResult/*(mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)], Long)*/ = {
+  def sampleMulti(sampleMultiConf: SampleMultiModelsConf): SamplingResult /*(mutable.Seq[Array[Pred]], ArrayBuffer[(Array[Eli], IntOpenHashSet)], Long)*/ = {
 
     import sampleMultiConf._
 
@@ -431,20 +431,20 @@ class SolverMulti(prep: Preparation) {
       stomp(-5012)
 
     if (requestedNumberOfModels != 1 && (!freeOrReassignDeletedNogoodMemory || freeDeletedNogoodMemoryApproach != 2))
-      stomp(-5006, "If -n 1 is not specified, freeOrReassignDeletedNogoodMemory must be true and freeDeletedNogoodMemoryApproach must be 2")
+      stomp(-5009, "If -n 1 is not specified, freeOrReassignDeletedNogoodMemory must be true and freeDeletedNogoodMemoryApproach must be 2")
 
     if (requestedNumberOfModels != 1 && nogoodRemovalUsingRecyclingFromTotalHistoryEvery > 0)
-      stomp(-5006, "If -n 1 is not specified, nogoodRemovalUsingRecyclingFromTotalHistoryEvery must be 0 (deactivated)")
+      stomp(-5009, "If -n 1 is not specified, nogoodRemovalUsingRecyclingFromTotalHistoryEvery must be 0 (deactivated)")
 
-    if(writeRuntimeStatsToFile) {
+    if (writeRuntimeStatsToFile) {
 
-      assert(delSAT.stats != null)
+      assert(diffSAT.stats != null)
 
-      input.delSAT.stats.writeEntry(key = "timeoutMs", value = timeoutMs, solverThreadNo = 0/*0: outside solver solver thread or thread irrelevant */)
+      input.diffSAT.stats.writeEntry(key = "timeoutMs", value = timeoutMs, solverThreadNo = 0 /*0: outside solver solver thread or thread irrelevant */)
 
-      input.delSAT.stats.writeEntry(key = "targetCost", value = costThreshold, solverThreadNo = 0)
+      input.diffSAT.stats.writeEntry(key = "targetCost", value = costThreshold, solverThreadNo = 0)
 
-      input.delSAT.stats.writeEntry(key = "requestedNumberOfModels", value = requestedNumberOfModels, solverThreadNo = 0)
+      input.diffSAT.stats.writeEntry(key = "requestedNumberOfModels", value = requestedNumberOfModels, solverThreadNo = 0)
 
     }
 
@@ -641,18 +641,18 @@ class SolverMulti(prep: Preparation) {
 
         sampledModels.append(newModelOpt.get)
 
-        if(reuseSolverData)
+        if (reuseSolverData)
           reentrySolverDataOpt = newReentrySolverDataOpt
 
         totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity
         else
           updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
-          measuredAtomElis = measuredAtomsElis,
-          sampledModels,
-          costFctsInner = costFctsInner,
-          fromScratch = false /*true*/,
-          computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
-        ).get._1
+            measuredAtomElis = measuredAtomsElis,
+            sampledModels,
+            costFctsInner = costFctsInner,
+            fromScratch = false /*true*/ ,
+            computeCosts = true // TODO: computing the costs (for convergence check and deficitOrderedUncertainAtoms) is costly, so we don't do this every time
+          ).get._1
 
         costDifForStagn = Math.abs(oldTotalCost - totalCost)
 
@@ -680,11 +680,11 @@ class SolverMulti(prep: Preparation) {
 
           if (showNumDiffProgressForDebugging) println("\nSampling in progress... Sampled " + sampledModels.length + " models.\nOuter-outer sampling iteration (with allowNumFiniteDiff = true, mixedScenario = " + (if (mixedScenario) "true" else "false") + ") " + it + " (of max " + maxIt + ") complete. " +
             "Current total cost: " + totalCost + " (threshold: " + costThreshold + "). #models: " + sampledModels.length + "\n")
-          else if(it % 2000 == 0)
+          else if (it % 2000 == 0)
             println("\nSampling in progress... Sampled " + sampledModels.length + " models. Current total cost: " + totalCost + " (threshold: " + costThreshold + ")")
 
-          if(writeRuntimeStatsToFile)
-            input.delSAT.stats.writeEntry(key = "totalCostIntermediate", value = totalCost, solverThreadNo = 0)
+          if (writeRuntimeStatsToFile)
+            input.diffSAT.stats.writeEntry(key = "totalCostIntermediate", value = totalCost, solverThreadNo = 0)
 
         }
 
@@ -700,7 +700,7 @@ class SolverMulti(prep: Preparation) {
       if (stopSamplingOnStagnation && costDifForStagn < stagnationTol && totalCost > costThreshold)
         stomp(-5011)
 
-      if(debug) println("minCostSf (over all samples models) = " + minCostSf)
+      if (debug) println("minCostSf (over all samples models) = " + minCostSf)
 
     } else do { // the (mostly deprecated) simpler outer-outer sampling loop for purely _deductive_ probabilistic inference (measured atoms = parameter atoms) and plain SAT/ASP solving
 
@@ -745,7 +745,7 @@ class SolverMulti(prep: Preparation) {
 
       sampledModels.append(newModelOpt.get)
 
-      if(reuseSolverData)
+      if (reuseSolverData)
         reentrySolverDataOpt = newReentrySolverDataOpt
 
       totalCost = if (ignoreParamVariablesR) Double.NegativeInfinity else updateMeasuredAtomsFreqsAndComputeCost(Some(newModelOpt.get._2),
@@ -763,11 +763,11 @@ class SolverMulti(prep: Preparation) {
       if (showProgressStats)
         println("Sampling in progress... Sampled " + sampledModels.length + " models.\nOuter-outer sampling iteration " + it + " (of max " + maxIt + ") complete. " +
           "Current total cost: " + totalCost + " (threshold: " + costThreshold + ")")
-      else if(it % 10 == 0)
+      else if (it % 10 == 0)
         println("Sampling in progress... Sampled " + sampledModels.length + " models. Current total cost: " + totalCost + " (threshold: " + costThreshold + ")")
 
-      if(writeRuntimeStatsToFile)
-        input.delSAT.stats.writeEntry(key = "totalCostIntermediate", value = totalCost, solverThreadNo = 0)
+      if (writeRuntimeStatsToFile)
+        input.diffSAT.stats.writeEntry(key = "totalCostIntermediate", value = totalCost, solverThreadNo = 0)
 
       it += 1
 
@@ -838,18 +838,18 @@ class SolverMulti(prep: Preparation) {
 
     def finalActionsAfterSampling(): Unit = {
 
-      if(reuseSolverData && noOfMinibenchmarkTrials > 1)  // TODO: this is needed due to unknown bug which
-        // causes an off-heap memory leak if reuseSolverData=true.
+      if (reuseSolverData && noOfMinibenchmarkTrials > 1) // TODO: this is needed due to unknown bug which
+      // causes an off-heap memory leak if reuseSolverData=true.
         stomp(-10000, "If noOfMinibenchmarkTrials > 1, sharedDefs.reuseSolverData needs to be false")
 
       //System.gc()
 
       if (offHeapGarbageCollectionCriterion(lockedSolverData = false)) { // with reuseSolverData=true within the sampling loop, we
-      // couldn't collect model data garbage in the inner solver thread, we had to wait until this point.
+        // couldn't collect model data garbage in the inner solver thread, we had to wait until this point.
 
         reentrySolverDataOpt.foreach(_.queueOffHeapGarbageInSingleSolver)
 
-       // nope, as these are allocated outside the "mini-benchmarking" loop: aspifOrDIMACSParserResult.rulesOrClauseNogoods.foreach(_.foreach{ _.addToGarbage() })
+        // nope, as these are allocated outside the "mini-benchmarking" loop: aspifOrDIMACSParserResult.rulesOrClauseNogoods.foreach(_.foreach{ _.addToGarbage() })
 
 
       }
@@ -862,15 +862,15 @@ class SolverMulti(prep: Preparation) {
 
       if (writeRuntimeStatsToFile) {
 
-        input.delSAT.stats.writeEntry(key = "totalCost", value = totalCost, solverThreadNo = 0)
+        input.diffSAT.stats.writeEntry(key = "totalCost", value = totalCost, solverThreadNo = 0)
 
-        input.delSAT.stats.writeEntry(key = "sampledModels", value = sampledModels.length, solverThreadNo = 0)
+        input.diffSAT.stats.writeEntry(key = "sampledModels", value = sampledModels.length, solverThreadNo = 0)
 
-        input.delSAT.stats.writeEntry(key = "targetCostReached", value = totalCost <= costThreshold, solverThreadNo = 0)
+        input.diffSAT.stats.writeEntry(key = "targetCostReached", value = totalCost <= costThreshold, solverThreadNo = 0)
 
-        input.delSAT.stats.writeEntry(key = "targetNoOfModelsReached", value = sampledModels.length >= requestedNumberOfModels, solverThreadNo = 0)
+        input.diffSAT.stats.writeEntry(key = "targetNoOfModelsReached", value = sampledModels.length >= requestedNumberOfModels, solverThreadNo = 0)
 
-        input.delSAT.stats.writeEntry(key = "timedout", value = timedOut, solverThreadNo = 0)
+        input.diffSAT.stats.writeEntry(key = "timedout", value = timedOut, solverThreadNo = 0)
 
       }
 
@@ -882,7 +882,7 @@ class SolverMulti(prep: Preparation) {
 
         println("\nSampling complete; cost (over all models): " + totalCost + " (<= threshold " + costThreshold + ")\n" + sampledModels.length + " model(s) sampled (with replacement)\n")
 
-      } else if(sampledModels.length > 0/*otherwise UNSAT*/) {
+      } else if (sampledModels.length > 0 /*otherwise UNSAT*/ ) {
 
         stomp(-5008, "\nCost reached: " + totalCost + " (> threshold " + costThreshold + ")")
 
@@ -924,14 +924,14 @@ class SolverMulti(prep: Preparation) {
 
     }
 
-    val sampledModelsSymbolicWithNegLits = if(!satMode) {
+    val sampledModelsSymbolicWithNegLits = if (!satMode) {
 
       val symbolicModels = sampledModelsUsingElisWithEvalResolved.map(model => model._1.map(eli => symbolsWithoutTranslation(eli - 1)))
 
       symbolicModels // In ASP mode, any classically-negative literals are already symbols (e.g., "-a") whereas
       // default negation is represented by absence of the respective atom.
 
-    } else {  // In SAT-mode, we need to fill up the model for printing with negative literals if the positive literal isn't present. :
+    } else { // In SAT-mode, we need to fill up the model for printing with negative literals if the positive literal isn't present. :
 
       val fullSATModelsWithNegLiterals = sampledModelsUsingElisWithEvalResolved.map((model: (Array[Eli], IntOpenHashSet)) => {
 
@@ -949,7 +949,7 @@ class SolverMulti(prep: Preparation) {
     }
 
     //if (debug && satMode) println("sampledModelsSymbolic (positive literals only):\n" +
-      //sampledModelsSymbolic.map((m: Array[String]) => m.map(_.toInt).sorted.mkString(" ")).mkString("\n"))
+    //sampledModelsSymbolic.map((m: Array[String]) => m.map(_.toInt).sorted.mkString(" ")).mkString("\n"))
 
     finalActionsAfterSampling()
 
@@ -967,7 +967,7 @@ class SolverMulti(prep: Preparation) {
     // Remark: there is sometimes a discrepancy (a few MB) between this and the amount which was available at the start of
     // sampleSingle() of unknown cause - perhaps some unaccounted slack generated by unsafe's memory management?
 
-    if(UNSAFEhelper.debugMode) showRemainingAllocsDebug()
+    if (UNSAFEhelper.debugMode) showRemainingAllocsDebug()
 
   }
 
@@ -979,7 +979,7 @@ class SolverMulti(prep: Preparation) {
     * @return Option[model as array of elis, model as hash set of elis] or None (UNSAT)
     */
   def sampleSingleRacing(collectOffHeapGarbage: Boolean, maxSamplingTimeMs: Long,
-                         reentrySingleSolverThreadDataOpt: Option[SingleSolverThreadData] = None): (Option[(Array[Eli], IntOpenHashSet)], Option[SingleSolverThreadData]/*<-- data from successful solver run, for optional reentry*/) = {
+                         reentrySingleSolverThreadDataOpt: Option[SingleSolverThreadData] = None): (Option[(Array[Eli], IntOpenHashSet)], Option[SingleSolverThreadData] /*<-- data from successful solver run, for optional reentry*/ ) = {
     // If the returned models list is empty, this can mean either UNSAT or UNKNOWN (inner solver aborted, e.g., timeout),
     // that is, at this level these two results cannot be distinguished from each other anymore.
 
@@ -997,7 +997,7 @@ class SolverMulti(prep: Preparation) {
 
     val enforceProgressChecksEveryTrials = enforceProgressChecksEveryTrialsR
 
-    val minimumTrialsBeforeFirstProgressCheck = 50000.min(enforceProgressChecksEveryTrials)
+    val minimumTrialsBeforeFirstProgressCheck = 500.min(enforceProgressChecksEveryTrials)
 
     val threadChangeCheckFreq = Math.abs(abandonOrSwitchSlowThreads).toInt.max(1)
 
@@ -1030,16 +1030,16 @@ class SolverMulti(prep: Preparation) {
 
       if (UNSAFEhelper.debugMode) println("Available off-heap memory at start of sampleSingle:  " + approxSizeOfCurrentFreeUnsafeMemory() + " (" + approxSizeOfCurrentFreeUnsafeMemory().toDouble / 1073741824d + " GB)")
 
-      if(nogoodRemovalUsingRecyclingFromTotalHistoryEvery > 0 && collectOffHeapGarbage)
+      if (nogoodRemovalUsingRecyclingFromTotalHistoryEvery > 0 && collectOffHeapGarbage)
         stomp(-5017, "With nogoodRemovalUsingRecyclingFromTotalHistoryEvery > 0 no complete off-heap garbage collection is possible")
 
       def unsat(): Unit = {
 
-        if(!stopSolverThreads && !unsatMessagePrinted) {
+        if (!stopSolverThreads && !unsatMessagePrinted) {
 
           unsatMessagePrinted = true
 
-          println("\n\nUNSAT" + (if (verbose) "\n  (reporting: solver thread $" + threadNo + ")" else ""))
+          println("\n\nUNSAT " + (if (verbose) "\n  (reporting: solver thread $" + threadNo + ")" else ""))
 
         }
 
@@ -1054,7 +1054,7 @@ class SolverMulti(prep: Preparation) {
 
         stopSolverThreads = true
 
-        println("\n\nUNKNOWN (inner solver timed out after " + timeoutMs + "ms)")
+        println("\n\nUNKNOWN (inner solver timed out after " + timeoutMs + "ms)")  // note that the actual stomp warning occurs later (in callers)
 
         if (collectOffHeapGarbage)
           queueOffHeapGarbageInSingleSolver
@@ -1093,7 +1093,7 @@ class SolverMulti(prep: Preparation) {
 
         @inline def toM(n: Long) = round(n.toDouble / 1000000d, 1) + "m"
 
-        @inline def toKorM(n: Long): String = if(n < 1000) n.toString else if(n < 1000000) toK(n) else toM(n)
+        @inline def toKorM(n: Long): String = if (n < 1000) n.toString else if (n < 1000000) toK(n) else toM(n)
 
         //lazy val avgAbsEliScore = totalAbsEliScoreForDebugging / noOfAbsElis.toDouble // updated only at score rescaling, otherwise 0!
 
@@ -1101,19 +1101,20 @@ class SolverMulti(prep: Preparation) {
 
         if (!stopSolverThreads && peakPercent >= 0) {
 
-          if(writeRuntimeStatsToFile) {
+          if (writeRuntimeStatsToFile) {
 
-            input.delSAT.stats.writeEntry(key = "minUnassignedGlobal", value = minUnassignedGlobal, solverThreadNo = 0)
+            input.diffSAT.stats.writeEntry(key = "minUnassignedGlobal", value = minUnassignedGlobal, solverThreadNo = 0)
 
-            input.delSAT.stats.writeEntry(key = "noOfConflictsTotal", value = noOfConflictsTotal, solverThreadNo = threadNo)
+            input.diffSAT.stats.writeEntry(key = "noOfConflictsTotal", value = noOfConflictsTotal, solverThreadNo = threadNo)
 
           }
 
           // The length of the following string should be below maxAssumedConsoleWidth to avoid scrolling of status line
 
           val pStr = ("@" + timerToElapsedMs(solverTimer) / 1000 + "s:" +
-            "Rm:" + (if (minUnassignedGlobal <= 1) "1" /*2 is the finest resolution possible with minUnassignedGlobal*/ else
-            toKorM(minUnassignedGlobal)) +  //"(<" + /*(if (peakPercent == 99) "<=" else "")*/ +(100 - peakPercent + 1) + "%)," + // not exact, since we sample this value not every trial
+            "Rm:" + (if (minUnassignedGlobal <= 1) "1" /*2 is the finest resolution possible with minUnassignedGlobal*/
+          else
+            toKorM(minUnassignedGlobal)) + //"(<" + /*(if (peakPercent == 99) "<=" else "")*/ +(100 - peakPercent + 1) + "%)," + // not exact, since we sample this value not every trial
             //"Prgr~" + progressEstimGlobalPercent + "%|" +
             ",t$" + threadNo + ":" +
             //"Progress estim thread: " + progressEstimThreadPercent + "%, " +
@@ -1121,7 +1122,7 @@ class SolverMulti(prep: Preparation) {
             //(if (debug && computeAvgLR) "avgLR: " + (avgLR /*- (avgLR % 0.01)*/) + ", " else "") +
             /*includes nogoods shared with this thread -> */ "LN:" /*after removal*/ + (toKorM(getApproxNoOfLearnedNogoods) /*if (firstRecordedNogi >= 1) nogiClarkToNogoodReducible.size - firstRecordedNogi else 0*/) + "" +
             // (if (noOfRemovedNogoods >= 0) " after removing " + noOfRemovedNogoods + ", " else ", ") +
-            "(DN:" + toKorM(noOfDeletedLearnedNogoods) + ",SN:" + toKorM(noOfSharedNogoods) + (if(learnedNogoodReduciblesListTotal != null) ",rcycld:" + toKorM(noOfRecycledLearnedNogoodsFromTotal) +" from:" + toKorM(learnedNogoodReduciblesListTotal.size) else "") + ")," +
+            "(DN:" + toKorM(noOfDeletedLearnedNogoods) + ",SN:" + toKorM(noOfSharedNogoods) + (if (learnedNogoodReduciblesListTotal != null) ",rcycld:" + toKorM(noOfRecycledLearnedNogoodsFromTotal) + " from:" + toKorM(learnedNogoodReduciblesListTotal.size) else "") + ")," +
             (if (debug /*&& threshForPreFilterLearnedNogoods != 0d */ && keptByPreFilterForNogoods > 0) "preFiltered:" + Math.floor(removedNogoodsByPrefilter * 1000) / 10 + "%," else "") +
             "Rs:" + toKorM(noOfRestarts) + "," +
             (if (debug) "PrgChks:" + noOfProgressChecks + "," else "") +
@@ -1133,7 +1134,7 @@ class SolverMulti(prep: Preparation) {
             //(if (debug) "getApproxNoOfLearnedNogoods: " + getApproxNoOfLearnedNogoods + ", " else "") +
             //  (if (debug) "noOfNogoodRemovalPhases: " + noOfNogoodRemovalPhases + ", " else "") +
             (if (debug) "rsclLitScrs:" + rescalingsAbsEliScores + "," else "") +
-            (if (debug) "noisePhsMm:" + round(noisePhaseMemo,6) + "," else "") +
+            (if (debug) "noisePhsMm:" + round(noisePhaseMemo, 6) + "," else "") +
             //(if (debug) "totalAbsEliScore: " + (totalAbsEliScoreForDebugging.toInt /*set only at rescaling!*/) + ", " else "") +
             // (if (debug) "Avg var score: " + (avgAbsEliScore - (avgAbsEliScore % 0.000000000000001)) + ", " else "") +
             (if (debug && noOfReducibleSpaceRequests > 0) "MemMisses:" + round(noOfReducibleSpaceRequestsMisses.toDouble / noOfReducibleSpaceRequests.toDouble, 3) + "," else "") +
@@ -1141,7 +1142,7 @@ class SolverMulti(prep: Preparation) {
             //(if (debug) "confls/trials:" + round(noOfConflictsTotal.toFloat / trials.toFloat,2) + "," else "") +
             //"linePrint: " + linePrint + ", " +
             //  (if (debug && enforceLBDemaComputation) "lbdEmaFast: " + round(lbdEmaFast, 2) + ", " else "") +
-             (if (debug && enforceLBDemaComputation) "lbdEmaSlow: " + round(lbdEmaSlow, 2) + ", " else "") +
+            (if (debug && enforceLBDemaComputation) "lbdEmaSlow: " + round(lbdEmaSlow, 2) + ", " else "") +
             //(if (debug) "Conflicts/trials: " + round(trialsPerConflicts, 2) + ", " else "") +
             //(if (debug && rndmBranchProbR < 0f) "rndmBranchProb: " + rndmBranchProb else "") +
             (if (true) "P/s:" + toKorM(avgNoPropagationsPerSecond) + "," else "") +
@@ -1257,6 +1258,12 @@ class SolverMulti(prep: Preparation) {
 
           if (violatedNogoodReducible != 0l) { // conflict...
 
+            if(getNogoodSizeFromReducible(violatedNogoodReducible) <= 0) {  // if this happens, likely the space reserved for some reducible flew over
+
+              stomp(-10000, "Invalid internal state (thread " + threadNo + "):\n  getNogoodSizeFromReducible(" + violatedNogoodReducible + ") = " + getNogoodSizeFromReducible(violatedNogoodReducible))
+
+            }
+
             if (dl == 0) { // nowhere to go back
 
               // if (debug2)
@@ -1330,11 +1337,9 @@ class SolverMulti(prep: Preparation) {
                 } else
                   defaultNogoodAllocationSize.max(getNogoodSizeFromReducible(violatedNogoodReducible) * 2)
 
-                val newNogoodReducibleInitial: NogoodReducible = reserveReducibleSpace(requiredReducibleSpaceSizeInNoOfInts = workingReducibleSizeInConflictAnalysisInNoOfInts)
+                val newNogoodReducibleInitial: NogoodReducible = reserveReducibleSpace(minimumRequiredReducibleSpaceSizeInNoOfInts = workingReducibleSizeInConflictAnalysisInNoOfInts)
 
-                /*val /*(jumpBackLevelFromConflict: Int, sigmaEli: Eli, newLearnedNogoodReducible)*/conflictAnalysisResult: ConflictAnalysisResult =*/
-                conflictAnalysis(violatedNogoodReducible, newNogoodReducibleInitial,
-                  workingReducibleSizeInConflictAnalysisInNoOfInts)
+                conflictAnalysis(violatedNogoodReducible, newNogoodReducibleInitial)
                 /*
                               println("\n  want to jump back to: " + newLevel)
 
@@ -1478,14 +1483,12 @@ class SolverMulti(prep: Preparation) {
 
                 }
 
-
                 if (extReducibles == 2 || extReducibles == 4 || extReducibles == 3 || extReducibles == 5 || extReducibles == 0) {
 
                   if (extReducibles == 2)
                     setupNewReducibleForExt2(conflictAnalysisResult_conflictNogoodReducible)
 
                   possiblyAddLearnedNogoodToReducibleLists(trials, conflictAnalysisResult_conflictNogoodReducible) // TODO: why is this not at same location as possyiblyAdd for extReducibles=1?
-
 
                 }
 
@@ -1564,6 +1567,12 @@ class SolverMulti(prep: Preparation) {
 
                       noOfProgressChecks += 1 // (in this thread)
 
+                     /* println("Progress check; current time: " + System.currentTimeMillis() + ", maxSamplingTimeMs: " + maxSamplingTimeMs +
+
+                      "\nSystem.currentTimeMillis() - maxSamplingTimeMs in sec: " + (System.currentTimeMillis() - maxSamplingTimeMs)/1000
+
+                      )*/
+
                       if(System.currentTimeMillis() > maxSamplingTimeMs) {
 
                         unknown()
@@ -1598,7 +1607,7 @@ class SolverMulti(prep: Preparation) {
                       }
 
                       if (bestPhasesQueue != null && noOfConflictsTotal > 100000 /*since this is very costly*/ &&
-                        (globalBestPhaseMemo && progressGlobal || !globalBestPhaseMemo && progress)) {
+                        (enforceBestPhaseQueueEntry ||  globalBestPhaseMemo && progressGlobal || !globalBestPhaseMemo && progress)) {
 
                         sharedAmongSingleSolverThreads.refreshedBestPhasesGlobal += 1
 
@@ -1627,12 +1636,11 @@ class SolverMulti(prep: Preparation) {
 
                         bestPhasesQueue.synchronized {
 
-                          bestPhasesQueue.enqueueFinite(newBestPhases, maxSize = 1) // keeping >1 "best" states doesn't seem to improve things, but more tests required
+                          bestPhasesQueue.enqueueFinite(newBestPhases, maxSize = bestPhasesQueueSize) // keeping >1 "best" states doesn't seem to improve things, but more tests required
 
                         }
 
                       }
-
 
                       preReportedMinUnassignedGlobal = minUnassignedGlobal
 
@@ -1773,7 +1781,6 @@ class SolverMulti(prep: Preparation) {
 
                       printSingleLineProgress(trials, noOfRemovedNogoods = -1)
 
-
                     }
 
                   }
@@ -1790,7 +1797,7 @@ class SolverMulti(prep: Preparation) {
 
           if (!stopSolverThreads) {
 
-            if(debug) println("\n\nModel candidate found. SolverTimer: " + timerToElapsedMs(solverTimer) + " ms\nReporting thread: $" + threadNo + "\n")
+            if (debug) println("\n\nModel candidate found. SolverTimer: " + timerToElapsedMs(solverTimer) + " ms\nReporting thread: $" + threadNo + "\n")
 
             assert(orderNumber - 1 == noOfAllElis / 2)
 
@@ -1976,13 +1983,13 @@ class SolverMulti(prep: Preparation) {
 
                 val modelCandArray: Array[Eli] = assignmentAsHashSet.toIntArray // modelCand.toIntArray
 
-                if(debug) println("modelCandArray:\n " + modelCandArray.sorted.mkString(" ") + "\nassignmentAsHashSet:\n" + assignmentAsHashSet.toIntArray.mkString(" "))
+                if (debug) println("modelCandArray:\n " + modelCandArray.sorted.mkString(" ") + "\nassignmentAsHashSet:\n" + assignmentAsHashSet.toIntArray.mkString(" "))
 
                 (modelCandArray, assignmentAsHashSet)
 
               }
 
-              if(debug) println("\nRestored eliminated variables: " + noOfRestoredOriginalPosAtoms)
+              if (debug) println("\nRestored eliminated variables: " + noOfRestoredOriginalPosAtoms)
 
               r
 
@@ -1994,16 +2001,15 @@ class SolverMulti(prep: Preparation) {
 
               assert(!preProcesssVariableElimConfig._1 || !preProcesssVariableElimConfig._5)
 
-              if(debug) println("Checking if stable model...")
+              if (debug) println("Checking if stable model...")
 
               val r = checkASPWithEliRules(modelCandidate, rulesOpt.get)
 
               if (!r._1) {
 
-                if(debug) println("Answer set check fail. Remainder:\n" + r._2.mkString("\n"))
+                if (debug) println("Answer set check fail. Remainder:\n" + r._2.mkString("\n"))
 
-              } else
-                if(debug) println("Answer set check OK")
+              } else if (debug) println("Answer set check OK")
 
               r
 
@@ -2022,7 +2028,7 @@ class SolverMulti(prep: Preparation) {
                 //stopSolverThreads = true  // we should not set this to true here as then later certain code contingent on false would be omitted
 
                 println("\nPerforming informal in-thread sanity checks on resulting model candidate...")
-                // (There is another sanity check called in object delSAT (for sat mode only)
+                // (There is another sanity check called in object diffSAT (for sat mode only)
 
                 if (!satMode) {
 
@@ -2105,7 +2111,7 @@ class SolverMulti(prep: Preparation) {
                 while (nogi < nogiClarkToNogoodReducible.size) { // if preProcesss_variableOrNogoodElimConfig._5=true, we
                   // are using the translated nogoods here (i.e., as used during solving), and also the solver's assignment.
 
-                   @inline def nogoodInReducibleToEliArrayBuffer(addr: NogoodReducible): ArrayBuffer[Eli] = {
+                  @inline def nogoodInReducibleToEliArrayBuffer(addr: NogoodReducible): ArrayBuffer[Eli] = {
 
                     val sb = new ArrayBuffer[Eli]()
 
@@ -2191,7 +2197,7 @@ class SolverMulti(prep: Preparation) {
 
                 }
 
-                // NB: There is a further (and for satMode/DIMACS the most important) informal enforceSanityChecks check in delSAT.scala
+                // NB: There is a further (and for satMode/DIMACS the most important) informal enforceSanityChecks check in diffSAT.scala
 
                 if (!allElitsCovered || !noInconsistencies || violatedNogoods > 0) {
 
@@ -2207,31 +2213,33 @@ class SolverMulti(prep: Preparation) {
 
               if (performSanityChecks) {
 
-                if(sampledModels.length <= 2 || sampledModels.length % 100 == 0)
+                if (sampledModels.length <= 2 || sampledModels.length % 100 == 0)
                   threadSanityChecks
 
               }
 
-              if (debug) { if (satMode) println("\nFound a satisfying assignment") else println("\nFound an answer set") }
+              if (debug) {
+                if (satMode) println("\nFound a satisfying assignment") else println("\nFound an answer set")
+              }
 
               //println("  with symbols: " + modelCandidate.map(symbols(_)).mkString(" "))
 
-              if(debug) println("  at solverTimer " + timerToElapsedMs(solverTimer) + " ms")
+              if (debug) println("  at solverTimer " + timerToElapsedMs(solverTimer) + " ms")
 
               modelOpt = Some(modelCandidate)
 
             } else { // Model candidate bounced back in ASP mode, so we need to retry with added loop nogoods (this
               // enhancement and re-bouncing possibly needs to be repeated several times)...
 
-              if(debug) println("\\\\\\\\\\\\\\\\ \nNot an answer set: " + modelCandidate._1.mkString(",") + " (" + modelCandidate._2 + ")\n Remainder: " + checkResult._2.mkString(","))
+              if (debug) println("\\\\\\\\\\\\\\\\ \nNot an answer set: " + modelCandidate._1.mkString(",") + " (" + modelCandidate._2 + ")\n Remainder: " + checkResult._2.mkString(","))
 
-              if(debug) println("Model cand with symbols: " + modelCandidate._1.map(predI => symbols(predI - 1)).mkString(" "))
+              if (debug) println("Model cand with symbols: " + modelCandidate._1.map(predI => symbols(predI - 1)).mkString(" "))
 
-              if (assureProgIsTight)  // if the program is tight (i.e., we only need to look for so-called supported models), every model returned
+              if (assureProgIsTight) // if the program is tight (i.e., we only need to look for so-called supported models), every model returned
               // by the SAT solver is an answer set
                 stomp(-10000, "Answer set check of SAT model of presumably tight program failed")
-                // ^if this happens the logic program is either actually not tight (there is a loop in the positive dependency graph)
-                // or the model actually isn't a model (e.g., bug in Clark completion)
+              // ^if this happens the logic program is either actually not tight (there is a loop in the positive dependency graph)
+              // or the model actually isn't a model (e.g., bug in Clark completion)
 
               // We add loop nogoods and try again (only for non-tight programs).
 
@@ -2364,7 +2372,7 @@ class SolverMulti(prep: Preparation) {
 
                   newLoopNogoodUnsafe.setFromIntArray(newLoopNogood.toArray)
 
-                  if(debug) println("Adding loop nogood: " + newLoopNogoodUnsafe)
+                  if (debug) println("Adding loop nogood: " + newLoopNogoodUnsafe)
 
                   val newLoopNogoodReducible = generateNogoodReducibleFromNogoodClarkOrSpecial(
                     nogoodAddr = newLoopNogoodUnsafe.getAddr,
@@ -2386,7 +2394,7 @@ class SolverMulti(prep: Preparation) {
 
               }
 
-              if(debug) println("Restarting after addition of " + noOfGenLoopNogoods + " loop nogoods...\n")
+              if (debug) println("Restarting after addition of " + noOfGenLoopNogoods + " loop nogoods...\n")
 
               jumpBack(-1, trials)
 
@@ -2442,7 +2450,7 @@ class SolverMulti(prep: Preparation) {
       if (showIntermediateTimers)
         println("$" + threadNo + ": solverTimer 3a: " + timerToElapsedMs(solverTimer) + " ms")
 
-      if(/*!reuseSolverData &&*/ collectOffHeapGarbage)  // otherwise, we collect the model data garbage only after the outer sampling loop
+      if ( /*!reuseSolverData &&*/ collectOffHeapGarbage) // otherwise, we collect the model data garbage only after the outer sampling loop
         queueOffHeapGarbageInSingleSolver
 
       if (showIntermediateTimers)
@@ -2458,7 +2466,7 @@ class SolverMulti(prep: Preparation) {
       "\n#Literals (including rule body literals): " + noOfAllElis +
       "\n#Nogoods: " + clarkNogoodsFinal.length +
       "\n#Parameter atoms: " + parameterAtomsElis.length +
-      "\n#Measured atoms: "+ measuredAtomsElis.length
+      "\n#Measured atoms: " + measuredAtomsElis.length
 
     if (verbose) {
 
@@ -2476,7 +2484,7 @@ class SolverMulti(prep: Preparation) {
 
     }
 
-    if(writeRuntimeStatsToFile) {
+    if (writeRuntimeStatsToFile) {
 
       stats.writeEntry(key = "problemDescription", value = problemDescription, solverThreadNo = 0)
 
@@ -2486,11 +2494,11 @@ class SolverMulti(prep: Preparation) {
 
     minUnassignedGlobal = noOfAllElis // not precise even for single solver thread. For statistics/debugging/informal progress report purposes only.
 
-    if(debug) println("\nStarting new set of " + maxCompetingSolverThreads + " inner solver thread(s)...") // optimalSingleSolverConfOpt = " + optimalSingleSolverConfOpt)
+    if (debug) println("\nStarting new set of " + maxCompetingSolverThreads + " inner solver thread(s)...") // optimalSingleSolverConfOpt = " + optimalSingleSolverConfOpt)
 
     stopSolverThreads = false
 
-    def writeSettingsToStatsFile(runThreadNos: scala.Seq[Nogi], threadInfos: => scala.Seq[String]) = {
+    def writeSettingsToStatsFile(runThreadNos: scala.Seq[Nogi], threadInfos: => Map[Int, String]) = {
       //        prettyPrint(singleSolverConf, omit = List("dependencyGraph") )
 
       val generalInfoStr = "<span style=\"color:orange\">seedRngGlobal: " + seedRngGlobal + "</span><br>Java version: " + System.getProperty("java.runtime.version") +
@@ -2499,7 +2507,7 @@ class SolverMulti(prep: Preparation) {
 
       val infoHeader = runThreadNos.map(threadNo => "<a href=\"#threadSettings" + threadNo + "\">Jump to settings for thread $" + threadNo + "</a>\n").mkString("\n<br>") + "\n<br>"
 
-      val infoThreadsStr = runThreadNos.map(threadNo => ("<pre><a name=\"threadSettings" + threadNo + "\"></a>\n" + threadInfos(threadNo - 1) + "</pre>")).mkString("\n").replaceAllLiterally("\n", "<br>")
+      val infoThreadsStr = runThreadNos.map(threadNo => ("<pre><a name=\"threadSettings" + threadNo + "\"></a>\n" + threadInfos(threadNo) + "</pre>")).mkString("\n").replaceAllLiterally("\n", "<br>")
 
       // to include an anchor link use this scheme: <a href="#anchorName">here</a>  --->    <a name="anchorName"></a>
 
@@ -2508,7 +2516,7 @@ class SolverMulti(prep: Preparation) {
 
       val infoSharedSettingsHeader = "<a href=\"#sharedDefs\">Jump to shared settings</a>\n"
 
-      input.delSAT.stats.writeEntry(key = "settings", value =
+      input.diffSAT.stats.writeEntry(key = "settings", value =
         generalInfoStr + infoHeader + infoSharedSettingsHeader + infoThreadsStr + infoSharedSettingsStr,
         solverThreadNo = 0)
 
@@ -2520,7 +2528,7 @@ class SolverMulti(prep: Preparation) {
 
     val modelFromCompetitiveSolverRunsOpt: Option[(Array[Eli], IntOpenHashSet)] = {
 
-      if(reentrySingleSolverThreadDataOpt.isDefined && maxCompetingSolverThreads > 1) // the reused data from the previous model
+      if (reentrySingleSolverThreadDataOpt.isDefined && maxCompetingSolverThreads > 1) // the reused data from the previous model
       // cannot be shared among multiple threads (TODO: albeit we might reuse it for one of the threads?)
         stomp(-5009, "reuseSolverData=true cannot be combined with switchToBestConfigAfterFirstModel=" + switchToBestConfigAfterFirstModel)
 
@@ -2530,7 +2538,7 @@ class SolverMulti(prep: Preparation) {
 
       val paramCombsSeq: Seq[SolverThreadSpecificSettings] = {
 
-        if (optimalSingleSolverConfOpt.isDefined) {  // (note: by default, if optimalSingleSolverConfOpt.isDefined we use only a single solver thread)
+        if (optimalSingleSolverConfOpt.isDefined) { // (note: by default, if optimalSingleSolverConfOpt.isDefined we use only a single solver thread)
 
           (1 to maxCompetingSolverThreads).map(_ => optimalSingleSolverConfOpt.get)
 
@@ -2552,7 +2560,7 @@ class SolverMulti(prep: Preparation) {
 
                 val seedR = seedP.getThreadOrDefaultValue(threadNo)
 
-                if (seedR == -1l) (if(threadNo - 1 < threadPRNGSeedPool.length) threadPRNGSeedPool(threadNo - 1) else rngGlobal.nextLong()) else seedR
+                if (seedR == -1l) (if (threadNo - 1 < threadPRNGSeedPool.length) threadPRNGSeedPool(threadNo - 1) else rngGlobal.nextLong()) else seedR
 
               },
               restartFrequencyModifierFactorR = restartFrequencyModifierFactorP.getThreadOrDefaultValue(threadNo),
@@ -2597,13 +2605,20 @@ class SolverMulti(prep: Preparation) {
 
       })
 
-      if(debug && !ignoreThreadConfs.isEmpty) println("Ignored threads for debugging: " + ignoreThreadConfs)
+      val runThreadNos = if (threadSelect.isEmpty) (1 to maxCompetingSolverThreads).toSeq else {
 
-      val runThreadNos = (1 to maxCompetingSolverThreads).toSeq.filterNot(ignoreThreadConfs.contains(_))
+        println("Selected subset of threads (all other thread$ omitted): " + threadSelect)
 
-      lazy val threadInfos: scala.Seq[String] = runThreadNos.map(threadNo => prettyPrint(threadConfs(threadNo - 1), omit = List("dependencyGraph")))
+        if (threadSelect.exists(_ > maxCompetingSolverThreads))
+          stomp(-5009, "Invalid value for threadSelect: element(s) exceed number of threads specified (" + maxCompetingSolverThreads + ")")
 
-      if(writeRuntimeStatsToFile)
+        (1 to maxCompetingSolverThreads).toSeq.filter(threadSelect.contains(_))
+
+      }
+
+      /*lazy*/ val threadInfos: Map[Int, String] = runThreadNos.map(threadNo => (threadNo, prettyPrint(threadConfs(threadNo - 1), omit = List("dependencyGraph")))).toMap
+
+      if (writeRuntimeStatsToFile)
         writeSettingsToStatsFile(runThreadNos, threadInfos)
 
       val callables: Seq[Runnable] = runThreadNos.map(threadNo => new Runnable {
@@ -2613,7 +2628,7 @@ class SolverMulti(prep: Preparation) {
           val singleSolverConf = threadConfs(threadNo - 1)
 
           if (verbose)
-            println("Starting solver thread $" + singleSolverConf.threadNo + ":\n" + threadInfos(threadNo - 1) + "\n")
+            println("Starting solver thread $" + singleSolverConf.threadNo + ":\n" + threadInfos(threadNo) + "\n")
 
           val singleSolverThreadData: SingleSolverThreadData = reentrySingleSolverThreadDataOpt.getOrElse(new SingleSolverThreadData(prep = prep, singleSolverConf, tempFacts = Nil, maxCompetingSolverThreads = maxCompetingSolverThreads, sharedAmongSingleSolverThreads = sharedAmongSingleSolverThreads))
 
@@ -2633,7 +2648,7 @@ class SolverMulti(prep: Preparation) {
                 if (verbose)
                   println("\nSuccessful portfolio thread: $" + singleSolverConf.threadNo)
 
-                if(writeRuntimeStatsToFile)
+                if (writeRuntimeStatsToFile)
                   stats.writeEntry(key = "successfulThread", value = singleSolverConf.threadNo, solverThreadNo = 0)
 
                 newReentrySolverDataOpt = Some(singleSolverThreadData)
@@ -2662,7 +2677,7 @@ class SolverMulti(prep: Preparation) {
 
           }
 
-          if(debug) println("End of thread $" + threadNo)
+          if (debug) println("End of thread $" + threadNo)
 
         }
 
@@ -2692,10 +2707,10 @@ class SolverMulti(prep: Preparation) {
 
     }
 
-    if(debug) println("sampleSingleRacing complete: r = " + modelFromCompetitiveSolverRunsOpt)
+    if (debug) println("sampleSingleRacing complete: r = " + modelFromCompetitiveSolverRunsOpt)
 
-    if(modelFromCompetitiveSolverRunsOpt == null)
-      (None /*this means that the caller of this method cannot distinguish UNKNOWN from UNSAT*/, newReentrySolverDataOpt)
+    if (modelFromCompetitiveSolverRunsOpt == null)
+      (None /*this means that the caller of this method cannot distinguish UNKNOWN from UNSAT*/ , newReentrySolverDataOpt)
     else
       (modelFromCompetitiveSolverRunsOpt, newReentrySolverDataOpt)
 
