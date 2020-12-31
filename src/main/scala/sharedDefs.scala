@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -11,11 +11,10 @@
 
 import java.lang.reflect.Field
 import java.util.Random
-
 import com.accelad.math.nilgiri.DoubleReal
 import com.accelad.math.nilgiri.autodiff.DifferentialFunction
-
-import input.{UNSAFEhelper, delSAT}
+import input.diffSAT.changeConsoleWidthUnderWin
+import input.{UNSAFEhelper, diffSAT}
 
 import scala.collection.mutable
 
@@ -39,7 +38,7 @@ import scala.collection.mutable
   *
   * ==Advanced settings on the commandline==
   *
-  * From the delSAT commandline, most of the default values below (if the members are var's) can be changed using
+  * From the diff-SAT commandline, most of the default values below (if the members are var's) can be changed using
   * --solverarg "paramName" "paramValue"
   *
   * Example: --solverarg maxSolverThreadsR 4
@@ -52,7 +51,7 @@ import scala.collection.mutable
   * Another example (for testing Stochastic Local Search (e.g., Walksat) in isolation):
   *  --solverarg rephasePhaseMemo true --solverarg useSLSinPhaseMemoRephasingP "true" --solverarg allowEliToClarkReduciblesLookup true --solverarg maxInnerSLSTrials 200000000 --solverarg sasatOuterMaxInSLS 1 --solverarg minNoConflictsBeforeFirstRephasing 0 --solverarg rephasePhaseMemoIntervalInit 0 --solverarg maxSolverThreadsR 1
   *
-  * Optionally, use --thread on the commandline to group --solverargs per solver thread (see --help in delSAT.scala).
+  * Optionally, use --thread on the commandline to group --solverargs per solver thread (see --help in diffSAT.scala).
   * This is of course only relevant for settings which can differ across threads. Example:
   * --solverarg maxSolverThreadsR 4 ... --thread 3 --solverarg seedP 12345 --thread 4 --solverarg seedP -987654321
   * specifies seed 12345 for solver thread $3 and seed -987654321 for thread $4.
@@ -60,10 +59,10 @@ import scala.collection.mutable
   * e.g., with the above the actual seedP value might become AlternativesForThreads(Map(0 -> -1, 3 -> 12345, 4 -> -987654321))
   *
   * For further commandline options (e.g., -n for specifying the size of the sample and -t to specify the accuracy threshold),
-  * see delSAT --help
+  * run diffSAT --help
   *
   * ==Important (see README.md for details)==
-  * For standard (deductive-probabilistic MSE-style) inference problems, it is recommended to run delSAT with arguments#
+  * For standard (deductive-probabilistic MSE-style) inference problems, it is recommended to run diff-SAT with arguments#
   * -mse --solverarg "partDerivComplete" "false"
   * For non-MSE deduction-style inference where all parameter atoms are measured atoms, omit -mse and use --solverarg "partDerivComplete" "true"
   *
@@ -71,7 +70,7 @@ import scala.collection.mutable
   *
   * ==Idiosyncrasies==
   *
-  * Keep in mind that delSAT operates (after parsing) with nogoods, not with clauses as most other solvers. The use
+  * Keep in mind that diff-SAT operates (after parsing) with nogoods, not with clauses as most other solvers. The use
   * of nogoods is inspired by clasp/clingo.
   *
   * In many places, the term ''eli'' is used; it denotes a numerical representation of a literal during solving.
@@ -129,7 +128,7 @@ package object sharedDefs {
     def getThreadOrDefaultValue(threadNo: Int): A =
       alternatives.getOrElse(threadNo, alternatives.getOrElse(0, {
 
-        delSAT.stomp(-10000, "No parameter value for thread " + threadNo + " or default found in AlternativesForThreads")
+        diffSAT.stomp(-10000, "No parameter value for thread " + threadNo + " or default found in AlternativesForThreads")
 
         alternatives.head._2 // dummy
 
@@ -146,12 +145,12 @@ package object sharedDefs {
     true
   }) // sets assertionsEnabled=true if assertions are active (activate in build.sbt)
 
-  val debug = (areAssertionsEnabled || debug2) // (also see debugMode in class UNSAFEhelper for debugging off-heap garbage collection)
-
   @deprecated val extraChecks = false // for debugging only; enables additional checks of invariants or pre-/post-conditions which are
   // less important and/or very costly, slowing down the solver significantly
 
   val debug2 = false // use with small encodings only (generates a huge number of messages). TODO: messages mittels log() anzeigen; usable only for small problems, due to the very large amount of messages generated
+
+  val debug = (areAssertionsEnabled || debug2) // (also see debugMode in class UNSAFEhelper for debugging off-heap garbage collection)
 
   var verbose = debug || debug2
 
@@ -169,7 +168,7 @@ package object sharedDefs {
 
   // -------------------------------------------------------------------------------------
 
-  // There are several kinds of tests for delSAT:
+  // There are several kinds of tests for diff-SAT:
   // 1) Batch tests (directories with .cnf, .aspif or .opt files which can optionally include expectations such as c #sat? false)
   //    activate like this: --batchtests \folder
   // 2) API tests in APITests
@@ -181,7 +180,7 @@ package object sharedDefs {
   var runBatchTests = false
 
   var batchTestDir = "C:\\Users\\Owner\\workspaceScala211\\DelSAT\\batchTesting" //"C:/Users/Owner/workspaceScala211/DelSAT/batchTesting/" // command line arguments specified inline
-  // in the header of a test formula (e.g., .cnf file) using c #cdlargs are overridden by command line arguments in the delSAT call.
+  // in the header of a test formula (e.g., .cnf file) using c #cdlargs are overridden by command line arguments in the diffSAT call.
 
   var batchTestFileEndings = Seq(".cnf", ".aspif", ".opt")
 
@@ -203,7 +202,7 @@ package object sharedDefs {
 
   // -------------------------------------------------------------------------------------
 
-  val maxAssumedConsoleWidth = if(debug) 1024 else if (delSAT.osWin) 210 /*with Windows, we programmatically change the
+  val maxAssumedConsoleWidth = if(debug) 1024 else if (diffSAT.osWin && changeConsoleWidthUnderWin) 210 /*with Windows, we programmatically change the
   width to this*/ else 79 // to ensure single-line progress (status) updates correctly (if buffer width too small, console scrolls). Set to 0 to disable.
 
   var showProgressStats: Boolean = true // switch off progress statistics using --solverarg showProgressStats false
@@ -217,7 +216,7 @@ package object sharedDefs {
 
   var enforceWriteRuntimeStatsToFileOpt: Option[Boolean] = None
 
-  @inline def writeRuntimeStatsToFile: Boolean = enforceWriteRuntimeStatsToFileOpt.getOrElse(runBatchTests || debug || debug2 || noOfMinibenchmarkTrials > 1)
+  @inline def writeRuntimeStatsToFile: Boolean = enforceWriteRuntimeStatsToFileOpt.getOrElse(false) //.getOrElse(runBatchTests || debug || debug2 || noOfMinibenchmarkTrials > 1)
 
   // if true, each run writes configuration information and runtime statistics
   // to a local file in writeToHistoryDirector for debugging and benchmarking purposes. Also see switch --writestatsto <dir>
@@ -285,13 +284,14 @@ package object sharedDefs {
     * Keep in mind that the machine might decrease maximum core frequencies with more cores being utilized.
     * -x sets number of solver threads in dependency of number of cores, problem size and other factors. For small
     * problems with number of positive literals (ri.e., in case of SAT: #variables) smaller -x (with x < 0), only a single solver thread is launched.
-    * NB: delSAT also spawns some parallelism from within individual solver threads, so normally no all cores should be occupied by solvers.
+    * NB: diff-SAT also spawns some parallelism from within individual solver threads, so normally no all cores should be occupied by solvers.
     * Commandline: --solverarg maxSolverThreadsR n */
   var maxSolverThreadsR: Int = -1
 
   /** If not empty, only the specified threads will be executed. All other threads will be ignored.
     * E.g., if a total of 6 threads are specified using maxSolverThreadsR and threadSelect = Seq(2,3),
-    * only threads $2 and $3 are actually started, whereas $1 and $4 are omitted. */
+    * only threads $2 and $3 are actually started, whereas $1 and $4 are omitted.
+    * First thread has index 1 */
   var threadSelect: Seq[Int] = Seq()
 
   /** if true, we stop sampling if the total cost doesn't significantly change anymore and
@@ -310,14 +310,15 @@ package object sharedDefs {
   // gets by default value y and all other threads get by default value x. So thread indices start with 1, not 0.
   // Override on the commandline with, e.g., --thread 1 --solverarg ... z
 
-  /** Seed for the global PRNG. -1l: use a pseudo-random seed
-    * In the current delSAT version, the number below is used as default (may change in newer versions!).
-    * Use -1l for a pseudo-randomly choosen global PRNG seed.
+  /** Seed for the global PRNG. -1L: use a pseudo-random seed
+    * In the current diff-SAT version, the number below is used as default (may change in newer versions!).
+    * Use -1L for a pseudo-randomly choosen global PRNG seed.
     * NB: it's useful to fix a certain seed (for reproducibility and in particular for debugging and development) but keep in
     * mind that any additional or omitted consumption of a random number before obtaining the thread-local PRNG seeds from
     * the global PRNG leads to a different runtime performance. See threadPRNGSeedPool to mitigate this issue.
-    * Still, even with a fixed seed, there may be sources of run time unpredictability, such as thread synchronization */
-  var seedRngGlobalR: Long = 0L //-1l //5588715852799719102L
+    * Still, even with a fixed seed, there may be sources of run time unpredictability, such as thread synchronization.
+    * Also see parameters maxSolverThreadsR and threadSelect */
+  var seedRngGlobalR: Long = 0L //-1l //8727086150618504474l //5744970747073778903L // 0L //-1l //5588715852799719102L
 
   /** Seed for thread-local pseudo-random number generator (PRNG)
     * in an individual solver thread. -1l: use a random seed generated by the global PRNG, i.e., depending from seedRngGlobalR.
@@ -329,7 +330,7 @@ package object sharedDefs {
 
   /** See source code - On the commandline, specify like this (no sequences allowed then): --solverarg "restartTriggerConfP" "3 4 256"
     * Remarks:
-    * - for detecting UNSAT (not delSAT's focus), a higher frequency of restarts is often desirable
+    * - for detecting UNSAT (not diff-SAT's focus), a higher frequency of restarts is often desirable
     * - another way to trigger (additional) restarts is using parameter slowThreadAction (see further below).
     * - reusedTrailRestartsR = false increases number of restarts. */
   var restartTriggerConfP: (AlternativesForThreads[Int], Seq[Int], Seq[Double]) = (AlternativesForThreads[Int](Map(0->3, 2->2)) /*
@@ -390,7 +391,7 @@ package object sharedDefs {
 
   /** Data structure for (non-probabilistic) branching heuristics ("free eli search"), for conventional branching (i.e., where
     * choice isn't for parameter atoms for which it is determined by the differentiable cost function).
-    * On the commandline, specify like this: --solverarg "freeEliSearchApproachP" "11 11 7 13 12 7" with a >=6-core machine (NB: this *doesn't* specify the
+    * On the commandline, specify like this: --solverarg "freeEliSearchApproachP" "15 11 7 13 12 7" with a >=6-core machine (NB: this *doesn't* specify the
     * number of solver threads which has to be set using maxSolverThreadsR)
     * Available approaches:
     *
@@ -407,7 +408,7 @@ package object sharedDefs {
     * the order of the clauses in the input formula (the clauses and literals are sometimes in a "lucky" order).
     * Approaches 11 also uses initAbsElisArrangementP to initialize the scores. */
   var freeEliSearchApproachP: AlternativesForThreads[Int] = AlternativesForThreads[Int](
-    Map(0 -> 15, 1 -> 15, 2 -> 15, 3 -> 12, 4 -> 15, 5 -> 15) /*,hanoi5,2dlx_cc_ex_bp_f_bug1_liveness: 12*/
+    Map(0 -> 15, 1 -> 15, 2 -> 15, 3 -> 12, 4 -> 15, 5 -> 15, 6 -> 11, 7 -> 15) /*,hanoi5,2dlx_cc_ex_bp_f_bug1_liveness: 12*/
     /*if unsure, try with 15 and 12 first, then 12 and 11 */)
 
   /** Only relevant if absEliScoringApproach=0, otherwise ignored; see source code for details.
@@ -490,7 +491,7 @@ package object sharedDefs {
     * This (and also nogoodRemovalThreshRatioP) is a pretty influencial parameter but no way to determine a good value automatically from the problem is known.
     */
   var nogoodRemovalThreshInitP: AlternativesForThreads[Int] = AlternativesForThreads(Map(0 -> -300,
-    2 -> 1024 * 6, 5 -> 1024 * 6)) //-300 //1024*16  /** approach to determine removal of some amount of learned nogoods (see removeLearnedNogoods)
+    2 -> 1024 * 6, 5 -> 1024 * 6, 6 -> 1024 * 32)) //-300 //1024*16  /** approach to determine removal of some amount of learned nogoods (see removeLearnedNogoods)
 
   /** base parameter for nogood deletion strategy nogoodRemovalThreshInit=0.
     * Lower value = nogood removal procedure called more frequently. No effect if reduceLearnedNogoodAtRestarts=true */
@@ -539,7 +540,7 @@ package object sharedDefs {
     *
     * Suggestion: try with 11, 8, or 1 first
     */
-  var scoringForRemovalOfLearnedNogoodsR = 11 // 11 //8 //TODO: make seq.
+  var scoringForRemovalOfLearnedNogoodsR = 11 // TODO: make seq.
 
   val highestScoreForLearnedNogoodUpToSize = 2 // we always assign maximum (best) score to learned nogoods with a size up to x
 
@@ -585,7 +586,7 @@ package object sharedDefs {
   var ignoreParamVariablesR: Boolean = false
 
   /** For translating away disjunctions in ASP rule heads (an extension over normal ASP), increase the number of unfold operations
-    * if necessary. If delSAT find an answer set but spends a lot of time doing unfolds and shifts, consider trying with a
+    * if necessary. If diff-SAT find an answer set but spends a lot of time doing unfolds and shifts, consider trying with a
     * smaller value (but this may not discover any existing answer sets). */
   var maxNoOfUnfolds: Int = Int.MaxValue
 
@@ -606,10 +607,10 @@ package object sharedDefs {
     * for parsing, etc (so it can't be used for standard timeout benchmarks).
     * NB: Timeout doesn't work well with very low limits (e.g., <10sec), because of the
     * intervals the solver does progress checks. */
-  var timeoutMs: Long = 60 /*minutes*/ * 60 * 1000
+  var timeoutMs: Long = 5 /*hours*/ * 60 /*minutes*/ * 60 /*seconds*/ * 1000 /*milliseconds*/
 
   @deprecated var localSolverParallelThresh: Int = 150 // = localSolverParallelThreshMax: off.
-  // Used (with various factors and conditions, see code) as #items threshold for loop parallelization in various places (TODO: auto).
+  // Used (with various factors and conditions, see code) as #items threshold for loop parallelization in various places
 
   /** If true, inner costs which contain undefined measured atoms are replaced with
     *0. However, an undefined measured atoms is likely undefined by mistake, so adding a spanning rule for it is normally better. */
@@ -631,16 +632,16 @@ package object sharedDefs {
     * Another (orthogonal) way to regulate the number of shared nogoods is nogoodShareTopKPutIntoSharingPool.
     * NB: nogood sharing may lead to nondeterministic behavior (varying performance and sampling results for same PRNG seed) due
     * to thread interaction. */
-  var nogoodShareNumberMax: Float = 0f // 1f // 0.01f
+  var nogoodShareNumberMax: Float = 0f //0f // 1f // 0.01f
 
   /** Each time some learned nogoods have been deleted, the top-k (using nogood scoring) remaining learned
     * nogoods (with size <= nogoodShareSizeLimit) are added to
     * the nogood sharing pool where they can be fetched by other solver threads (see nogoodShareNumberMax).
     * Requires nogoodShareNumberMax > 0 */
-  var nogoodShareTopKPutIntoSharingPool: Int = 10 //100 //10
+  var nogoodShareTopKPutIntoSharingPool: Int = 10 //100
 
   /** Limit nogood sharing to nogoods with size <= x. 8 is the value used by
-    * ManySAT, but observe that in contrast to ManySAT, DelSAT fetches nogoods from other threads exactly directly
+    * ManySAT, but observe that in contrast to ManySAT, diff-SAT fetches nogoods from other threads exactly directly
     * after some learned nogoods in that thread have been removed (see nogoodRemovalThreshInit, etc). */
   var nogoodShareSizeLimit: Int = 8
 
@@ -651,7 +652,7 @@ package object sharedDefs {
     * Which (and which of freeDeletedNogoodMemoryApproach) is fastest is hard to predict, since
     * memory management can be slower than using just unsafe but might increase locality of nogoods in memory.
     * >>> For sampling (probabilistic problems), value must be true (and freeDeletedNogoodMemoryApproach = 2).
-    * If false, "deleted" learned nogoods are removed from reducibles lists but the occupied memory isn't freed or reallocated until delSAT ends.
+    * If false, "deleted" learned nogoods are removed from reducibles lists but the occupied memory isn't freed or reallocated until diff-SAT ends.
     */
   val freeOrReassignDeletedNogoodMemory = true
 
@@ -659,18 +660,18 @@ package object sharedDefs {
   val freeDeletedNogoodMemoryApproach: Int = 2 // Leave at 2 (the other approaches are experimental). Relevant only
   // with freeOrReassignDeletedNogoodMemory=true.
   // With 0 and freeOrReassignDeletedNogoodMemory = true, space assigned for deleted nogoods is
-  //     reassigned by delSAT itself using a thread-local(!) sorted tree for managing off-heap memory, if possible.
+  //     reassigned by diff-SAT itself using a thread-local(!) sorted tree for managing off-heap memory, if possible.
   // With 1 and freeOrReassignDeletedNogoodMemory = true, allocated off-heap memory is freed by unsafe.
   // With 2 and freeOrReassignDeletedNogoodMemory = true, a simple thread-local unsorted list is used for memory management.
   // With 3 and freeOrReassignDeletedNogoodMemory = true, a simple garbage collector is used, using a global unsorted list for keeping track of allocated off-heap memory.
   // >>> In any case, this setting has an effect only if freeOrReassignDeletedNogoodMemory = true <<
   // >>> For sampling (probabilistic problems), value must be 2 (and freeOrReassignDeletedNogoodMemory = true).
 
-  /** This value is influential, largely because of the slow allocate method in unsafe. -1 = auto. */
+  /** This value is influential, largely because of the slow memory allocate method of the SDK's unsafe. -1 = auto. */
   var defaultNogoodAllocationSize = -1 //96-8
 
   /** Remove some redundancies from conflict (i.e., learned) nogoods (like in MiniSAT >=1.5). */
-  var conflictNogoodSelfSubsumption = true
+  var conflictNogoodSelfSubsumption = false
 
   /** Perform nogood simplification at solver runtime (after preprocessing) */
   var inProcessingSubsumption: Boolean = false && maxPercentToRemoveOfLearnedNogoods > 0d
@@ -680,7 +681,7 @@ package object sharedDefs {
 
   /** Preprocessing (variable and nogood removal) - See source code for details - On the commandline, use like this: --solverarg "preProcesssVariableElimConfig" "true 0.5 0.5 1.5 true"
     * Observe that this setting may reduce the entropy of sampled models. */
-  var preProcesssVariableElimConfig: (Boolean, Double, Double, Float, Boolean) = /*pre-processing of initial sets of variables
+  var preProcesssVariableElimConfigR: (Boolean, Double, Double, Float, Boolean) = /*Pre-processing of initial sets of variables
   and nogoods. Tries to remove variables and nogoods with these variables before actual solving starts.*/ (false /*on/off*/ ,
     /*deprecated: */ 0d /*amount that #resolvents can become larger than original nogood set for candidate variable, in .% of nogis. Try 0 first. */ ,
     /*deprecated: */ 0d /*#literals in original nogood set can be larger than literals in resolvents, in .% of literals. Try 0 first. NB: total
@@ -690,7 +691,7 @@ package object sharedDefs {
     true /*true: materially remove variables instead of just ignoring them. True currently available in SAT mode only*/ )
 
   /** If true, we check during variable elimination for subsumption only for
-    * resolvents, not for all nogoods. Relevant with preProcesssVariableElimConfig._1=true only. */
+    * resolvents, not for all nogoods. Relevant with preProcesssVariableElimConfig._1=true only! */
   var resolventOnlySubmsumptionCheckInPreProc = true
 
   /** See source code */
@@ -718,7 +719,7 @@ package object sharedDefs {
   /** See source code */
   var enforceProgressChecksEveryTrialsR: Int = if (abandonOrSwitchSlowThreads != 0d) 200000 else (if (debug) 200000 else 300000) // report regular solving progress _at least_ every x solver trials
 
-  //val progressReportImprovThresh = if (delSAT.debug) 100 else 100 // report progress also if reduction of unassigned literals is at least this threshold
+  //val progressReportImprovThresh = if (diffSAT.debug) 100 else 100 // report progress also if reduction of unassigned literals is at least this threshold
 
   /** If true, after solving, propositional clauses corresponding to "clark nogoods" and any loop
     * nogoods are printed. ! Observe that this doesn't emit an equivalent theory in case the ASP program isn't tight since the set of loop nogoods isn't complete. However,
@@ -771,7 +772,7 @@ package object sharedDefs {
   // 2 is typically the best choice. Options 0,3,4 not available.
 
   /** See source code */
-  var delayStartUntilCPULoadTo: Double = -1d //if(delSAT.noOfMinibenchmarkTrials >= 2) 0.01d else 0.1d //-1d  // if >= 0d, this blocks the start of the actual solver (and timer start) until system CPU load falls under this value.
+  var delayStartUntilCPULoadTo: Double = -1d //if(diffSAT.noOfMinibenchmarkTrials >= 2) 0.01d else 0.1d //-1d  // if >= 0d, this blocks the start of the actual solver (and timer start) until system CPU load falls under this value.
   // Useful for preliminary benchmarking tasks.
 
   @deprecated val keepNogoodsWeaklySorted: Boolean = false // TODO: remove? if true and extReducibles=1, nogoods are kept "weakly" sorted (see code for details). TODO: remove?
@@ -780,7 +781,7 @@ package object sharedDefs {
     * 1 = 0x01,
     * 2 = pos/neg ratio of approximate number of occurrences in nogoods (see code for details),
     * 3 = as 2 but using the inverse ratio,
-    * 4 = approximated Jeroslow-Wang (time and memory consuming!),
+    * 4 = approximated Jeroslow-Wang (very time and memory consuming during preprocessing!),
     * 5 = random per each absEli
     * 6 = randomly true (false) per all absElis.
     * Also see initAbsElisArrangementP. */
@@ -839,7 +840,7 @@ package object sharedDefs {
   // Remark: we shouldn't use true if rephasePhaseMemo is also true, as otherwise the code wouldn't be threadsafe without massive speed decrease
   // TODO: bug with true (see val absElisSeqArranged ...)
 
-  @deprecated val globalBestPhaseMemo: Boolean = false // leave at true (false not tested enough and likely no advantage over global queue)
+  val globalBestPhaseMemo: Boolean = true
 
   // Rephase-by-SLS (Stochastic Local Search) settings:
 
@@ -1039,7 +1040,7 @@ package object sharedDefs {
 
   val intArrayOffs = unsafe.arrayBaseOffset(classOf[Array[Int]]) // we put this here to ensure that scalac makes this a static field
 
-  //var offHeapAllocatedEstimate = 0l  // measured only some(!) of the non-heap memory allocated by delSAT, but not all and also not any other off-heap data (like DirectByteBuffers)
+  //var offHeapAllocatedEstimate = 0l  // measured only some(!) of the non-heap memory allocated by diff-SAT, but not all and also not any other off-heap data (like DirectByteBuffers)
   // ^ TODO: not precise (bug, estimate too high). Currently commented out.
 
   var omitSysExit0 = false // If this .jar is dynamically included in prasp2 using classloader, we must not sys.exit in case of successful termination (except -v/-hashOfPass), as this
@@ -1231,7 +1232,7 @@ package object sharedDefs {
 
             case (headItemStr: String, 2 /*pos: Int*/ ) => Seq(headItemStr.toDouble)
 
-            case (_, _) => delSAT.stomp(-5009)
+            case (_, _) => diffSAT.stomp(-5009)
 
           }).toSeq
 
@@ -1255,7 +1256,7 @@ package object sharedDefs {
 
             case (headItemStr: String, 4 /*pos: Int*/ ) => headItemStr.toBoolean
 
-            case (_, _) => delSAT.stomp(-5009)
+            case (_, _) => diffSAT.stomp(-5009)
 
           }).toSeq
 
@@ -1287,7 +1288,7 @@ package object sharedDefs {
 
     def toString(symbols: Array[String]): String = {
 
-      assert(headAtomsElis.length == 1) // delSAT supports disjunctive rules, but by this point they are transformed (normalized) already (also any :- constraints)
+      assert(headAtomsElis.length == 1) // diff-SAT supports disjunctive rules, but by this point they are transformed (normalized) already (also any :- constraints)
 
       if (bodyNegAtomsElis.isEmpty && bodyPosAtomsElis.isEmpty)
         symbols(headAtomsElis.head - 1) + "."

@@ -1,4 +1,5 @@
-/* Activate if native image generation using Graal is intended. Also see build.sbt and Target_scala_runtime_Statics.java
+// Activate if native image generation using Graal is intended.
+// !!! Also see build.sbt and Target_scala_runtime_Statics.java !!!
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import org.graalvm.nativeimage.hosted.Feature;
@@ -43,4 +44,3 @@ public class RuntimeReflectionRegistrationFeature implements Feature {
 
 }
 
-*/
