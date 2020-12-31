@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -21,7 +21,7 @@ import utils.Various._
 import scala.collection.mutable.ArrayBuffer
 
 /**
-  * Parser for DIMACS-CNF and PCNF (probabilistic CNF). !! Not a general-purpose DIMACS-CNF parser - designed for use within delSAT only
+  * Parser for DIMACS-CNF and PCNF (probabilistic CNF). !! Not a general-purpose DIMACS-CNF parser - designed for use within diff-SAT only! Work in progress.
   *
   * @author Matthias Nickles
   *
@@ -35,7 +35,7 @@ object DIMACPlainSparser {
     val headerStartIt: Option[Eli] = "(\\A|\\n)\\s*p\\s+p?cnf\\s+".r.findFirstMatchIn(dimacs_CNF_Pr).map(_.start)
 
     if (headerStartIt.isEmpty)
-      delSAT.stomp(-100)
+      diffSAT.stomp(-100)
 
     val headerStart: Int = headerStartIt.get
 
@@ -52,6 +52,8 @@ object DIMACPlainSparser {
     var (noOfVars, noOfDummySymbols) = {
 
       if (padSymbolsToPow2) { // TODO: remove
+
+        // TODO: next2Pow(noOfVarsR * 2) / 2  ??
 
         val p2 = next2Pow(noOfVarsR)
 
@@ -202,7 +204,7 @@ object DIMACPlainSparser {
         } else {
 
           if (intVal > noOfVars) // some solvers allow this case, but we (and clasp) don't
-            delSAT.stomp(-100, "Variable in CNF file out of range: " + intVal)
+            diffSAT.stomp(-100, "Variable in CNF file out of range: " + intVal)
 
           llcnA.append(-intVal) //***
 
@@ -254,7 +256,7 @@ object DIMACPlainSparser {
     @inline def generateClauseNogood(llcn: ArrayValExtensibleIntUnsafe, clauseNogoodIndex: Int): Unit = {
 
       if (clauseInc >= noOfClauses)
-        delSAT.stomp(-100, "Wrong number of clauses specified in DIMACS header")
+        diffSAT.stomp(-100, "Wrong number of clauses specified in DIMACS header")
 
       if (extraChecks)
         assert(llcn.size() >= 1)
@@ -341,7 +343,7 @@ object DIMACPlainSparser {
         } else {
 
           if (intVal > noOfVars) // some solvers allow this case, but we (and clasp) don't
-          delSAT.stomp(-100, "Variable number in CNF file out of range: " + intVal)
+          diffSAT.stomp(-100, "Variable number in CNF file out of range: " + intVal)
 
           llcnB.append(-intVal)
 
@@ -392,7 +394,7 @@ object DIMACPlainSparser {
     }
 
     if (!directClauseNogoods.isEmpty && directClauseNogoods.last == null)
-      delSAT.stomp(-100, "Fewer than the specified number of clauses found in DIMACS file")
+      diffSAT.stomp(-100, "Fewer than the specified number of clauses found in DIMACS file")
 
     assert(noOfClauses == directClauseNogoods.length)
 
@@ -425,7 +427,7 @@ object DIMACPlainSparser {
 
       val (rules, noOfPosBlits, _) = aspifRulesToEliRules(symbols.toArray, generatedAspifRules, aspifEliToSymbolOpt = None)
 
-      if (delSAT.verbose)
+      if (diffSAT.verbose)
         println("Generated " + rules.length + " additional rules with " + noOfPosBlits + " blits")
 
       AspifOrDIMACSPlainParserResult(symbols = symbols.toArray,

@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -140,7 +140,7 @@ object AspifPlainParser {
     if (commentLines + aspifExternalLines.length + aspifRulesStrLines.length + aspifProbRulesStrLines.length + aspifNamedSymbolsLines.length +
       aspifFilteringAssumptionLines.length + 1 /*<- for the 0 at the end*/ + 1 /*first line*/ !=
       aspifLines.length)
-      delSAT.stomp(-102, "Unsupported line type(s) in aspif input data:\n " +
+      diffSAT.stomp(-102, "Unsupported line type(s) in aspif input data:\n " +
         aspifLines.mkString("\n ") + "\n...")
 
     val aspifEliToSymbol: mutable.HashMap[AspifEli, Pred] = mutable.HashMap[AspifEli, Pred]()
@@ -166,7 +166,7 @@ object AspifPlainParser {
       val v3 = Integer.parseInt(aspifNamedSymbolsLineTokens(3))
 
       if (v3 > 1)
-        delSAT.stomp(-102, "Unsupported conditional #show statement\n encoded in line " + aspifNamedSymbolsLines(si))
+        diffSAT.stomp(-102, "Unsupported conditional #show statement\n encoded in line " + aspifNamedSymbolsLines(si))
 
       val newSymbol = aspifNamedSymbolsLineTokens(2)
 
@@ -192,7 +192,7 @@ object AspifPlainParser {
        */
 
       if (aspifEliToSymbol.get(newSymbolAspifEli) != None)
-        delSAT.stomp(-102, "Unsupported line in aspif input. Ambiguous #show for predicate " + newSymbolAspifEli)
+        diffSAT.stomp(-102, "Unsupported line in aspif input. Ambiguous #show for predicate " + newSymbolAspifEli)
 
       aspifEliToSymbol.update(newSymbolAspifEli, newSymbol)
 
@@ -227,11 +227,11 @@ object AspifPlainParser {
         val choiceHead = aspifRuleTokens(1) == "1"
 
         if (aspifRuleTokens(1) != "0" && !choiceHead)
-          delSAT.stomp(-102, "Unsupported type of rule in aspif format detected. Consider grounding your program with, e.g., clingo --trans-ext=all --pre=aspif or preprocessing it using lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
+          diffSAT.stomp(-102, "Unsupported type of rule in aspif format detected. Consider grounding your program with, e.g., clingo --trans-ext=all --pre=aspif or preprocessing it using lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
 
         if (!disjWarningShow && aspifRuleTokens2 > 1 && maxNoOfUnfolds < Int.MaxValue) {
 
-          delSAT.stomp(-104) // not an error, just a warning
+          diffSAT.stomp(-104) // not an error, just a warning
 
           disjWarningShow = true
 
@@ -240,7 +240,7 @@ object AspifPlainParser {
         val headSet = if (aspifRuleTokens2 != 0) aspifRuleTokens.drop(3).take(aspifRuleTokens2).map(headLit => {
 
           if (headLit(0) == '-')
-            delSAT.stomp(-5020, "Negative head literal in aspif input in rule: " + ruleLines(ri))
+            diffSAT.stomp(-5020, "Negative head literal in aspif input in rule: " + ruleLines(ri))
 
           // delSAT "accidentially" understands negative literals in heads in aspif files although these aren't allowed
           // by the standard. The reason is that delSAT eliminates such head literals in addAspifRules which is called during aspif parsing.
@@ -253,7 +253,7 @@ object AspifPlainParser {
         val (headGivenPosAspifLits, headGivenNegAspifLits) = headSet.partition(_ >= 0)
 
         if (choiceHead && !headGivenNegAspifLits.isEmpty)
-          delSAT.stomp(-102, "In choice rule heads, only positive literals are allowed: " + ruleLines(ri))
+          diffSAT.stomp(-102, "In choice rule heads, only positive literals are allowed: " + ruleLines(ri))
 
         if (aspifRuleTokens(bodyStart) == "0") { // normal rule body
 
@@ -273,7 +273,7 @@ object AspifPlainParser {
         } else if (aspifRuleTokens(bodyStart) == "1") { // body is a weight rule body L{w1=lit1, w2=lit2, ...}
 
           if (probabilistic)
-            delSAT.stomp(-10000, "Weight body not allowed in probabilistic rule in aspif (rule must be normal):\n " + ruleLine)
+            diffSAT.stomp(-10000, "Weight body not allowed in probabilistic rule in aspif (rule must be normal):\n " + ruleLine)
 
           val lowerBound = Integer.parseInt(aspifRuleTokens(bodyStart + 1))
 
@@ -290,7 +290,7 @@ object AspifPlainParser {
             probabilityOpt = None)
 
         } else
-          delSAT.stomp(-102, "Unsupported type of rule detected. Consider grounding your program with, e.g., clingo --trans-ext=all --pre=aspif or preprocessing it using lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
+          diffSAT.stomp(-102, "Unsupported type of rule detected. Consider grounding your program with, e.g., clingo --trans-ext=all --pre=aspif or preprocessing it using lp2normal.\n Unsupported encoding: " + aspifRulesStrLines(ri))
 
         ri += 1
 
@@ -567,10 +567,10 @@ object AspifPlainParser {
     if (choiceHeadOpt.isDefined) {
 
       if (!headGivenPosAspifLits.isEmpty || !headGivenNegAspifLits.isEmpty)
-        delSAT.stomp(-10000, "Choice rule head doesn't allow specification of head literals in addAspifRules()")
+        diffSAT.stomp(-10000, "Choice rule head doesn't allow specification of head literals in addAspifRules()")
 
       if (probabilityOpt.isDefined)
-        delSAT.stomp(-10000, "Choice rule cannot be combined with rule probability in addAspifRules()")
+        diffSAT.stomp(-10000, "Choice rule cannot be combined with rule probability in addAspifRules()")
 
       val choiceHead = choiceHeadOpt.get
 
@@ -591,10 +591,10 @@ object AspifPlainParser {
     } else if (probabilityOpt.isDefined) {
 
       if (headGivenPosAspifLits.length != 1 || !headGivenNegAspifLits.isEmpty)
-        delSAT.stomp(-10000, "Probabilistic rule head needs to consist of exactly one positive literal (normal rule head) in addAspifRules()")
+        diffSAT.stomp(-10000, "Probabilistic rule head needs to consist of exactly one positive literal (normal rule head) in addAspifRules()")
 
       if (!aspifElisFromDoubleNegatedInBody.isEmpty)
-        delSAT.stomp(-10000, "Probabilistic rule body literals must not stem from double negation (normal rules only) in addAspifRules()")
+        diffSAT.stomp(-10000, "Probabilistic rule body literals must not stem from double negation (normal rules only) in addAspifRules()")
 
       /* We transform the probabilistic rule into this form:
           aux:- l1, l2, ..., not h.
@@ -664,7 +664,7 @@ object AspifPlainParser {
     } else if (weightBodyOpt.isDefined) {
 
       if (!bodyGivenPosAspifLits.isEmpty || !bodyGivenNegAspifLits.isEmpty)
-        delSAT.stomp(-10000, "Weight rule body doesn't allow specification of body literals in addAspifRules()")
+        diffSAT.stomp(-10000, "Weight rule body doesn't allow specification of body literals in addAspifRules()")
 
       val weightBody = weightBodyOpt.get
 
@@ -726,7 +726,7 @@ object AspifPlainParser {
       } else {
 
         if (headGivenPosAspifLits.isEmpty && headGivenNegAspifLits.isEmpty)
-          delSAT.stomp(-10000, "Empty aspif rule head but no integrity constraint rule type specified in addAspifRules()")
+          diffSAT.stomp(-10000, "Empty aspif rule head but no integrity constraint rule type specified in addAspifRules()")
 
         if (headGivenPosAspifLits.isEmpty) { // since we eliminate negative head literals here, we get an integrity constraint in this case:
 
@@ -938,7 +938,7 @@ object AspifPlainParser {
 
       if (!aspifRule.headNegAtomsAspifElis.isEmpty) // we eliminate negative head literals already earlier (when creating the AspifRule),
       // so this should not happen
-      delSAT.stomp(-10000, "Aspif rule head with negative literals found in aspifRulesToEliRules()")
+      diffSAT.stomp(-10000, "Aspif rule head with negative literals found in aspifRulesToEliRules()")
 
       val rule = Rule(headAtomsElis = (aspifRule.headPosAtomsAspifElis.map(posAspifEli => {
 
@@ -949,7 +949,7 @@ object AspifPlainParser {
       }) ++
         aspifRule.headNegAtomsAspifElis.map(negAspifEli => { // these are eliminated already when constructing the AspifRule
 
-          delSAT.stomp(-10000, "Negative literals in aspif rule must not occur anymore at this point")
+          diffSAT.stomp(-10000, "Negative literals in aspif rule must not occur anymore at this point")
 
           assert(negAspifEli < 0)
 
@@ -1082,7 +1082,7 @@ object AspifPlainParser {
         }
 
       } else if (isPr || isPat || isCost || isEval)
-        delSAT.stomp(-5004, symbols(rule.headAtomsElis.head - 1) + " found in rule head but body is not empty:\n " + rule.toString(symbols))
+        diffSAT.stomp(-5004, symbols(rule.headAtomsElis.head - 1) + " found in rule head but body is not empty:\n " + rule.toString(symbols))
 
       rules.append(rule)
 

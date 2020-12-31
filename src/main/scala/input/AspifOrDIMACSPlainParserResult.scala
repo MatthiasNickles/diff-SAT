@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018-2020 Matthias Nickles
   *

@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -20,7 +20,7 @@ package input
 import java.util.regex.Matcher
 
 import aspIOutils.Pred
-import delSAT.{fileNameOpt, invokeSampler, obtainInputFromText}
+import diffSAT.{fileNameOpt, invokeSampler, obtainInputFromText}
 import input.AspifPlainParser.{AspifEli, AspifRule, addAspifRules, aspifRulesToEliRules, resolveDisjunctiveHead}
 import sharedDefs.Eli
 import solving.SamplingResult
@@ -86,7 +86,7 @@ import scala.collection.{Set, mutable}
   *         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
   *
   *       // Print sample and the result of ad hoc query Pr(q AND p):
-  *       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+  *       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
   *         satMode = false,
   *         samplingResult = sampled,
   *         adHocConjunctiveQueries = Seq(),
@@ -156,7 +156,7 @@ import scala.collection.{Set, mutable}
   *       // Print sample and the result of ad hoc query Pr[p(a):-not q AND p(b):-not q]:
   *
   *       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults,
-  *       adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+  *       adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
   *         satMode = false,
   *         samplingResult = sampled,
   *         adHocConjunctiveQueries = Seq(),
@@ -171,7 +171,7 @@ import scala.collection.{Set, mutable}
   *
   * ==Further examples can be found in the source code of [[userAPItests.APITests]]==
   *
-  * @see [[input.SymbolicASPRule]], [[input.GroundSymbolicASPRule]], [[sharedDefs]], [[delSAT#queryAndPrintSolverResult(boolean, boolean, solving.SamplingResult, scala.Option, scala.collection.immutable.Seq, scala.collection.immutable.Seq, scala.collection.immutable.Seq, scala.collection.immutable.Seq, boolean, boolean)]]
+  * @see [[input.SymbolicASPRule]], [[input.GroundSymbolicASPRule]], [[sharedDefs]], [[diffSAT#queryAndPrintSolverResult(boolean, boolean, solving.SamplingResult, scala.Option, scala.collection.immutable.Seq, scala.collection.immutable.Seq, scala.collection.immutable.Seq, scala.collection.immutable.Seq, boolean, boolean)]]
   * @constructor                     Creates a probabilistic or non-probabilistic answer set program
   * @param groundSymbolicASPRules    Set of ground rules. If backgroundProgramAspifOpt is defined, the symbolicASPRules added to the rules obtained by parsing the string in backgroundProgramAspifOpt
   * @param backgroundProgramAspifOpt Aspif format with optional costs and parameter specs
@@ -193,16 +193,16 @@ case class ProbabilisticAnswerSetProgram(groundSymbolicASPRules: Set[GroundSymbo
       inlineAllModelsMultilineCheckTokensOpt: Option[_]) = if (fileNameOpt.isEmpty)
         obtainInputFromText(Right(backgroundProgStr), mseInCommandLineOpt = None)
 
-      inlineArgsOpt.foreach(_ => input.delSAT.stomp(-5014, "Inline arguments in background program ignored"))
+      inlineArgsOpt.foreach(_ => input.diffSAT.stomp(-5014, "Inline arguments in background program ignored"))
 
       if (satMode)
-        input.delSAT.stomp(-100, "Background program cannot be cnf data")
+        input.diffSAT.stomp(-100, "Background program cannot be cnf data")
 
       if (inlineProbabilityChecksOpt.isDefined || inlineAllModelsCheckTokensOpt.isDefined || inlineAllModelsMultilineCheckTokensOpt.isDefined)
-        input.delSAT.stomp(-5014, "Inline checks in background program ignored")
+        input.diffSAT.stomp(-5014, "Inline checks in background program ignored")
 
       if (inputData.aspifOrDIMACSPlainParserResult.aspifEliToSymbolOpt.isEmpty || inputData.aspifOrDIMACSPlainParserResult.aspifRulesOpt.isEmpty)
-        input.delSAT.stomp(-10000, "Aspif rules missing in parser result from backgroundProgramOpt")
+        input.diffSAT.stomp(-10000, "Aspif rules missing in parser result from backgroundProgramOpt")
 
       (inputData.aspifOrDIMACSPlainParserResult.aspifEliToSymbolOpt.get, inputData.aspifOrDIMACSPlainParserResult.aspifRulesOpt.get,
         inputData.aspifOrDIMACSPlainParserResult.symbols)
@@ -263,7 +263,7 @@ case class ProbabilisticAnswerSetProgram(groundSymbolicASPRules: Set[GroundSymbo
 
           aspifEliToSymbol.find(_._2 == aspifEliAndSymbol._2.stripPrefix("-")).getOrElse({
 
-            input.delSAT.stomp(-5019, "Classically negated atom " + aspifEliAndSymbol._2 + " found but there is no " + aspifEliAndSymbol._2.stripPrefix("-"))
+            input.diffSAT.stomp(-5019, "Classically negated atom " + aspifEliAndSymbol._2 + " found but there is no " + aspifEliAndSymbol._2.stripPrefix("-"))
 
             (0, "")
 
@@ -346,12 +346,12 @@ case class ProbabilisticAnswerSetProgram(groundSymbolicASPRules: Set[GroundSymbo
   * Additionally, it supports probabilistic rules (rules with a probabilistic weight).
   * More complex ASP rule types can be created as combinations or desugarings using these basic types, see, e.g., Lifschitz, Turner: Nested Expressions in Logic Programs, 1999.
   * This data type fully supports ground rules but also has limited support for non-ground rules (for more advanced grounding
-  * needs, it is recommended to use delSAT with an aspif file produced from the non-ground answer set program with a tool such as clingo).
+  * needs, it is recommended to use diff-SAT with an aspif file produced from the non-ground answer set program with a tool such as clingo).
   *
   * This class also provides some support for non-ground rules, using parameters variableBindings and domainAtoms.
   * The rule can be grounded by calling [[input.SymbolicASPRule.genGroundInstances]].
   *
-  * However, for more complex grounding requirements, the answer set program should be translated into aspif format before calling delSAT,
+  * However, for more complex grounding requirements, the answer set program should be translated into aspif format before calling diff-SAT,
   * using, e.g., clingo.
   *
   * Complete examples can be found in [[input.ProbabilisticAnswerSetProgram]] and [[userAPItests.APITests]]
@@ -403,7 +403,7 @@ case class ProbabilisticAnswerSetProgram(groundSymbolicASPRules: Set[GroundSymbo
   * ==Basic grounding==
   *
   * There is limited support for rule grounding (for a more powerful approach to grounding, use clingo/gringo or some
-  * other modern ASP grounder to generate an aspif file which you can then use directly with delSAT):
+  * other modern ASP grounder to generate an aspif file which you can then use directly with diff-SAT):
   *
   * Grounding is performed if variableBindings and/or variableDomains are provided.
   *
@@ -422,7 +422,7 @@ case class ProbabilisticAnswerSetProgram(groundSymbolicASPRules: Set[GroundSymbo
   * not automatically added as literals to the rule. If you want that, you need to add those "facts" explictly to
   * the bodyLiterals or make them actual facts as rules of their own.
   *
-  * Approaches (outside the scope of delSAT) to obtain domainAtoms could be, e.g., to deduce them as extension from given
+  * Approaches (outside the scope of diff-SAT) to obtain domainAtoms could be, e.g., to deduce them as extension from given
   * ground rules where the involved predicates don't recursively depend on each other (as in lparse 1.0), or - less powerful -
   * to simply use all given ground facts (ground rules with empty body), or to use ground atoms in the body of the non-ground rule.
   *
@@ -436,11 +436,11 @@ case class ProbabilisticAnswerSetProgram(groundSymbolicASPRules: Set[GroundSymbo
   * Variables can occur in any literals in the head and/or body.
   *
   * Observe that gringo-style anonymous variables (_) or character ' in variables are not allowed here (but such variables
-  * can be used when using clingo/gringo output with delSAT).
+  * can be used when using clingo/gringo output with diff-SAT).
   *
   * Variables in terms are recognized up to parantheses nesting level three.
   *
-  * delSAT doesn't distinguish between the case that a variable occurs in the head and the case it occurs in the body.
+  * diff-SAT doesn't distinguish between the case that a variable occurs in the head and the case it occurs in the body.
   *
   * @constructor                 Create an instance of this case class
   * @param headLiterals          A disjunction of positive or negative or double negative or classical-negative literals (can be empty)
@@ -501,10 +501,10 @@ case class SymbolicASPRule(headLiterals: Set[Pred] = Set(),
     * ASP variables are words consisting of characters and digits which start with an uppercase letter.
     * Variables can occur in any literals in the head and/or body.
     * Observe that gringo-style anonymous variables (_) or character ' in variables are not allowed here (but such variables
-    * can be used when using clingo/gringo output with delSAT).
+    * can be used when using clingo/gringo output with diff-SAT).
     * Variables in terms are recognized up to parantheses nesting level three.
     * Literals must not contain any redundant space. E.g., "not f(X)" is ok, "  not  f(X) " is invalid.
-    * Also observe that delSAT doesn't care if a variable is in the head or in the body, and that it
+    * Also observe that diff-SAT doesn't care if a variable is in the head or in the body, and that it
     * does not automatically add domain facts to the knowledge base.
     *
     * A probabilistic rule weight is resolved using the semantics specified by flag distrPrOverGroundings in the rule constructor.
@@ -866,21 +866,21 @@ case class GroundSymbolicASPRule(headLiterals: Set[Pred] = Set(),
   private val defaultDoubleNegPrefix = defaultNegPrefix + defaultNegPrefix
 
   if (weightBodySymbolicOpt.isDefined && !bodyLiterals.isEmpty)
-    input.delSAT.stomp(-5004, "weightBodySymbolicOpt must be None in case bodyLiterals is not empty:\n " + this)
+    input.diffSAT.stomp(-5004, "weightBodySymbolicOpt must be None in case bodyLiterals is not empty:\n " + this)
 
   if (choiceHeadOpt.isDefined && !headLiterals.isEmpty)
-    input.delSAT.stomp(-5004, "choiceHeadOpt must be None in case headLiterals is not empty:\n " + this)
+    input.diffSAT.stomp(-5004, "choiceHeadOpt must be None in case headLiterals is not empty:\n " + this)
 
   probabilityOpt.foreach(probability => {
 
     if (headLiterals.size != 1 || choiceHeadOpt.isDefined || weightBodySymbolicOpt.isDefined)
-      input.delSAT.stomp(-5004, "probabilityOpt can only be used with normal rules:\n " + this)
+      input.diffSAT.stomp(-5004, "probabilityOpt can only be used with normal rules:\n " + this)
 
     if (headLiterals.size != 1 || choiceHeadOpt.isDefined || weightBodySymbolicOpt.isDefined)
-      input.delSAT.stomp(-5004, "probabilityOpt can only be used with normal rules:\n " + this)
+      input.diffSAT.stomp(-5004, "probabilityOpt can only be used with normal rules:\n " + this)
 
     if (probability != -1d && (probability < 0d || probability > 1d))
-      input.delSAT.stomp(-5004, "probabilityOpt value out of range: " + probability)
+      input.diffSAT.stomp(-5004, "probabilityOpt value out of range: " + probability)
 
   })
 
@@ -891,7 +891,7 @@ case class GroundSymbolicASPRule(headLiterals: Set[Pred] = Set(),
     val fromDoubleNegation = symbolicAtomR.startsWith(defaultDoubleNegPrefix)
 
     if (fromDoubleNegation && probabilityOpt.isDefined)
-      input.delSAT.stomp(-10000, "probabilityOpt can only be used with normal rules:\n " + this)
+      input.diffSAT.stomp(-10000, "probabilityOpt can only be used with normal rules:\n " + this)
 
     val isNeg = !fromDoubleNegation && symbolicAtomR.startsWith(defaultNegPrefix)
 

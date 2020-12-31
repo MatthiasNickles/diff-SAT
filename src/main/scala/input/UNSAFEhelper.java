@@ -1,5 +1,5 @@
 /**
- * delSAT
+ * diff-SAT
  *
  * Copyright (c) 2018,2020 Matthias Nickles
  *
@@ -20,13 +20,15 @@ import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
+
+
 import static org.apache.commons.math3.util.Precision.round;
 
 public class UNSAFEhelper {
 
     public static final sun.misc.Unsafe UNSAFE;
 
-    static AtomicLong allocatedOffHeapDelSATGlobal = new AtomicLong(0l);
+    static AtomicLong allocatedOffHeapDiffSATGlobal = new AtomicLong(0l);
 
     public static final boolean debugMode = false;
 
@@ -94,7 +96,7 @@ public class UNSAFEhelper {
 
     public static long allocateOffHeapMem(long size) {  // calling this method alone does NOT make it garbage collectable!
 
-        allocatedOffHeapDelSATGlobal.getAndAdd(size);
+        allocatedOffHeapDiffSATGlobal.getAndAdd(size);
 
         if (debugMode) {
 
@@ -111,7 +113,7 @@ public class UNSAFEhelper {
 
     public static long resizeOffHeapMem(long oldAddress, long oldSize, long newSize) {  // calling this method alone does NOT make it garbage collectable!
 
-        allocatedOffHeapDelSATGlobal.getAndAdd(-oldSize + newSize);
+        allocatedOffHeapDiffSATGlobal.getAndAdd(-oldSize + newSize);
 
         if (debugMode) {
 
@@ -134,7 +136,7 @@ public class UNSAFEhelper {
 
     public static void freeOffHeapMem(long address, long size) {
 
-        allocatedOffHeapDelSATGlobal.getAndAdd(-size);
+        allocatedOffHeapDiffSATGlobal.getAndAdd(-size);
 
         UNSAFE.freeMemory(address);
 
@@ -189,7 +191,7 @@ public class UNSAFEhelper {
                 System.out.println("\n\u001B[35mOff-heap garbage collection complete. Freed " + f + " bytes (" + round(Float.valueOf(f) / 1073741824, 4) + " G)\u001B[0m");
 
                 if (debugMode)
-                    delSAT.stats().writeEntry("offheapGarbageFreedBytes", f,  0, false);
+                    diffSAT.stats().writeEntry("offheapGarbageFreedBytes", f,  0, false);
 
             }
 
@@ -199,7 +201,7 @@ public class UNSAFEhelper {
 
     public static long allocatedUnsafeMemory() {
 
-        return allocatedOffHeapDelSATGlobal.get();
+        return allocatedOffHeapDiffSATGlobal.get();
 
     }
 
@@ -230,7 +232,7 @@ public class UNSAFEhelper {
      */
     public static void resetMemTracerDebug() {
 
-        allocatedOffHeapDelSATGlobal.set(0l);
+        allocatedOffHeapDiffSATGlobal.set(0l);
 
         if (debugMode) {
 

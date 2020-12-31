@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018-2020 Matthias Nickles
   *
@@ -12,7 +12,7 @@
 package input
 
 import aspIOutils.Pred
-import delSAT.invokeSampler
+import diffSAT.invokeSampler
 import utils.ArrayValExtensibleIntUnsafe
 import solving.SamplingResult
 import utils.IntArrayUnsafeS

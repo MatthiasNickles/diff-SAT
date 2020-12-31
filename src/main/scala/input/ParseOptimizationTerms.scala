@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -19,7 +19,7 @@ import aspIOutils.Pred
 import com.accelad.math.nilgiri.{DoubleReal, autodiff}
 import com.accelad.math.nilgiri.autodiff.{DifferentialFunction, Variable}
 
-import delSAT.{stomp}
+import diffSAT.{stomp}
 
 import diff.UncertainAtomsSeprt
 
@@ -220,15 +220,15 @@ object ParseOptimizationTerms {
 
                   } else if (fnName == "sqrt")
                     tokenStack.push(dFFactory.sqrt(dArgs(0)))
-                  else if (fnName == "subtr") // we need this because the delSAT caller might use prefix notation instead of operators +,-,*,/ etc
+                  else if (fnName == "subtr") // we need this because the diff-SAT caller might use prefix notation instead of operators +,-,*,/ etc
                   tokenStack.push(dArgs(1).minus(dArgs(0)))
-                    else if (fnName == "add") // we need this because the delSAT caller might use prefix notation instead of operators +,-,*,/ etc
+                    else if (fnName == "add") // we need this because the diff-SAT caller might use prefix notation instead of operators +,-,*,/ etc
                   tokenStack.push(dArgs(1).plus(dArgs(0)))
-                    else if (fnName == "mult") // we need this because the delSAT caller might use prefix notation instead of operators +,-,*,/ etc
+                    else if (fnName == "mult") // we need this because the diff-SAT caller might use prefix notation instead of operators +,-,*,/ etc
                   tokenStack.push(dArgs(1).mul(dArgs(0)))
-                    else if (fnName == "div") // we need this because the delSAT caller might use prefix notation instead of operators +,-,*,/ etc
+                    else if (fnName == "div") // we need this because the diff-SAT caller might use prefix notation instead of operators +,-,*,/ etc
                   tokenStack.push(dArgs(1).div(dArgs(0)))
-                    else if (fnName == "pow") // we need this because the delSAT caller might use prefix notation instead of operators +,-,*,/ etc
+                    else if (fnName == "pow") // we need this because the diff-SAT caller might use prefix notation instead of operators +,-,*,/ etc
                   tokenStack.push(dArgs(1).pow(dArgs(0).getReal.toInt))
                     else if (fnName == "abs")
                     tokenStack.push(dFFactory.sqrt(dFFactory.square(dArgs(0)))) // there's a less costly way using modulo, which dFFactory doesn't support
@@ -392,7 +392,7 @@ object ParseOptimizationTerms {
 
     val paramAtomsAndInnerCostsStr = paramAtomsAndInnerCostsStrOpt.getOrElse("")
 
-    val paramAtomsAndInnerCostsLines: Array[String] = if (paramAtomsAndInnerCostsStrOpt.isDefined) paramAtomsAndInnerCostsStr.lines.toArray else Array[String]()
+    /*;;;*/ val paramAtomsAndInnerCostsLines: Array[String] = if (paramAtomsAndInnerCostsStrOpt.isDefined) paramAtomsAndInnerCostsStr.split("\\R")/*.lines*/ else Array[String]()
 
     val parameterAtomsSeq: Array[Pred] = (paramAtomsAndInnerCostsLines.take(1).mkString.trim.split("\\s+").drop(1) ++
       aspifOrDIMACSParserResult.additionalUncertainAtomsInnerCostsStrs._1).distinct.filter(pa => { // TODO: optimize
