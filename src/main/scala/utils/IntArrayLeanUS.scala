@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018-2020 by Matthias Nickles
   *
@@ -17,7 +17,7 @@ import sharedDefs._
 import input.UNSAFEhelper._
 
 
-/** This is not code for general-purpose unsafe (off-heap) memory use - designed for use in project delSAT only. Not thread-safe.
+/** This is not code for general-purpose unsafe (off-heap) memory use - designed for use in project diff-SAT only. Not thread-safe.
   * >>> Deprecated: use either IntArrayUnsafeS or direct allocated addresses instead. <<< */
 @deprecated object IntArrayLeanUS {
 
@@ -139,7 +139,7 @@ import input.UNSAFEhelper._
 }
 
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only. Not thread-safe. */
+/** This is not a general-purpose unsafe array class - designed for use in project diff-SAT only. Not thread-safe. */
 @deprecated class IntArrayLeanUS(var sizev: Int) {
   // Using this class is only efficient if each single instance allocates a large amount of memory off-heap.
   // Using this class to create small objects is rather inefficient.

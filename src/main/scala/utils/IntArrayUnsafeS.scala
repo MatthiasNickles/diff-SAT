@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018-2020 Matthias Nickles
   *
@@ -16,7 +16,7 @@ import sun.misc.Unsafe
 import sharedDefs._
 import input.UNSAFEhelper._
 
-/** This is not code for general-purpose unsafe (off-heap) memory use - designed for use in project delSAT only. */
+/** This is not code for general-purpose unsafe (off-heap) memory use - designed for use in project diff-SAT only. */
 object IntArrayUnsafeS {
 
   val hashForDuplRemGlob = new IntOpenHashSet(2048, 0.75f)
@@ -162,7 +162,7 @@ object IntArrayUnsafeS {
 }
 
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only. Not thread-safe. */
+/** This is not a general-purpose unsafe array class - designed for use in project diff-SAT only. Not thread-safe. */
 class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArrayUnsafe[Int] {
 
   // Important: using this class, which simply combines an JVM off-heap memory address with meta-data (especially size)
@@ -208,7 +208,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   }/* else {
 
-   // assert(false)  // it looks like alignment of this array has in delSAT no beneficial effect
+   // assert(false)  // it looks like alignment of this array has in diff-SAT no beneficial effect
 
     //isAligned = true
 

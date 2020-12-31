@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -14,7 +14,7 @@ package utils
 import sun.misc.Unsafe
 import input.UNSAFEhelper._
 
-/** This is not a general-purpose unsafe class - designed for use in project delSAT only! */
+/** This is not a general-purpose unsafe class - designed for use in project diff-SAT only! */
 object FloatArrayUnsafeS {
 
   //private[this] var unsafe: Unsafe = null
@@ -37,7 +37,7 @@ object FloatArrayUnsafeS {
 
 }
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only! */
+/** This is not a general-purpose unsafe array class - designed for use in project diff-SAT only! */
 class FloatArrayUnsafeS(var sizev: Int, aligned: Boolean) {
 
   //private[this] val unsafe = ByteArrayUnsafeS.getUnsafe  // without private[this] the field access in the bytecode would be by invokevirtual

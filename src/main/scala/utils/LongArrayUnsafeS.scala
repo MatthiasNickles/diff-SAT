@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -15,14 +15,14 @@ import input.UNSAFEhelper._
 import it.unimi.dsi.fastutil.longs.{LongArrayList, LongOpenHashSet}
 
 
-/** This is not a general-purpose unsafe array class - designed for use in project delSAT only! */
+/** This is not a general-purpose unsafe array class - designed for use in project diff-SAT only! */
 class LongArrayUnsafeS(var sizev: Int) extends IntOrLongArrayUnsafe[Long] {
 
   //private[this] val unsafe: Unsafe = sharedDefs.unsafe
 
   private[this] val alignment = 0
 
-  //private[this] val alignment = UNSAFE.pageSize // currently not used (see code below), no visible effect in delSAT
+  //private[this] val alignment = UNSAFE.pageSize // currently not used (see code below), no visible effect in diff-SAT
 
   //private[this] val internalPaddingFact = 0
 

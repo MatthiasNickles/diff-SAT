@@ -5,7 +5,7 @@ import java.util.Random
 import it.unimi.dsi.fastutil.longs.{Long2IntOpenHashMap, LongArrayList}
 
 /**
-  * For positive (Scala-)Longs only (in case of delSAT: nogood reducibles). Not suitable for cryptographic purposes.
+  * For positive (Scala-)Longs only (in case of diff-SAT: nogood reducibles). Not suitable for cryptographic purposes.
   */
 class RandomLongSet(expectedNoOfItems: Int = 1024) {
 

@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018, 2020 Matthias Nickles
   *
@@ -11,7 +11,8 @@
 
 package utils
 
-import input.delSAT
+import input.diffSAT
+import input.diffSAT.changeConsoleWidthUnderWin
 import sharedDefs.RandomGenSuperclass
 
 import scala.collection.mutable
@@ -168,18 +169,18 @@ object Various {
 
   @inline def powInt(a: Double, b: Int): Double = org.apache.commons.math3.util.FastMath.pow(a, b)
 
-  @inline def printStatusLine(pStrR: String) = {
+  @inline def printStatusLine(pStrR: String, cutOffAt: Int = 0) = {
 
-    val pStr = pStrR.take(sharedDefs.maxAssumedConsoleWidth)+(" " * (sharedDefs.maxAssumedConsoleWidth - pStrR.length).max(0))  // progress line scrolls if larger than console width. No reliable way to determine console width in Java
+    val pStr = if(sharedDefs.debug) pStrR else pStrR.take(sharedDefs.maxAssumedConsoleWidth.max(cutOffAt))+(" " * (sharedDefs.maxAssumedConsoleWidth.max(cutOffAt) - pStrR.length).max(0))  // progress line scrolls if larger than console width. No reliable way to determine console width in Java
 
-    if(delSAT.osWin) {
+    if(diffSAT.osWin && changeConsoleWidthUnderWin) {  // for older versions of Windows (pre Win 10 built xxxx?)
 
       // System.out.write(pStr.getBytes()) // if more than 4 lines, IntelliJ console flickers
 
       // \r moves to start of current console row (not supported with all OS)
 
       System.out.print(("\b" * 1100) + "\r" + pStr + "            ")
-      // with Win, \b seems to required in addition to '\r'. But still doesn't work if console line buffer width to small.
+      // with Win, \b's seem to required in addition to '\r'. But still doesn't work if console line buffer width to small.
 
       // print("\u001b[s" + pStr + "\u001b[u")  // nope in Win
 
@@ -220,7 +221,7 @@ object Various {
   /**
     * Pretty prints a Scala value similar to its source represention.
     * Particularly useful for case classes.
-    * Original code: https://gist.github.com/carymrobbins/7b8ed52cd6ea186dbdf8
+    * Derived from code at https://gist.github.com/carymrobbins/7b8ed52cd6ea186dbdf8
     * with enhancements: @see https://gist.github.com/myDisconnect/1f7046b23e18b4b43dd3c5932d0db7dc
     *
     * @param a               - The value to pretty print.

@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 by Matthias Nickles
   *
@@ -19,7 +19,7 @@ import scala.annotation.tailrec
 /**
   * Set of positive integers, using a dual index structure for looking up the index of an element
   * in O(1) (O(1) add (unsorted), O(1) remove).
-  * (Can also be used as a simple special-purpose heap (with delSAT literal scores as order).)
+  * (Can also be used as a simple special-purpose heap (with diff-SAT literal scores as order).)
   *
   * For storing small sets of small positive int elements only!
   *
@@ -132,7 +132,7 @@ final class DualIndexedIntSet(sizeDta: Int /*Important: array data must cover th
 
   @inline def addSorted(item: Int): Boolean = { // to use this indexed set like a heap.
     // Observe that the remove methods in this class destroy the order (since they change the index of an element which
-    // remains in the set). With delSAT, use sort() or, where possible, nudgeUpSorted().
+    // remains in the set). With diff-SAT, use sort() or, where possible, nudgeUpSorted().
 
     assert(sortedMode)
 
@@ -399,7 +399,7 @@ final class DualIndexedIntSet(sizeDta: Int /*Important: array data must cover th
   @inline def testSorted(): Unit = {  // TODO: add tests of score updates
 
     if (!areAssertionsEnabled)
-      userAPItests.delSAT.stomp(-1, "Assertions need to be enabled to run this test!")
+      userAPItests.diffSAT.stomp(-1, "Assertions need to be enabled to run this test!")
 
     assert(sortedMode)
 

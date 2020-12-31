@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -14,7 +14,7 @@ package utils
 import input.UNSAFEhelper._
 import sun.misc.Unsafe
 
-/** This is not a general-purpose unsafe (off-heap) byte array class - designed for use in project delSAT only! */
+/** This is not a general-purpose unsafe (off-heap) byte array class - designed for use in project diff-SAT only! */
 object ByteArrayUnsafeS {
 
   //private[this] var unsafe: Unsafe = null
@@ -35,7 +35,7 @@ object ByteArrayUnsafeS {
 
 }
 
-/** This is not a general-purpose unsafe byte array class - designed for use in project delSAT only! */
+/** This is not a general-purpose unsafe byte array class - designed for use in project diff-SAT only! */
 class ByteArrayUnsafeS(var sizev: Int /*, aligned: Boolean*/) {
 
   //var isSorted: Boolean = false

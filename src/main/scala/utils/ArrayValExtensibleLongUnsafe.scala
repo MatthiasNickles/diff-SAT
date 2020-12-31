@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018, 2020 Matthias Nickles
   *
@@ -168,7 +168,7 @@ class ArrayValExtensibleLongUnsafe(var buffer: LongArrayUnsafeS, initiallyOccupi
 
   @inline def clear(): Unit = contentLen = 0
 
-  @inline def size(): Eli = contentLen
+  @inline def size(): Int = contentLen
 
   @inline def sort(by: Long => Double): Unit = {
 

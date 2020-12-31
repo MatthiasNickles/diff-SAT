@@ -1,3 +1,14 @@
+/**
+  * diff-SAT
+  *
+  * Copyright (c) 2018-2020 Matthias Nickles
+  *
+  * matthiasDOTnicklesATgmxDOTnet
+  *
+  * This code is licensed under MIT License (see file LICENSE for details)
+  *
+  */
+  
 package utils
 
 @deprecated trait IntOrLongArrayUnsafe[@specialized T <: AnyVal] {  // nope (cannot avoid boxing)
