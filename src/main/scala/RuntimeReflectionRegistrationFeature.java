@@ -8,7 +8,7 @@ import org.graalvm.nativeimage.hosted.RuntimeReflection;
 import java.lang.reflect.Field;
 
 // Tells Graal's native image generator about reflected fields in sharedDefs (otherwise this information
- // wouldn't be available anymore at delSAT runtime).
+ // wouldn't be available anymore at diff-SAT runtime).
  // native-image.cmd must be called with argument  --features=RuntimeReflectionRegistrationFeature
 @AutomaticFeature
 public class RuntimeReflectionRegistrationFeature implements Feature {
