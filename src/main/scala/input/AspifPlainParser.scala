@@ -21,7 +21,7 @@ import scala.collection.{Map, Set, mutable}
 
 /**
   * Parser for a subset of the ASP Intermediate Format (aspif), enhanced with support for probabilistic rules.
-  * Not a general-purpose aspif parser; designed for use in delSAT only.
+  * Not a general-purpose aspif parser; designed for use in diff-SAT only.
   *
   * Probabilistic rules have the form
   * 1000 p 1 0 1 h B
@@ -29,7 +29,7 @@ import scala.collection.{Map, Set, mutable}
   * and B being a normal rule body). If p = -1, only the spanning formula [Nickles, Mileo 2015] is being generated but no _pr_ fact,
   * which informally means "rule v not rule".
   *
-  * Observe that the above isn't the only way to specify probabilities with delSAT - see README.md for other supported input formats.
+  * Observe that the above isn't the only way to specify probabilities with diff-SAT - see README.md for other supported input formats.
   *
   * For a description of the aspif file format see Appendix A in "A Tutorial on Hybrid Answer Set Solving with clingo",
   * https://link.springer.com/chapter/10.1007/978-3-319-61033-7_6, Appendix A.
@@ -38,7 +38,7 @@ import scala.collection.{Map, Set, mutable}
   * of type >= 2 (e.g.., minimize statements or #external) are currently not implemented. Output statements (#show) are partially supported.
   *
   * If some aspif file still cannot be processed it is recommended to try with a preprocessor such as Clingo 5 using options
-  * --trans-ext=all --pre=aspif) or lp2normal to translate extended rules. But observe that delSAT cannot be used for finding
+  * --trans-ext=all --pre=aspif) or lp2normal to translate extended rules. But observe that diff-SAT cannot be used for finding
   * an optimal model (e.g., using ~| or #minimize).
   *
   * @author Matthias Nickles
@@ -75,8 +75,8 @@ object AspifPlainParser {
                  shiftAndUnfoldForDisjunctions: Boolean /* <- translate away disjunctions in the head; sound, but only complete for large
      enough noOfUnfolds ->*/ , maxNoOfUnfolds: Int): AspifOrDIMACSPlainParserResult = {
 
-    // NB: There are two sorts of elis used in this method: 1) aspif elis (the literal indices as found in the aspif file) and 2) delSAT elis. The main difference is
-    // that the former can be negative numbers whereas delSAT elis are always positive.
+    // NB: There are two sorts of elis used in this method: 1) aspif elis (the literal indices as found in the aspif file) and 2) diff-SAT elis. The main difference is
+    // that the former can be negative numbers whereas diff-SAT elis are always positive.
 
     parserInstanceCount.incrementAndGet()
 
@@ -242,8 +242,8 @@ object AspifPlainParser {
           if (headLit(0) == '-')
             diffSAT.stomp(-5020, "Negative head literal in aspif input in rule: " + ruleLines(ri))
 
-          // delSAT "accidentially" understands negative literals in heads in aspif files although these aren't allowed
-          // by the standard. The reason is that delSAT eliminates such head literals in addAspifRules which is called during aspif parsing.
+          // diff-SAT "accidentially" understands negative literals in heads in aspif files although these aren't allowed
+          // by the standard. The reason is that diff-SAT eliminates such head literals in addAspifRules which is called during aspif parsing.
 
           Integer.parseInt(headLit)
 
@@ -312,7 +312,7 @@ object AspifPlainParser {
 
           val bodyGivenNegAspifLits: Set[AspifEli] = Set(aspifEliToSymbol.find(_._2 == aspifEliAndSymbol._2.stripPrefix("-")).getOrElse({
 
-            delSAT.stomp(-5019, "Classically negated atom " + aspifEliAndSymbol._2 + " found but there is no " + aspifEliAndSymbol._2.stripPrefix("-"))
+            diffSAT.stomp(-5019, "Classically negated atom " + aspifEliAndSymbol._2 + " found but there is no " + aspifEliAndSymbol._2.stripPrefix("-"))
 
             (0, "")
 
@@ -487,7 +487,7 @@ object AspifPlainParser {
 
       //println("\n----------\nnonDisjAndDisjAspifRules_2:\n" + nonDisjAndDisjAspifRules._2.map(_.toString).mkString("\n"))
 
-      val shiftedAspifRules = nonDisjAndDisjAspifRules._2.flatMap(rule => { // note that some shifting might already have been applied before calling delSAT (e.g., for head-cycle free programs with clingo/gringo preprocessing)
+      val shiftedAspifRules = nonDisjAndDisjAspifRules._2.flatMap(rule => { // note that some shifting might already have been applied before calling diff-SAT (e.g., for head-cycle free programs with clingo/gringo preprocessing)
 
         rule.headPosAtomsAspifElis.map(headAtomi => {
 
@@ -545,7 +545,7 @@ object AspifPlainParser {
     *                                         Value between 0 and 1. Also allowed -1, which just generates the spanning rule but doesn't
     *                                         add a _pr_ fact (corresponding to "[.] rule" in PrASP).
     */
-  def addAspifRules( // NB: Double default negation ("not not") can only stem from using the delSAT API, not from aspif files (where gringo/clingo has already replaced it with something else).
+  def addAspifRules( // NB: Double default negation ("not not") can only stem from using the diff-SAT API, not from aspif files (where gringo/clingo has already replaced it with something else).
                      // Double negation in the body needs already to be eliminated AND traced (see doubleNegationIndicesInBodyPosAtomsElis),
                      // double negation in the head needs already be to be entirely eliminated with no tracing required (see class DisjunctiveAnswerSetProgramWithCosts).
                      bodyGivenPosAspifLits: Array[AspifEli],
@@ -765,9 +765,9 @@ object AspifPlainParser {
 
         lits.foreach(aspifEli => {
 
-          //assert(aspifEli >= 0, "Error: Negative head literal found (not yet supported by delSAT): " + newAspifRule)
+          //assert(aspifEli >= 0, "Error: Negative head literal found (not yet supported by diff-SAT): " + newAspifRule)
           //if (aspifEli < 0)
-          // delSAT.stomp(-102, "Negative head literal found in aspif rule (not supported): " + newAspifRule)
+          // diffSAT.stomp(-102, "Negative head literal found in aspif rule (not supported): " + newAspifRule)
 
           if (!aspifEliToSymbol.contains(aspifEli)) {
 
