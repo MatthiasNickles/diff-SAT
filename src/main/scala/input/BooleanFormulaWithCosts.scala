@@ -83,7 +83,7 @@ import scala.collection.mutable.ArrayBuffer
       // Print sample and the result of ad hoc query Pr[p(a):-not q AND p(b):-not q]:
 
       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults,
-      adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = true,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("1"), Seq("2")),
@@ -132,7 +132,7 @@ case class BooleanFormulaWithCosts(clauses: Set[Clause], var maxVar: Int = -1) {
 
       val arrayUS = new IntArrayUnsafeS(values = literals.map(lit => {
 
-        -lit.value // (-value since delSAT internally works with nogoods, not clauses)
+        -lit.value // (-value since diff-SAT internally works with nogoods, not clauses)
 
       }).toArray)
 
@@ -223,7 +223,7 @@ case class BooleanClause(literals: Set[BooleanLiteral]) extends Clause {}
 
 /**
   * A disjunctive set of literals, annotated with a probability (soft clause).
-  * Observe that every probabilistic clause causes delSAT to introduce a new auxiliary propositional variable
+  * Observe that every probabilistic clause causes diff-SAT to introduce a new auxiliary propositional variable
   *
   * @param literals
   */
