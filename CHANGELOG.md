@@ -1,3 +1,7 @@
+0.5.2
+
+- Minor bug fixes and improvements. delSAT -> diff-SAT
+
 0.5.1
 
 - Bug fix: in rare cases, conflict nogood generation messed up the memory layout
