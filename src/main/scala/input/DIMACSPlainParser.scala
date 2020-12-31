@@ -21,7 +21,7 @@ import utils.Various._
 import scala.collection.mutable.ArrayBuffer
 
 /**
-  * Parser for DIMACS-CNF and PCNF (probabilistic CNF). !! Not a general-purpose DIMACS-CNF parser - designed for use within diff-SAT only! Work in progress.
+  * Parser for DIMACS-CNF and PCNF (probabilistic CNF). !! Not a general-purpose DIMACS-CNF parser - designed for use within diff-SAT only! 
   *
   * @author Matthias Nickles
   *
