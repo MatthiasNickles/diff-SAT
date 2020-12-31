@@ -1,5 +1,5 @@
 /**
-  * delSAT
+  * diff-SAT
   *
   * Copyright (c) 2018,2020 Matthias Nickles
   *
@@ -11,7 +11,7 @@
 
 package userAPItests
 
-import input.delSAT
+import input.diffSAT
 import sharedDefs.enforceWriteRuntimeStatsToFileOpt
 import solving.SamplingResult
 
@@ -20,7 +20,7 @@ import scala.collection.mutable
 /**
   * User API tests.
   *
-  * Work in progress to replace older delSAT utests in Prasp2. TODO: add more tests
+  * Work in progress to replace older diff-SAT utests in Prasp2. TODO: add more tests
   *
   * Observe that we are using two major approaches: [[input.ProbabilisticAnswerSetProgram]] for (probabilistic or plain) answer set programming,
   * and [[input.BooleanFormulaWithCosts]] for (probabilistic or plain) Boolean formulas (in CNF). Each of these can
@@ -33,7 +33,7 @@ import scala.collection.mutable
   */
 trait APITests {
 
-  this: delSAT.type =>
+  this: diffSAT.type =>
 
   def runAllAPITests: Unit = {
 
@@ -107,7 +107,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -151,7 +151,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -189,7 +189,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -228,7 +228,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -267,7 +267,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -296,7 +296,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -332,7 +332,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -373,7 +373,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, _, _, _, _) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, _, _, _, _) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -410,7 +410,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("p")),
@@ -462,7 +462,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a"), Seq("b")),
@@ -520,7 +520,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a"), Seq("b")),
@@ -574,7 +574,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("p"), Seq("q")),
@@ -635,7 +635,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a", "b")),
@@ -690,7 +690,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a", "b")),
@@ -744,7 +744,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a", "b")),
@@ -801,7 +801,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a") /*<-non-exclusive, includes a^b, otherwise we'd have to write Seq("a", "not b")*/ ,
@@ -867,7 +867,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("p", "not q"), Seq("q", "not p"), Seq("p", "q")),
@@ -931,7 +931,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("p", "not q"), Seq("q", "not p"), Seq("p", "q")),
@@ -993,7 +993,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a") /*<-non-exclusive, includes a^b, otherwise we'd have to write Seq("a", "not b")*/ ,
@@ -1060,7 +1060,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a")),
@@ -1111,7 +1111,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a")),
@@ -1172,7 +1172,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a", "b"), Seq("c", "d")),
@@ -1190,7 +1190,7 @@ trait APITests {
       }) && adHocConjunctiveQueriesResults.exists((queryAndFrequency: (String, Double)) => {
 
         queryAndFrequency._1 == "c ^ d" &&
-          queryAndFrequency._2 >= 0.47d && queryAndFrequency._2 <= 0.53d
+          queryAndFrequency._2 >= 0.47d && queryAndFrequency._2 <= 0.53d  // TODO: occasionally fails (interval too small?)
 
       }))
 
@@ -1237,7 +1237,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a", "c", "d")),
@@ -1289,7 +1289,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("a"), Seq("b"), Seq("a", "b")),
@@ -1360,7 +1360,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("b"), Seq("b", "p"), Seq("b", "p", "q"), Seq("not b")),
@@ -1427,7 +1427,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("p")),
@@ -1489,7 +1489,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("h"), Seq("e1"), Seq("e2"), Seq("e3"), Seq("e1", "e2", "e3")),
@@ -1555,7 +1555,7 @@ trait APITests {
       )).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = true,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = true,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("p"), Seq("q"), Seq("p", "q"), Seq("a"), Seq("p", "q", "a")),
@@ -1618,7 +1618,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules, backgroundProgramAspifOpt = None).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("p"), Seq("nope"), Seq("z"), Seq("zz")),
@@ -1673,7 +1673,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules, backgroundProgramAspifOpt = None).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -1724,7 +1724,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules, backgroundProgramAspifOpt = None).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -1776,7 +1776,7 @@ trait APITests {
       val sampled: SamplingResult = ProbabilisticAnswerSetProgram(rules, backgroundProgramAspifOpt = None).
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("v")),
@@ -2099,7 +2099,7 @@ trait APITests {
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults,
-      adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -2123,11 +2123,11 @@ trait APITests {
 
     if (testHeader((collective, "Test grounding with probabilistic rules 2"))) { //  --------------------------------------------------------------------
       // Same as "Test grounding with probabilistic rules 1", but now we attach the probabilistic weight to each
-      // ground instance of the nonground rule individually. Since delSAT doesn't enforce or use any knowledge about
+      // ground instance of the nonground rule individually. Since diff-SAT doesn't enforce or use any knowledge about
       // event independence, we sample a larger than necessary number of models and use diversify=true. If
       // we wouldn't do this, we would still get the correct result (0.7 for p(a) :- not q and 0.7 for p(b) :- not q),
       // but we would "accidentially" also get 0.7 for (p(a) :- not q) ^ (p(b) :- not q), i.e., the same result as with
-      // distrPrOverGroundings = true, because delSAT would see the two events (p(a) :- not q) and (p(b) :- not q)
+      // distrPrOverGroundings = true, because diff-SAT would see the two events (p(a) :- not q) and (p(b) :- not q)
       // as completely and positively dependent simply because that's simpler for the sampling algorithm,
       // so we couldn't detect the impact of distrPrOverGroundings true vs. false.
 
@@ -2180,7 +2180,7 @@ trait APITests {
         solve(solverParams, paramAtomsAndInnerCostsStrOpt = None)
 
       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults,
-      adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -2219,7 +2219,7 @@ trait APITests {
           d(c,a).
 
           { d(X,Y); d(Y,Z) } :- q.  % NB: this would not be valid with gringo/clingo (X,Y,Z are unsafe). In contrast
-          % to this, the much more basic delSAT grounder mechanically instantiates the variables using the domain facts.
+          % to this, the much more basic diff-SAT grounder mechanically instantiates the variables using the domain facts.
 
        */
 
@@ -2383,7 +2383,7 @@ trait APITests {
        
         // Print sample and the result of ad hoc query Pr(q AND p):
        
-      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults, adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
           satMode = false,
           samplingResult = sampled,
           adHocConjunctiveQueries = Seq(),
@@ -2462,7 +2462,7 @@ trait APITests {
       // Print sample and the result of ad hoc query Pr[p(a):-not q AND p(b):-not q]:
 
       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults,
-      adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = false,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(),
@@ -2532,7 +2532,7 @@ trait APITests {
       // Print sample and the result of ad hoc query Pr[p(a):-not q AND p(b):-not q]:
 
       val (_, adHocConjunctiveQueriesResults, adHocDisjunctiveQueriesResults, adHocRuleQueriesResults,
-      adHocConjunctionOfSimpleGroundRulesQuery) = delSAT.queryAndPrintSolverResult(showauxInASPmode = false,
+      adHocConjunctionOfSimpleGroundRulesQuery) = diffSAT.queryAndPrintSolverResult(showauxInASPmode = false,
         satMode = true,
         samplingResult = sampled,
         adHocConjunctiveQueries = Seq(Seq("1"), Seq("2")),
