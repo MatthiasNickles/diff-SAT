@@ -81,7 +81,7 @@ class SolverMulti(prep: Preparation) {
     1
   else
     Math.ceil(Runtime.getRuntime().availableProcessors() / (if (abandonOrSwitchSlowThreads != 0 && abandonOrSwitchSlowThreads != 4)
-      1.4d else 1.6d))).toInt
+      1.4d else 2d/*1.6d*/))).toInt.min(upperLimitAutoSolverThreads)
   else
     maxSolverThreadsR).max(1)
 
