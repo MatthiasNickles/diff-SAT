@@ -636,7 +636,7 @@ Feedback and bug reports are welcome!
 
 #### diff-SAT Copyright & License ####
 
-Copyright (c) 2018-2020 by Matthias Nickles
+Copyright (c) 2018-2021 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/diff-SAT/blob/master/LICENSE)
 
