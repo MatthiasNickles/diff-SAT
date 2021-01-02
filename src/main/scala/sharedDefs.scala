@@ -282,11 +282,14 @@ package object sharedDefs {
 
   /** n != 1 for parallel portfolio solving with competing solver instances (specified number of threads not guaranteed)
     * Keep in mind that the machine might decrease maximum core frequencies with more cores being utilized.
-    * -x sets number of solver threads in dependency of number of cores, problem size and other factors. For small
-    * problems with number of positive literals (ri.e., in case of SAT: #variables) smaller -x (with x < 0), only a single solver thread is launched.
+    * -x sets number of solver threads in dependency of number of cores, problem size and other factors, with an upper limit of upperLimitAutoSolverThreads.
+    * For small problems with number of positive literals (i.e., in case of SAT: #variables) smaller -x (with x < 0), only a single solver thread is launched.
     * NB: diff-SAT also spawns some parallelism from within individual solver threads, so normally no all cores should be occupied by solvers.
     * Commandline: --solverarg maxSolverThreadsR n */
   var maxSolverThreadsR: Int = -1
+
+  /** Upper limit for automatically determined number of solver threads if maxSolverThreadsR < 0 */
+  var upperLimitAutoSolverThreads: Int = 999999999
 
   /** If not empty, only the specified threads will be executed. All other threads will be ignored.
     * E.g., if a total of 6 threads are specified using maxSolverThreadsR and threadSelect = Seq(2,3),
@@ -715,8 +718,8 @@ package object sharedDefs {
   /** See source code */
   var maxApproachSwitchesPerSolverThread: Int = Int.MaxValue // maximum number of switches per solver thread if slowThreadAction = 3
 
-  /** See source code */
-  var enforceProgressChecksEveryTrialsR: Int = if (abandonOrSwitchSlowThreads != 0d) 200000 else (if (debug) 200000 else 300000) // report regular solving progress _at least_ every x solver trials
+  /** Report regular solving progress at least every x solver trials. Must be a power of 2. */
+  var enforceProgressChecksEveryTrialsR: Int = if (abandonOrSwitchSlowThreads != 0d) 65536 else (if (debug) 65536 else /*131072*/65536 * 4)
 
   //val progressReportImprovThresh = if (diffSAT.debug) 100 else 100 // report progress also if reduction of unassigned literals is at least this threshold
 
