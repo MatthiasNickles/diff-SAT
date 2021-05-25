@@ -1,3 +1,8 @@
+
+Workaround for "Error \[-100\]: Invalid input data:" error message: If you see this error, open the input file 
+with some text editor which supports switching between file encodings (such as Notepad++) and change the 
+encoding to plain *UTF-8*. The next version of diff-SAT will support a wider range of input encodings. 
+
 ### Latest versions ###
 
 0.5.1, 0.5.2
