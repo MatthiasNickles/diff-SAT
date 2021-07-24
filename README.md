@@ -6,23 +6,7 @@ change the encoding to ***UTF-8*** (without BOM). The next version of diff-SAT w
 
 ### Latest versions ###
 
-0.5.1, 0.5.2
-
-- Bug fixes and minor improvements. delSAT -> diff-SAT 
-
-0.5.0 (major update)
-
-- Optimized SAT solver core with significantly improved performance (and thus also improved sampling performance)
-- User API for solving problems with probabilistic or non-probabilistic CNF clauses and ASP ground rules
-- User API support for probabilistic _non-ground_ normal rules and free loss function terms
-- Aspif and User API support for weight and choice rules, double default negation in rule bodies, and double and single negation in rule heads 
-- User API documentation (/doc) (not very detailed yet, but should be sufficient to get started)
-- Probabilistic Answer Set Programming Intermediate Format (PASPIF) (Aspif enhanced with a new probabilistic rule type) 
-- CDNL interleaved with Stochastic Local Search (WalkSAT or Simulated Annealing (SASAT-style)) for regular SAT solving
-- Bug fixes and several minor improvements
-- Some code cleanup and refactoring 
-
-See [CHANGELOG.md](CHANGELOG.md) for details and previous updates.
+See [CHANGELOG.md](CHANGELOG.md) 
 
 ### User guide ###
 
