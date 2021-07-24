@@ -1,6 +1,6 @@
 0.5.2
 
-- Minor bug fixes and improvements. delSAT -> diff-SAT
+- Minor bug fixes and improvements. Renamed to diff-SAT
 
 0.5.1
 
