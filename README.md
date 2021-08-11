@@ -632,7 +632,7 @@ License: [MIT license](https://github.com/MatthiasNickles/diff-SAT/blob/master/L
 
 #### Dependencies ####
 
-diff-SAT uses the following third-party libraries, besides the Scala and JVM standard libraries:
+diff-SAT uses the following third-party libraries, besides the Java and Scala standard libraries:
 
 - JAutoDiff   
   Copyright (c) 2012 uniker9 (https://github.com/uniker9/JAutoDiff)  
