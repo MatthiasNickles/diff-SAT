@@ -41,7 +41,7 @@ search problems and relational knowledge representation. ASP is closely related 
 
 diff-SAT can be used for plain SAT and Answer Set solving too, but has a wider range of use cases. For example: 
 
-- Associating differentiable cost functions with rules, clauses and other formulas or individual Boolean variables.
+- Associating differentiable cost functions and weights with rules, clauses and other formulas or individual Boolean variables.
   This way, diff-SAT can be used as a "hybrid" inference engine which makes use of symbolic/logical, graph or other relational 
   knowledge as well as probabilistic/subsymbolic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
   approaches, diff-SAT doesn't require any independence assumptions or other restrictions for random variables.
