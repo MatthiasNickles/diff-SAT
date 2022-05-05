@@ -1,6 +1,6 @@
 0.5.3
 
-- Support for UCS-2 and UTF-16 character encodings
+- Support for UTF-8-BOM and UTF-16 character encodings
 - Minor bug fixes and improvements
 
 0.5.2
