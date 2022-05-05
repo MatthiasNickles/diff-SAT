@@ -41,15 +41,15 @@ search problems and relational knowledge representation. ASP is closely related 
 
 diff-SAT can be used for plain SAT and Answer Set solving too, but has a wider range of use cases. For example: 
 
-- Associating **probabilities** (weights) and **differentiable cost functions** with logical rules, clauses and other formulas or individual Boolean variables.
+- Associating **probabilities** (weights) and **differentiable cost functions** with logical rules, clauses and individual Boolean variables.
   
   This way, diff-SAT can be used as a "hybrid" inference engine which makes use of symbolic/logical, graph or other relational 
   knowledge as well as probabilistic/subsymbolic constraints (in form of cost functions). In contrast to most existing probabilistic logic 
-  approaches, diff-SAT doesn't require any independence assumptions or other restrictions for random variables.
+  approaches, diff-SAT **doesn't require any independence assumptions** or other restrictions for random variables.
 
-- **Probabilistic logic programming** (more precisely: _probabilistic answer set programming_) and **probabilistic satisfiability solving** (weighting Boolean variables, clauses, facts and rules with probabilities). 
+- **Probabilistic logic programming** (more precisely: _probabilistic answer set programming_) and **probabilistic satisfiability solving** (weighting Boolean variables, clauses, facts and rules with probabilities).
 
-Efficient search for models of _satisfiable_ **CPA and PSAT (Probabilistic Satisfiability)** instances given in PSAT normal form 
+ Efficient search for models of _satisfiable_ **CPA and PSAT (Probabilistic Satisfiability)** instances given in PSAT normal form 
 
 - Distribution-aware **sampling of models** (answer sets or satisfying truth assignments) 
 
