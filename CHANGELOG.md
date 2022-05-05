@@ -1,6 +1,11 @@
+0.5.3
+
+- Support for UCS-2 and UTF-16 character encodings
+- Minor bug fixes and improvements
+
 0.5.2
 
-- Minor bug fixes and improvements. Renamed to diff-SAT
+- Minor bug fixes and improvements. delSAT -> diff-SAT
 
 0.5.1
 
