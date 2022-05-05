@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018, 2020 Matthias Nickles
+  * Copyright (c) 2018, 2022 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -32,4 +32,10 @@ case class SolverThreadSpecificSettings(var threadNo: Int /*>=1*/ ,
                                         absEliScoringApproach: Int,
                                         nogoodRemovalThreshInit: Int,
                                         noisePhaseMemoR: Float,
-                                        localRestarts: Boolean)
+                                        localRestarts: Boolean,
+                                        scoringForRemovalOfLearnedNogoodsR: Int,
+                                        weakRephasingAtRestartEvery: Int,
+                                        rephasePhaseMemo: Boolean,
+                                        nogoodBCPtraversalDirection: Int,
+                                        absEliScoringApproach15NoOfBins: Int,
+                                        var singleSolverThreadDataOpt: Option[SingleSolverThreadData])

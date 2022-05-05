@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018-2021 Matthias Nickles
+  * Copyright (c) 2018-2022 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -81,11 +81,11 @@ class SolverMulti(prep: Preparation) {
     1
   else
     Math.ceil(Runtime.getRuntime().availableProcessors() / (if (abandonOrSwitchSlowThreads != 0 && abandonOrSwitchSlowThreads != 4)
-      1.4d else 2d/*1.6d*/))).toInt.min(upperLimitAutoSolverThreads)
+      1.4d else 2.2d/*1.6d*/))).toInt.min(upperLimitAutoSolverThreads)
   else
     maxSolverThreadsR).max(1)
 
-  val threadConfs = Array.ofDim[SolverThreadSpecificSettings](maxCompetingSolverThreads)
+  val threadConfs: Array[SolverThreadSpecificSettings] = Array.ofDim[SolverThreadSpecificSettings](maxCompetingSolverThreads)
 
   @volatile var optimalSingleSolverConfOpt: Option[SolverThreadSpecificSettings] = None
 
@@ -851,7 +851,6 @@ class SolverMulti(prep: Preparation) {
 
         // nope, as these are allocated outside the "mini-benchmarking" loop: aspifOrDIMACSParserResult.rulesOrClauseNogoods.foreach(_.foreach{ _.addToGarbage() })
 
-
       }
 
       if (offHeapGarbageReleaseCriterion(noFurtherModels = true, lockedSolverData = false))
@@ -983,7 +982,7 @@ class SolverMulti(prep: Preparation) {
     // If the returned models list is empty, this can mean either UNSAT or UNKNOWN (inner solver aborted, e.g., timeout),
     // that is, at this level these two results cannot be distinguished from each other anymore.
 
-    val sharedAmongSingleSolverThreads = new SharedAmongSingleSolverThreads()
+    val sharedAmongSingleSolverThreads = new SharedAmongSingleSolverThreads(noOfAbsElis = noOfAbsElis)
 
     @volatile var preReportedMinUnassignedGlobal = noOfAllElis
 
@@ -1043,7 +1042,8 @@ class SolverMulti(prep: Preparation) {
 
         }
 
-        stopSolverThreads = true
+        //stopSolverThreads = true
+        stopSingleSolverThreads()
 
         if (writeRuntimeStatsToFile)
           stats.writeEntry(key = "unsat", value = "true", solverThreadNo = 0)
@@ -1052,7 +1052,8 @@ class SolverMulti(prep: Preparation) {
 
       def unknown(): Unit = {
 
-        stopSolverThreads = true
+        //stopSolverThreads = true
+        stopSingleSolverThreads()
 
         println("\n\nUNKNOWN (inner solver timed out after " + timeoutMs + "ms)")  // note that the actual stomp warning occurs later (in callers)
 
@@ -1061,15 +1062,43 @@ class SolverMulti(prep: Preparation) {
 
       }
 
-      @inline def printSingleLineProgress(trials: Eli, noOfRemovedNogoods: Eli): Unit = {
+      @inline def printSingleLineProgress(trials: Int, noOfRemovedNogoods: Int): Unit = {
 
         val peakPercent = ((noOfAbsElis - minUnassignedGlobal).toDouble / noOfAbsElis.toDouble * 100).toInt.min(99)
 
-        val progressEstimGlobalPercent = ((1d - (Math.log10(minUnassignedGlobal + 5) / Math.log10(noOfAbsElis))) * 100).toInt.min(99)
+        //val progressEstimGlobalPercent = ((1d - (Math.log10(minUnassignedGlobal + 5) / Math.log10(noOfAbsElis))) * 100).toInt.min(99)
 
         //val progressEstimThreadPercent = ((1d - (Math.log10(noOfAbsElis - orderNo + 1/*NB: not the overall minimum of thread*/) / Math.log10(noOfAbsElis))) * 100).toInt.min(99)
 
         //val trialsPerConflicts = noOfConflictsTotal.toDouble / trials
+
+
+        /* nonsense?
+                var violNogoodSum = 0
+
+                var i = 0
+
+                while (i < clarkNogoodsFinal.length) {
+
+                  val ng: IntArrayUnsafeS = clarkNogoodsFinal(i)
+
+                  val notViol = ng.exists(eli => {
+
+                    isNotSetInPass(eli) && !isNotAbsSetInPass(eli)
+
+                  })
+
+                  if(!notViol)
+                    violNogoodSum += 1
+
+                  i += 1
+
+                }
+
+                if(violNogoodSum < sharedAmongSingleSolverThreads.minViolNogoodCountSum)
+                  sharedAmongSingleSolverThreads.minViolNogoodCountSum = violNogoodSum
+        */
+
 
         if (timeAtLastProgressPrintedNs > 0l) {
 
@@ -1088,12 +1117,6 @@ class SolverMulti(prep: Preparation) {
         timeAtLastProgressPrintedNs = System.nanoTime()
 
         noOfPropagationsSinceLastProgressPrinted = 0
-
-        @inline def toK(n: Long) = n / 1000L + "k"
-
-        @inline def toM(n: Long) = round(n.toDouble / 1000000d, 1) + "m"
-
-        @inline def toKorM(n: Long): String = if (n < 1000) n.toString else if (n < 1000000) toK(n) else toM(n)
 
         //lazy val avgAbsEliScore = totalAbsEliScoreForDebugging / noOfAbsElis.toDouble // updated only at score rescaling, otherwise 0!
 
@@ -1119,6 +1142,7 @@ class SolverMulti(prep: Preparation) {
             ",t$" + threadNo + ":" +
             //"Progress estim thread: " + progressEstimThreadPercent + "%, " +
             "C:" + toKorM(noOfConflictsTotal) + "," +
+            //(if (debug) "violNgs:" + sharedAmongSingleSolverThreads.minViolNogoodCountSum + "," else "") +
             //(if (debug && computeAvgLR) "avgLR: " + (avgLR /*- (avgLR % 0.01)*/) + ", " else "") +
             /*includes nogoods shared with this thread -> */ "LN:" /*after removal*/ + (toKorM(getApproxNoOfLearnedNogoods) /*if (firstRecordedNogi >= 1) nogiClarkToNogoodReducible.size - firstRecordedNogi else 0*/) + "" +
             // (if (noOfRemovedNogoods >= 0) " after removing " + noOfRemovedNogoods + ", " else ", ") +
@@ -1126,7 +1150,8 @@ class SolverMulti(prep: Preparation) {
             (if (debug /*&& threshForPreFilterLearnedNogoods != 0d */ && keptByPreFilterForNogoods > 0) "preFiltered:" + Math.floor(removedNogoodsByPrefilter * 1000) / 10 + "%," else "") +
             "Rs:" + toKorM(noOfRestarts) + "," +
             (if (debug) "PrgChks:" + noOfProgressChecks + "," else "") +
-            "Rp:" + toKorM(noOfRephasings) + "(SLS:" + toKorM(noOfRephasingsUsingSLS) + ")," +
+            (if(noOfRephasings > 0) "Rp:" + toKorM(noOfRephasings) + "(SLS:" + toKorM(noOfRephasingsUsingSLS) + ")," else "") +
+            (if(noOfWeakRephasings > 0) "WRp:" + toKorM(noOfWeakRephasings) + "," else "") +
             (if (debug && bestPhasesQueue != null) "refrshBstPh:" + sharedAmongSingleSolverThreads.refreshedBestPhasesGlobal + "/" + bestPhasesQueue.size + "," else "") +
             //(if (debug && rescalingsAbsEliScores > 0) "#conflicts/#rescalingsAbsEliScores: " + noOfConflictsTotal / rescalingsAbsEliScores + ", " else "") +
             (if (debug && abandonOrSwitchSlowThreads != 0d) "thrdChgActs:" + threadChangeActions + "," else "") +
@@ -1140,14 +1165,12 @@ class SolverMulti(prep: Preparation) {
             (if (debug && noOfReducibleSpaceRequests > 0) "MemMisses:" + round(noOfReducibleSpaceRequestsMisses.toDouble / noOfReducibleSpaceRequests.toDouble, 3) + "," else "") +
             //(if (debug) "rsseEMA:" + round(reducibleSlotSizeEnlargementsEMA.toDouble, 3) + "," else "") +
             //(if (debug) "confls/trials:" + round(noOfConflictsTotal.toFloat / trials.toFloat,2) + "," else "") +
-            //"linePrint: " + linePrint + ", " +
+            //"linePrint: " + linePrint + "," +
             //  (if (debug && enforceLBDemaComputation) "lbdEmaFast: " + round(lbdEmaFast, 2) + ", " else "") +
-            (if (debug && enforceLBDemaComputation) "lbdEmaSlow: " + round(lbdEmaSlow, 2) + ", " else "") +
-            //(if (debug) "Conflicts/trials: " + round(trialsPerConflicts, 2) + ", " else "") +
-            //(if (debug && rndmBranchProbR < 0f) "rndmBranchProb: " + rndmBranchProb else "") +
+            (if (debug && useLBDs) "lbdEmaSlow:" + round(lbdEmaSlow, 2) + "," else "") +
+            //(if (debug) "Conflicts/trials:" + round(trialsPerConflicts, 2) + ", " else "") +
+            //(if (debug && rndmBranchProbR < 0f) "rndmBranchProb:" + rndmBranchProb else "") +
             (if (true) "P/s:" + toKorM(avgNoPropagationsPerSecond) + "," else "") +
-            //(if (debug) "weakRephasings: " + weakRephasings + ", " else "") +
-            //" UP/DOWN: " + (UP.toFloat / DOWN.toFloat) +
             "Tr:" + toKorM(trials)
             )
 
@@ -1201,9 +1224,9 @@ class SolverMulti(prep: Preparation) {
 
         var maxApproachSwitches = maxApproachSwitchesPerSolverThread
 
-        var progress: Boolean = false
+        var assignmentBasedProgress: Boolean = false
 
-        var progressGlobal: Boolean = false
+        var assignmentBasedProgressGlobal: Boolean = false
 
         while (incompleteModuloConflict && !stopSolverThreads) { // inner loop of single model solver ----------------------------
 
@@ -1216,7 +1239,7 @@ class SolverMulti(prep: Preparation) {
 
             enforceImmediateFullRestart = false
 
-            restart(trials, -1, temporaryDisableReusedTrailRestarts = true)
+            restart(trials, jumpBackLevelFromConflict = -1, temporaryDisableReusedTrailRestarts = true)
 
           }
 
@@ -1244,7 +1267,7 @@ class SolverMulti(prep: Preparation) {
 
                 val newQValue = (1f - alpha) * getAbsEliScore(absEli) + alpha * reward
 
-                setScoreOfAbsEli(absEli, newQValue)
+                setAndEnactScoreOfAbsEli(absEli, newQValue)
 
               }
 
@@ -1295,120 +1318,134 @@ class SolverMulti(prep: Preparation) {
 
             val performRegularRestart = !localRestarts && decideDoRegularRestart
 
-            if (!removeLearnedNogoodAtRegularRestarts || performRegularRestart)
-              possiblyRemoveLearnedNogoods(trials)
+            /*if(!performRegularRestart && noViolNogoodsRecentBCP > 0) {
 
-            //val restarted = possibleRestart(trials)
+              //println("xxx")
+              jumpBack((dl - 1).max(0), trials)
 
-            if (true /*!restarted*/ ) { // conflict analysis and backtracking...
-              // Observe that we decide whether or not to restart _after_ conflict analysis, because we can utilize
-              // the backtracking level for reused trail restarts.
+            } else*/ {
 
-              {
+              if (noOfConflictsTotal % checkLearnedNogoodRemovalEveryNconflicts == 0 && (!removeLearnedNogoodAtRegularRestarts || performRegularRestart))
+                possiblyRemoveLearnedNogoods(trials)
 
-                // println("\ncurrent dec level (before conflict analysis): " + dl)
+              //val restarted = possibleRestart(trials)
 
-                // The following estimation is very important - if the initial size of the new nogood is underestimated, we'll
-                // require a costly resizing later in conflictAnalysis. If it's overestimated, we waste space and harm
-                // cache locality. If in doubt, overestimate.
-                //val initialWorkingNogoodSizeInConflictAnalysis = 3 * avgSizeLearnedNogoods.max(getNogoodSizeFromReducible(violatedNogoodReducible))
-                val workingReducibleSizeInConflictAnalysisInNoOfInts = if (defaultNogoodAllocationSize == -1) {
+              if (true) { // conflict analysis and backtracking...
+                // Observe that we decide whether or not to restart _after_ conflict analysis, because we can utilize
+                // the backtracking level for reused trail restarts.
 
-                  val r = /*next2Pow*/ (workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts.max(getNogoodSizeFromReducible(violatedNogoodReducible) + 20) /* -
+                {
+
+                  // println("\ncurrent dec level (before conflict analysis): " + dl)
+
+                  // The following estimation is very important - if the initial size of the new nogood is underestimated, we'll
+                  // require a costly resizing later in conflictAnalysis. If it's overestimated, we waste space and harm
+                  // cache locality. If in doubt, overestimate.
+                  //val initialWorkingNogoodSizeInConflictAnalysis = 3 * avgSizeLearnedNogoods.max(getNogoodSizeFromReducible(violatedNogoodReducible))
+                  val workingReducibleSizeInConflictAnalysisInNoOfInts = if (defaultNogoodAllocationSize == -1) {
+
+                    val r = /*next2Pow*/ (workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts.max(getNogoodSizeFromReducible(violatedNogoodReducible) + 20) /* -
                     offsetIntsOfNogoodInReducible - closingIntsAfterNogoodInReducible*/)
 
-                  if (noOfConflictsTotal % 500 == 0) {
+                    if (noOfConflictsTotal % 500 == 0) {
 
-                    workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts =
-                      (workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts - 5 +
-                        (100 * reducibleSlotSizeEnlargementsEMA.toDouble).toInt).max(64).min(1024)
-                    // ^while the reducibleSlotSizeEnlargementsEMA (exponential moving average over reducible slot enlargement event frequency) remains
-                    // close to 0, workingReducibleSizeInConflictAnalysisAutoValue goes slowly down over time, creating larger slots in the beginning and refilling
-                    // these slots later after nogoods have been deleted. But if the ema is signifiantly above 0, the slot size
-                    // for new nogoods increases proportionally. NB: this heuristics has a significant influence on performance,
-                    // as off-heap memory allocation is rather slow using many JDK's UNSAFE compared to C/C++-malloc.
+                      workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts =
+                        (workingReducibleSizeInConflictAnalysisAutoValueInNoOfInts - 5 +
+                          (100 * reducibleSlotSizeEnlargementsEMA.toDouble).toInt).max(64).min(1024)
+                      // ^while the reducibleSlotSizeEnlargementsEMA (exponential moving average over reducible slot enlargement event frequency) remains
+                      // close to 0, workingReducibleSizeInConflictAnalysisAutoValue goes slowly down over time, creating larger slots in the beginning and refilling
+                      // these slots later after nogoods have been deleted. But if the ema is signifiantly above 0, the slot size
+                      // for new nogoods increases proportionally. NB: this heuristics has a significant influence on performance,
+                      // as off-heap memory allocation is rather slow using many JDK's UNSAFE compared to C/C++-malloc.
 
-                    //println("\nworkingReducibleSizeInConflictAnalysisAutoValue= " + workingReducibleSizeInConflictAnalysisAutoValue + ", initialWorkingNogoodSizeInConflictAnalysis = " + initialWorkingNogoodSizeInConflictAnalysis + ", getNogoodSizeFromReducible(violatedNogoodReducible): " + getNogoodSizeFromReducible(violatedNogoodReducible))
+                      //println("\nworkingReducibleSizeInConflictAnalysisAutoValue= " + workingReducibleSizeInConflictAnalysisAutoValue + ", initialWorkingNogoodSizeInConflictAnalysis = " + initialWorkingNogoodSizeInConflictAnalysis + ", getNogoodSizeFromReducible(violatedNogoodReducible): " + getNogoodSizeFromReducible(violatedNogoodReducible))
 
-                  }
+                    }
 
-                  r
+                    r
 
-                } else
-                  defaultNogoodAllocationSize.max(getNogoodSizeFromReducible(violatedNogoodReducible) * 2)
+                  } else
+                    defaultNogoodAllocationSize.max(getNogoodSizeFromReducible(violatedNogoodReducible) * 2)
 
-                val newNogoodReducibleInitial: NogoodReducible = reserveReducibleSpace(minimumRequiredReducibleSpaceSizeInNoOfInts = workingReducibleSizeInConflictAnalysisInNoOfInts)
+                  val newNogoodReducibleInitial: NogoodReducible = reserveReducibleSpace(minimumRequiredReducibleSpaceSizeInNoOfInts = workingReducibleSizeInConflictAnalysisInNoOfInts)
 
-                conflictAnalysis(violatedNogoodReducible, newNogoodReducibleInitial)
-                /*
-                              println("\n  want to jump back to: " + newLevel)
+                  conflictAnalysis(violatedNogoodReducible, newNogoodReducibleInitial)
+                  /*
+                                println("\n  want to jump back to: " + newLevel)
 
-                              println("\n  sigmaEli = " + sigmaEli + ", neg(sigmaEli) = " + negateEli(sigmaEli))
+                                println("\n  sigmaEli = " + sigmaEli + ", neg(sigmaEli) = " + negateEli(sigmaEli))
 
-                              println("\n  dec level of sigmaEli = " + decisionLevelOfEli(sigmaEli))
+                                println("\n  dec level of sigmaEli = " + decisionLevelOfEli(sigmaEli))
 
-                              println("\n  is sigma not abs-assigned (before jumping back)? " + isNotAbsSetInPass(sigmaEli))
-                */
+                                println("\n  is sigma not abs-assigned (before jumping back)? " + isNotAbsSetInPass(sigmaEli))
+                  */
 
-                if (debug2) {
+                  if (debug2) {
 
-                  println("\n\n *********** From conflictAnalysis, conflictAnalysisResult_sigmaEli = " + conflictAnalysisResult_sigmaEli)
+                    println("\n\n *********** From conflictAnalysis, conflictAnalysisResult_sigmaEli = " + conflictAnalysisResult_sigmaEli)
 
-                  //println("From conflictAnalysis, new nogood = " + newNogood.toArray.mkString(","))
-
-                }
-
-                assert(decisionLevelOfEli(conflictAnalysisResult_sigmaEli) == dl)
-
-                if (absEliScoringApproach == 1 || absEliScoringApproach == 2) {
-
-                  if (alpha > alphaTh)
-                    alpha -= alphaStep
-
-                }
-
-                if (extReducibles == 1) { // TODO: why is this here but for the other extReducibles further below??
-
-                  setupNewReducibleForExt1(conflictAnalysisResult_conflictNogoodReducible, beforeSolvingstarted = false)
-
-                  possiblyAddLearnedNogoodToReducibleLists(trials, conflictAnalysisResult_conflictNogoodReducible)
-
-                }
-
-                if (!isClarkReducible(violatedNogoodReducible)) {
-
-                  val lbd: Eli = if (useLBD) getLBDFromReducible /*computeLBD*/ (/*violatedNogoodReducible*/ conflictAnalysisResult_conflictNogoodReducible) else -1
-                  // ^differently from glucose, we use lbd of violatedNogoodReducible, as we don't have the lbd of the conflictAnalysisResult_conflictNogoodReducible
-
-                  //println("lbd for lbdEma = " + lbd)
-
-                  if (enforceLBDemaComputation) { // exponential moving averages of the learnt clause LBD
-
-                    // Biere, Fröhlich: Evaluating CDCL Restart Schemes @POS'15 (http://fmv.jku.at/biere/talks/Biere-POS15-talk.pdf):
-
-                    lbdEmaSlow += (lbd - lbdEmaSlow) / (1 << 14).toDouble
-
-                    lbdEmaFast += (lbd - lbdEmaFast) / (1 << 5).toDouble
+                    //println("From conflictAnalysis, new nogood = " + newNogood.toArray.mkString(","))
 
                   }
 
-                  if (absEliScoringApproach == 0 && !evsids /*&& adaptiveVSIDSFact != 1f*/ ) { // variant of adaptVSIDS (Liang et al)
+                  assert(decisionLevelOfEli(conflictAnalysisResult_sigmaEli) == dl)
 
-                    if (lbdEmaFast / 1.2d > lbdEmaSlow) {
+                  if (absEliScoringApproach == 1 || absEliScoringApproach == 2) {
 
-                      absEliScoreScaleBaseAdaptive = absEliScoreScaleBaseLow
+                    if (alpha > alphaTh)
+                      alpha -= alphaStep
 
-                    } else {
+                  }
 
-                      absEliScoreScaleBaseAdaptive = absEliScoreScaleBaseHigh
+                  if (extReducibles == 1) { // TODO: why is this here but for the other extReducibles further below??
+
+                    setupNewReducibleForExt1(conflictAnalysisResult_conflictNogoodReducible, beforeSolvingstarted = false)
+
+                    possiblyAddLearnedNogoodToReducibleLists(trials, conflictAnalysisResult_conflictNogoodReducible)
+
+                  }
+
+                  //conflEmaSlow += (noOfConflictsTotal - conflEmaSlow) / (1 << 14).toDouble
+
+                  //conflEmaFast += (noOfConflictsTotal - conflEmaFast) / (1 << 5).toDouble
+
+                  //if(noOfConflictsTotal % 1000 == 0)
+                  //println("\n" + conflEmaSlow, conflEmaFast)
+
+                  if (!isClarkReducible(violatedNogoodReducible)) {
+
+                    val lbd: Int = if (useLBDs/*useLBD*/) getLBDFromReducible /*computeLBD*/ (/*violatedNogoodReducible*/ conflictAnalysisResult_conflictNogoodReducible) else -1
+                    // ^differently from glucose, we use lbd of violatedNogoodReducible, as we don't have the lbd of the conflictAnalysisResult_conflictNogoodReducible
+
+                    //println("lbd for lbdEma = " + lbd)
+
+                    if (useLBDs) { // exponential moving averages of the learnt clause LBD
+
+                      // Biere, Fröhlich: Evaluating CDCL Restart Schemes @POS'15 (http://fmv.jku.at/biere/talks/Biere-POS15-talk.pdf):
+
+                      lbdEmaSlow += (lbd - lbdEmaSlow) / (1 << 14).toDouble
+
+                      lbdEmaFast += (lbd - lbdEmaFast) / (1 << 5).toDouble
+
+                    }
+
+                    if (absEliScoringApproach == 0 && !evsids /*&& adaptiveVSIDSFact != 1f*/ ) { // variant of adaptVSIDS (Liang et al)
+
+                      if (lbdEmaFast / 1.2d > lbdEmaSlow) {
+
+                        absEliScoreScaleBaseAdaptive = absEliScoreScaleBaseLow
+
+                      } else {
+
+                        absEliScoreScaleBaseAdaptive = absEliScoreScaleBaseHigh
+
+                      }
 
                     }
 
                   }
 
-                }
-
-                val performLocalRestart = localRestarts && { // based on Ryvchin & Strichman 2008: Local Restarts in SAT
+                  val performLocalRestart = localRestarts && { // based on Ryvchin & Strichman 2008: Local Restarts in SAT
 
                     if(removeLearnedNogoodAtRegularRestarts)
                       stomp(-5009, "localRestarts cannot be combined with removeLearnedNogoodAtRegularRestarts")
@@ -1417,106 +1454,133 @@ class SolverMulti(prep: Preparation) {
 
                     df > noOfConflictsBeforeRestart * localRestartsTriggerThreshFactor
 
-                }
+                  }
 
-                val restarted = if(performRegularRestart || performLocalRestart || forceRestart) {
+                  val restarted = if(performLocalRestart || performRegularRestart || forceRestart) {
 
-                  if(forceRestart)
-                    possiblyRemoveLearnedNogoods(trials, all = true) // TODO: necessary?
+                    if(forceRestart)
+                      possiblyRemoveLearnedNogoods(trials, all = true) // TODO: necessary?
 
-                  forceRestart = false
+                    forceRestart = false
 
-                  restart(trials, jumpBackLevelFromConflict = conflictAnalysisResult_newDecisionLevel)
+                    restart(trials, jumpBackLevelFromConflict = conflictAnalysisResult_newDecisionLevel)
 
-                  true
+                    true
 
-                } else
-                  false
+                  } else
+                    false
 
-                if (!restarted) {
+                  if (!restarted) {
 
-                  if (debug2) {
+                    if (debug2) {
 
-                    println("BEFORE jumping back:")
+                      println("BEFORE jumping back:")
 
-                    var countUnset = 0
+                      var countUnset = 0
 
-                    var kkkk = 0
+                      var kkkk = 0
 
-                    while (kkkk < getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)) {
+                      while (kkkk < getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)) {
 
-                      println("   index " + kkkk + ", eli = " + getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk) + ", isSetInPass?: " + isSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk)) /*+ ", absEliScore: " + getAbsEliScore(toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)))*/)
+                        println("   index " + kkkk + ", eli = " + getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk) + ", isSetInPass?: " + isSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk)) /*+ ", absEliScore: " + getAbsEliScore(toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)))*/)
 
-                      if (isNotSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk)))
-                        countUnset += 1
+                        if (isNotSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkkk)))
+                          countUnset += 1
 
-                      kkkk += 1
+                        kkkk += 1
+
+                      }
 
                     }
 
-                  }
+                    jumpBack(conflictAnalysisResult_newDecisionLevel, trials)
 
-                  jumpBack(conflictAnalysisResult_newDecisionLevel, trials)
-
-                  assert(isNotAbsSetInPass(conflictAnalysisResult_sigmaEli)) // sigmaEli had been assigned on the previous decision level, so must have
-                  // been unassigned when jumping back given that newLevel < prevLevel
-
-                }
-
-                if (debug2) println("conflictAnalysisResult_sigmaEli = " + conflictAnalysisResult_sigmaEli + "")
-
-                if (debug2 && false) {
-
-                  println("\nLearned nogood:")
-
-                  var kkk = 0
-
-                  while (kkk < getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)) {
-
-                    println("   index " + kkk + ", eli = " + getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk) + ", isSetInPass?: " + isSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)) /*+ ", absEliScore: " + getAbsEliScore(toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)))*/)
-
-                    kkk += 1
+                    assert(isNotAbsSetInPass(conflictAnalysisResult_sigmaEli)) // sigmaEli had been assigned on the previous decision level, so must have
+                    // been unassigned when jumping back given that newLevel < prevLevel
 
                   }
 
-                  println("-----------------")
+                  if (debug2) println("conflictAnalysisResult_sigmaEli = " + conflictAnalysisResult_sigmaEli + "")
 
-                }
+                  if (debug2 && false) {
 
-                if (extReducibles == 2 || extReducibles == 4 || extReducibles == 3 || extReducibles == 5 || extReducibles == 0) {
+                    println("\nLearned nogood:")
 
-                  if (extReducibles == 2)
-                    setupNewReducibleForExt2(conflictAnalysisResult_conflictNogoodReducible)
+                    var kkk = 0
 
-                  possiblyAddLearnedNogoodToReducibleLists(trials, conflictAnalysisResult_conflictNogoodReducible) // TODO: why is this not at same location as possyiblyAdd for extReducibles=1?
+                    while (kkk < getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)) {
 
-                }
+                      println("   index " + kkk + ", eli = " + getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk) + ", isSetInPass?: " + isSetInPass(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)) /*+ ", absEliScore: " + getAbsEliScore(toAbsEli(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, kkk)))*/)
 
-                val satFoundDuringRephasing = if (rephasePhaseMemo) {
+                      kkk += 1
 
-                  val satFoundDuringRephasing = possibleRephasing(trials)
+                    }
 
-                  if (satFoundDuringRephasing)
-                    incompleteModuloConflict = false
+                    println("-----------------")
 
-                  satFoundDuringRephasing
+                  }
 
-                } else
-                  false
+                  val skipLearnedNogood/*skipping doesn't appear to be useful*/ = if (extReducibles == 2 || extReducibles == 4 || extReducibles == 3 || extReducibles == 5 || extReducibles == 0) {
 
-                if (!restarted && !satFoundDuringRephasing &&
-                  getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible) > 0) {
+                    //val ngScore = getLBDFromReducible(conflictAnalysisResult_conflictNogoodReducible) //getNogoodReducibleScore(conflictAnalysisResult_conflictNogoodReducible, scoringForRemovalOfLearnedNogoods = scoringForRemovalOfLearnedNogoods)
 
-                  setEliWithNogoodUpdatesNoHeap(negateEli(conflictAnalysisResult_sigmaEli), conflictAnalysisResult_conflictNogoodReducible)
+                    // println(ngScore)
 
-                }
+                    if(true /*ngScore <= 10 /*1e-15d*/ */) {
 
-                nogoodRemovalThreshAdjustConflictCount -= 1
+                      if (extReducibles == 2)
+                        setupNewReducibleForExt2(conflictAnalysisResult_conflictNogoodReducible)
 
-                if (nogoodRemovalThreshAdjustConflictCount <= 0) {
-                  nogoodRemovalAdjustNoOfConflicts *= nogoodRemovalAdjustInc;
-                  nogoodRemovalThreshAdjustConflictCount = nogoodRemovalAdjustNoOfConflicts.toInt;
-                  nogoodRemovalThreshAdapted *= nogoodRemovalThreshRatio
+                      possiblyAddLearnedNogoodToReducibleLists(trials, conflictAnalysisResult_conflictNogoodReducible) // TODO: why is this not at same location as possyiblyAdd for extReducibles=1?
+
+                      false
+
+                    } else {
+
+                      if (freeOrReassignDeletedNogoodMemory)
+                        makeNogoodSpaceAvailable(conflictAnalysisResult_conflictNogoodReducible)
+
+                      true
+
+                    }
+
+                  } else
+                    false
+
+                  val (satFoundDuringRephasing, newDecisionLevel) = if (rephasePhaseMemo) {
+
+                    val (satFoundDuringRephasing/*true can come from an SLS rephasing (e.g., WalkSAT)*/, newDecisionLevel/*currently not used*/) = possibleRephasing(trials)
+                    assert(newDecisionLevel == -1)
+
+                    if (satFoundDuringRephasing)
+                      incompleteModuloConflict = false
+
+                    (satFoundDuringRephasing, newDecisionLevel)
+
+                  } else
+                    (false, -1)
+
+                  if(newDecisionLevel >= 0 && newDecisionLevel < dl) {  // currently inactive (see possibleRephasing())
+
+                    println("\nJumping back from " + dl + " to " + newDecisionLevel + " after rephasing to best phase")
+
+                    jumpBack(newDecisionLevel, trials)
+
+                  } else if (!skipLearnedNogood && !restarted && !satFoundDuringRephasing &&
+                    getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible) > 0) {
+
+                    setEliWithNogoodUpdatesNoHeap(negateEli(conflictAnalysisResult_sigmaEli), conflictAnalysisResult_conflictNogoodReducible)
+
+                  }
+
+                  nogoodRemovalThreshAdjustConflictCount -= 1
+
+                  if (nogoodRemovalThreshAdjustConflictCount <= 0) {
+                    nogoodRemovalAdjustNoOfConflicts *= nogoodRemovalAdjustInc;
+                    nogoodRemovalThreshAdjustConflictCount = nogoodRemovalAdjustNoOfConflicts.toInt;
+                    nogoodRemovalThreshAdapted *= nogoodRemovalThreshRatio
+
+                  }
 
                 }
 
@@ -1524,14 +1588,104 @@ class SolverMulti(prep: Preparation) {
 
             }
 
+            //noViolNogoodsRecentBCP = 0 //:::
+
           } else { // no nogood is in conflict...
 
             incompleteModuloConflict = orderNumber != noOfPosElisPlus1
 
             if (incompleteModuloConflict) { // satisfiability still unknown
 
-                val freeEliW = findDecisionEli // invokes branching heuristics (nondeterministic decision literal choice)
-                // or finds free parameter literal using differentiation
+              if (noOfConflictsBeforeNextRephasing == 0) { // we need this here (in addition to the conflict-branch) to ensure Walksat etc are called if there are no conflicts but noOfConflictsBeforeNextRephasing=0
+
+                val (satFoundDuringRephasing /*true can come from an SLS rephasing (e.g., WalkSAT)*/ , newDecisionLevel /*currently not used*/ ) = possibleRephasing(trials)
+                assert(newDecisionLevel == -1)
+
+                if (satFoundDuringRephasing)
+                  incompleteModuloConflict = false
+
+              }
+
+              if(incompleteModuloConflict) {
+
+                val freeEliW = /*if (rngLocal.nextFloat() < 0.1f) {  //:::  greedy lookahead step
+/*
+                val maxMin = false //rngLocal.nextBoolean()
+
+                //countViolNgs = true
+
+                var maxViol = if(maxMin) 0f else 999999999f
+
+                var maxViolEli = 0
+
+                var i = 0
+
+                val maxChecks = 100
+
+                while(i < maxChecks) {
+
+                  var freeEliCand = 0
+
+                  do {
+
+                    freeEliCand = rngLocal.nextInt(noOfAllElis + 1) - noOfAbsElis
+
+                  } while (isPosOrNegSetInPass(freeEliCand) || freeEliCand == 0)
+
+                  setDecisionLevelTo(dl + 1) // the next eli needs to be set on the new decision level
+
+                  val vngccc = setEliWithNogoodUpdatesNoHeap(freeEliCand, reason = 0l, countViolNgs = true)
+
+                  //if(vngccc == 0)
+                   // maxChecks = 0
+
+                  val vngc =  /*getAbsEliScore(toAbsEli(freeEliCand)) / */ vngccc
+
+                  if((!maxMin && vngc < maxViol || maxMin && vngc > maxViol) || i == 0 || maxChecks == 0) {
+
+                    maxViol = vngc
+
+                    maxViolEli = freeEliCand
+
+                  }
+
+                  jumpBack((dl - 1), trials)
+
+                  violatedNogoodReducible = 0L
+
+                  i += 1
+
+                } */
+
+                val decEli1 = findDecisionEli
+
+                setDecisionLevelTo(dl + 1) // the next eli needs to be set on the new decision level
+
+                val vngc1 = setEliWithNogoodUpdatesNoHeap(decEli1, reason = 0l, countViolNgs = true)
+
+                jumpBack((dl - 1), trials)
+
+                violatedNogoodReducible = 0L
+
+                val decEli2 = negateEli(decEli1)
+
+                val vngc2 = setEliWithNogoodUpdatesNoHeap(decEli2, reason = 0l, countViolNgs = true)
+
+                jumpBack((dl - 1), trials)
+
+                violatedNogoodReducible = 0L
+
+                if(vngc1 > vngc2)
+                  decEli1
+                else
+                  decEli2
+
+              } else */ {
+
+                  findDecisionEli // invokes branching heuristics (nondeterministic decision literal choice)
+                  // or finds free parameter literal using differentiation
+
+                }
 
                 if (freeEliW != 0) {
 
@@ -1542,10 +1696,10 @@ class SolverMulti(prep: Preparation) {
 
                   val assignedBeforeBranching = orderNumber
 
-                  if(localRestarts)
+                  if (localRestarts)
                     updateConflictsAtDecisionLevel(dl + 1, noOfConflictsTotal)
 
-                  setDecisionLevelTo(dl + 1)  // the next eli needs to be set on the new decision level
+                  setDecisionLevelTo(dl + 1) // the next eli needs to be set on the new decision level
 
                   if (reusedTrailRestarts) {
 
@@ -1553,225 +1707,301 @@ class SolverMulti(prep: Preparation) {
 
                   }
 
-                  setEliWithNogoodUpdatesNoHeap(freeEliW, reason = 0l)
+                  val countViolNgs = bestPhaseCriterion == 2
+
+                  val violNogoodCount = setEliWithNogoodUpdatesNoHeap(freeEliW, reason = 0l, countViolNgs = countViolNgs)
+
+                  if (countViolNgs) {
+
+                    if (violNogoodCount >= 1)
+                      violNogoodCountsPerLevel.update(dl, violNogoodCount)
+
+                  }
 
                   val noOfPropagationsInBCP = orderNumber - assignedBeforeBranching
 
                   noOfPropagationsSinceLastProgressPrinted += noOfPropagationsInBCP
 
+                  val performProgressCheck = trials > minimumTrialsBeforeFirstProgressCheck &&
+                    (noOfAbsElis - orderNumber <= (minUnassignedThisThread >> 1) &&
+                      trials - lastProgressCheckAtTrial > minNoTrialsBetweenTwoProgressChecks) || fastModByPow2(trials, enforceProgressChecksEveryTrials) == 0
+
                   //  println("progressThresh = " + progressThresh + ", noOfAbsElis - orderNo = " + (noOfAbsElis - orderNo) + ", minUnassignedThisThread = " + minUnassignedThisThread + ", minUnassignedThisThread - progressThresh = " + (minUnassignedThisThread - progressThresh) + ", noOfAbsElis - orderNo <= minUnassignedThisThread - progressThresh = " + (noOfAbsElis - orderNo <= minUnassignedThisThread - progressThresh))
 
-                  if (trials > minimumTrialsBeforeFirstProgressCheck) {
+                  if (performProgressCheck) {
 
-                    if (noOfAbsElis - orderNumber <= (minUnassignedThisThread >> 1) || fastModByPow2(trials, enforceProgressChecksEveryTrials) == 0) {
+                    noOfProgressChecks += 1 // (in this thread)
 
-                      noOfProgressChecks += 1 // (in this thread)
+                    lastProgressCheckAtTrial = trials
 
-                     /* println("Progress check; current time: " + System.currentTimeMillis() + ", maxSamplingTimeMs: " + maxSamplingTimeMs +
+                    /* println("Progress check; current time: " + System.currentTimeMillis() + ", maxSamplingTimeMs: " + maxSamplingTimeMs +
 
-                      "\nSystem.currentTimeMillis() - maxSamplingTimeMs in sec: " + (System.currentTimeMillis() - maxSamplingTimeMs)/1000
+                        "\nSystem.currentTimeMillis() - maxSamplingTimeMs in sec: " + (System.currentTimeMillis() - maxSamplingTimeMs)/1000
 
-                      )*/
+                        )*/
 
-                      if(System.currentTimeMillis() > maxSamplingTimeMs) {
+                    if (System.currentTimeMillis() > maxSamplingTimeMs) {
 
-                        unknown()
+                      unknown()
 
-                        return null
+                      return null
 
-                      }
+                    }
 
-                      if (noOfAbsElis - orderNumber <= minUnassignedThisThread) {
+                    if (noOfAbsElis - orderNumber <= minUnassignedThisThread) {
 
-                        progress = true
+                      assignmentBasedProgress = true
 
-                        minUnassignedThisThread = noOfAbsElis - orderNumber
+                      minUnassignedThisThread = noOfAbsElis - orderNumber
 
-                        if (minUnassignedThisThread < minUnassignedGlobal) {
+                      if (minUnassignedThisThread < minUnassignedGlobal) {
 
-                          progressGlobal = true
+                        assignmentBasedProgressGlobal = true
 
-                          minUnassignedGlobal = minUnassignedThisThread
+                        minUnassignedGlobal = minUnassignedThisThread
 
-                          sharedAmongSingleSolverThreads.greedilyBestThread = threadNo
+                        sharedAmongSingleSolverThreads.greedilyBestThread = threadNo
 
-                        } else
-                          progressGlobal = false
+                      } else
+                        assignmentBasedProgressGlobal = false
+
+                    } else {
+
+                      assignmentBasedProgress = false
+
+                      assignmentBasedProgressGlobal = false
+
+                    }
+
+                    val progress = {
+
+                      //(See in debug mode status line "refrshBstPh" to check how many "best phases" are getting enqueue)
+
+                      enforceBestPhaseQueueEntry || (if (bestPhaseCriterion == 0) {
+
+                        lbdEmaFast / 1.3d > lbdEmaSlow //lbdEmaFast / 1.2d > lbdEmaSlow
+
+                        //conflEmaFast / 1.5 > conflEmaSlow
+
+                        //println(conflEmaFast / conflEmaSlow)
+
+                      } else if (bestPhaseCriterion == 1) {
+
+                        globalBestPhaseMemo && assignmentBasedProgressGlobal || !globalBestPhaseMemo && assignmentBasedProgress
+
+                      } else if (bestPhaseCriterion == 2) {
+
+                        var violNogoodSum = 0
+
+                        var i = 1
+
+                        while (i <= dl) {
+
+                          violNogoodSum += violNogoodCountsPerLevel.get(i)
+
+                          i += 1
+
+                        }
+
+                        {
+
+                          if (violMaxNogoodCountsPerLevel.get(dl) == -1 ||
+                            Math.abs(violNogoodSum - violMaxNogoodCountsPerLevel.get(dl)) > violMaxNogoodCountsPerLevel.get(dl) * 2) {
+
+                            violMaxNogoodCountsPerLevel.update(dl, violNogoodSum)
+
+                            true
+
+                          } else
+                            false
+
+                        }
+
+                        /*
+
+                            if(violNogoodCountsPerLevel.get(dl) > violMaxNogoodCountsPerLevel.get(dl)) {
+
+                              violMaxNogoodCountsPerLevel.update(dl, violNogoodCountsPerLevel.get(dl))
+
+                              true
+
+                            } else
+                              false
+                            */
 
                       } else {
 
-                        progress = false
+                        stomp(-5009, "Unknown bestPhaseCriterion value")
 
-                        progressGlobal = false
+                        false
+
+                      })
+
+                    }
+
+                    if (progress && bestPhasesQueue != null && noOfConflictsTotal > minNoConflictsBeforeFirstRephasing /*since this is very costly*/ ) {
+
+                      sharedAmongSingleSolverThreads.refreshedBestPhasesGlobal += 1
+
+                      val newBestPhases = new ByteArrayUnsafeS(noOfAbsElis + 1, initialValue = if (rngLocal.nextBoolean()) 0x01.toByte else 0x00.toByte /*0x02.toByte*/)
+
+                      var absEli = 1
+
+                      /*bestPhasesForAbsElis.synchronized*/
+                      {
+
+                        while (absEli <= noOfAbsElis) {
+
+                          if (isPosOrNegSetInPass(absEli) /*&& decisionLevelOfEli(absEli) <= dl*/ ) {
+
+                            newBestPhases.update(absEli, if (isSetInPass(absEli)) 0x01.toByte else 0x00.toByte)
+
+                            //updateInPhasePreviousForAbsElis(absEli, if (isSetInPass(absEli)) 0x01.toByte else 0x00.toByte)
+
+                          }
+
+                          absEli += 1
+
+                        }
 
                       }
 
-                      if (bestPhasesQueue != null && noOfConflictsTotal > 100000 /*since this is very costly*/ &&
-                        (enforceBestPhaseQueueEntry ||  globalBestPhaseMemo && progressGlobal || !globalBestPhaseMemo && progress)) {
+                      bestPhasesQueue.synchronized {
 
-                        sharedAmongSingleSolverThreads.refreshedBestPhasesGlobal += 1
+                        bestPhasesQueue.enqueueFinite(newBestPhases, maxSize = bestPhasesQueueSize) // keeping >1 "best" states doesn't seem to improve things, but more tests required
 
-                        val newBestPhases = new ByteArrayUnsafeS(noOfAbsElis + 1, initialValue = if (rngLocal.nextBoolean()) 0x01.toByte else 0x00.toByte)
+                      }
 
-                        var absEli = 1
+                    }
 
-                        /*bestPhasesForAbsElis.synchronized*/
-                        {
+                    preReportedMinUnassignedGlobal = minUnassignedGlobal
 
-                          while (absEli <= noOfAbsElis) {
+                    threadChangeCheckFreqState -= 1
 
-                            if (isPosOrNegSetInPass(absEli)) {
+                    if (abandonOrSwitchSlowThreads != 0 && threadChangeCheckFreqState == 0) { // TODO: ??remove all thread switch stuff:
 
-                              newBestPhases.update(absEli, if (isSetInPass(absEli)) 0x01.toByte else 0x00.toByte)
+                      threadChangeCheckFreqState = threadChangeCheckFreq
 
-                              //updateInPhasePreviousForAbsElis(absEli, if (isSetInPass(absEli)) 0x01.toByte else 0x00.toByte)
+                      if (true) { // we sample and average progress
 
-                            }
+                        val norm = (if (threadmxBean.isCurrentThreadCpuTimeSupported) threadmxBean.getCurrentThreadCpuTime() / 10000000 else trials).toDouble
 
-                            absEli += 1
+                        val normalizedProgress = ((/*lbdEmaSlow.toDouble*/ noOfConflictsTotal.toDouble * 10d * orderNumber.toDouble)) /
+                          norm.toDouble
+
+                        val n = trials.toDouble / (noOfAbsElis / Math.abs(abandonOrSwitchSlowThreads * 100)).toDouble
+
+                        avgNormProgress = (normalizedProgress + n * avgNormProgress) / (n + 1) // cumulative moving average
+
+                        //println("\n avgNormProgress = " + avgNormProgress)
+
+                      }
+
+                      lazy val remainingSolverThreads: collection.Set[Eli] = progressNormalizedPerThread.keySet
+
+                      val threadShouldChange = maxCompetingSolverThreads > 1 && avgNormProgress > 0 && {
+
+                        progressNormalizedPerThread.synchronized {
+
+                          remainingSolverThreads.size >= 2 && {
+
+                            val tt: Option[SolverThreadInfo] = progressNormalizedPerThread.get(threadNo)
+
+                            val t: SolverThreadInfo = new SolverThreadInfo(tt.get.thread, avgNormProgress)
+
+                            progressNormalizedPerThread.put(threadNo, t)
+
+                            lazy val avgNormProgressAllThreads = remainingSolverThreads.map(progressNormalizedPerThread.get(_).get.progressNormalized).sum /
+                              remainingSolverThreads.size.toDouble
+
+                            //println("\nnormalized progress for thread " + threadNo + " = " + avgNormProgress + ", avg: " + avgNormProgressAllThreads)
+
+                            avgNormProgressAllThreads > avgNormProgress * 1.1d
 
                           }
 
                         }
 
-                        bestPhasesQueue.synchronized {
-
-                          bestPhasesQueue.enqueueFinite(newBestPhases, maxSize = bestPhasesQueueSize) // keeping >1 "best" states doesn't seem to improve things, but more tests required
-
-                        }
-
                       }
 
-                      preReportedMinUnassignedGlobal = minUnassignedGlobal
+                      if (threadShouldChange) { // a (seemingly) "slow" thread (progress beyond average), so we take action:
 
-                      threadChangeCheckFreqState -= 1
+                        threadChangeActions += 1
 
-                      if (abandonOrSwitchSlowThreads != 0 && threadChangeCheckFreqState == 0) { // TODO: ??remove all thread switch stuff:
+                        val identicalApproaches = false && (maxCompetingSolverThreads == 1 || threadConfs.map(conf => conf.freeEliSearchApproach).distinct.length == 1
+                          /*^ deactivated; even if all approaches are the same, switching the "slowest" to a different approach can make sense. */)
 
-                        threadChangeCheckFreqState = threadChangeCheckFreq
+                        if (slowThreadAction == 4) {
 
-                        if (true) { // we sample and average progress
+                          forceRestart = true
 
-                          val norm = (if (threadmxBean.isCurrentThreadCpuTimeSupported) threadmxBean.getCurrentThreadCpuTime() / 10000000 else trials).toDouble
-
-                          val normalizedProgress = ((/*lbdEmaSlow.toDouble*/ noOfConflictsTotal.toDouble * 10d * orderNumber.toDouble)) /
-                            norm.toDouble
-
-                          val n = trials.toDouble / (noOfAbsElis / Math.abs(abandonOrSwitchSlowThreads * 100)).toDouble
-
-                          avgNormProgress = (normalizedProgress + n * avgNormProgress) / (n + 1) // cumulative moving average
-
-                          //println("\n avgNormProgress = " + avgNormProgress)
-
-                        }
-
-                        lazy val remainingSolverThreads: collection.Set[Eli] = progressNormalizedPerThread.keySet
-
-                        val threadShouldChange = maxCompetingSolverThreads > 1 && avgNormProgress > 0 && {
+                        } else if (slowThreadAction != 3 || identicalApproaches) {
 
                           progressNormalizedPerThread.synchronized {
 
-                            remainingSolverThreads.size >= 2 && {
+                            if (slowThreadAction == 0 && remainingSolverThreads.size >= 2) {
 
-                              val tt: Option[SolverThreadInfo] = progressNormalizedPerThread.get(threadNo)
+                              progressNormalizedPerThread.remove(threadNo)
 
-                              val t: SolverThreadInfo = new SolverThreadInfo(tt.get.thread, avgNormProgress)
+                              if (verbose && showProgressStats) {
 
-                              progressNormalizedPerThread.put(threadNo, t)
+                                println("\n\n>> >> >> Abandoning solver thread $" + threadNo + " after " + trials + " trials")
 
-                              lazy val avgNormProgressAllThreads = remainingSolverThreads.map(progressNormalizedPerThread.get(_).get.progressNormalized).sum /
-                                remainingSolverThreads.size.toDouble
+                                if (debug) println("   Current #threads in JVM in total (including non-solver threads): " + (java.lang.Thread.activeCount))
 
-                              //println("\nnormalized progress for thread " + threadNo + " = " + avgNormProgress + ", avg: " + avgNormProgressAllThreads)
+                                return null
 
-                              avgNormProgressAllThreads > avgNormProgress * 1.1d
+                              }
 
-                            }
+                            } else {
 
-                          }
+                              val newPriority: Eli = if (slowThreadAction == 2) (Thread.currentThread().getPriority + 1).min(Thread.MAX_PRIORITY) else (Thread.currentThread().getPriority() - 1).max(Thread.MIN_PRIORITY)
 
-                        }
+                              if (newPriority != Thread.currentThread().getPriority()) {
 
-                        if (threadShouldChange) { // a (seemingly) "slow" thread (progress beyond average), so we take action:
+                                //if (verbose) println("\nChanging priority of thread $" + threadNo + " after " + trials + " trials\n from " + Thread.currentThread().getPriority() + " to " + newPriority)
 
-                          threadChangeActions += 1
-
-                          val identicalApproaches = false && (maxCompetingSolverThreads == 1 || threadConfs.map(conf => conf.freeEliSearchApproach).distinct.length == 1
-                            /*^ deactivated; even if all approaches are the same, switching the "slowest" to a different approach can make sense. */)
-
-                          if (slowThreadAction == 4) {
-
-                            forceRestart = true
-
-                          } else if (slowThreadAction != 3 || identicalApproaches) {
-
-                            progressNormalizedPerThread.synchronized {
-
-                              if (slowThreadAction == 0 && remainingSolverThreads.size >= 2) {
-
-                                progressNormalizedPerThread.remove(threadNo)
-
-                                if (verbose && showProgressStats) {
-
-                                  println("\n\n>> >> >> Abandoning solver thread $" + threadNo + " after " + trials + " trials")
-
-                                  if(debug) println("   Current #threads in JVM in total (including non-solver threads): " + (java.lang.Thread.activeCount))
-
-                                  return null
-
-                                }
+                                Thread.currentThread().setPriority(newPriority)
 
                               } else {
 
-                                val newPriority: Eli = if (slowThreadAction == 2) (Thread.currentThread().getPriority + 1).min(Thread.MAX_PRIORITY) else (Thread.currentThread().getPriority() - 1).max(Thread.MIN_PRIORITY)
+                                //if (verbose) println("\n" + (if (slowThreadAction == 2) "Decreasing" else "Increasing") + " priorities of threads other than thread $" + threadNo + " after " + trials + " trials")
 
-                                if (newPriority != Thread.currentThread().getPriority()) {
+                                progressNormalizedPerThread.foreach(ti => {
 
-                                  //if (verbose) println("\nChanging priority of thread $" + threadNo + " after " + trials + " trials\n from " + Thread.currentThread().getPriority() + " to " + newPriority)
+                                  val thread = ti._2.thread
 
-                                  Thread.currentThread().setPriority(newPriority)
+                                  if (slowThreadAction == 1)
+                                    thread.setPriority((thread.getPriority + 1).min(Thread.MAX_PRIORITY))
+                                  else
+                                    thread.setPriority((thread.getPriority - 1).max(Thread.MIN_PRIORITY))
 
-                                } else {
-
-                                  //if (verbose) println("\n" + (if (slowThreadAction == 2) "Decreasing" else "Increasing") + " priorities of threads other than thread $" + threadNo + " after " + trials + " trials")
-
-                                  progressNormalizedPerThread.foreach(ti => {
-
-                                    val thread = ti._2.thread
-
-                                    if (slowThreadAction == 1)
-                                      thread.setPriority((thread.getPriority + 1).min(Thread.MAX_PRIORITY))
-                                    else
-                                      thread.setPriority((thread.getPriority - 1).max(Thread.MIN_PRIORITY))
-
-                                  })
-
-                                }
+                                })
 
                               }
 
                             }
 
-                          } else if (!identicalApproaches) { // TODO: remove?
+                          }
 
-                            stomp(-10000, "slowThreadAction 3 currently not available")
+                        } else if (!identicalApproaches) { // TODO: remove?
 
-                            freeEliSearchApproachP.synchronized {
+                          stomp(-10000, "slowThreadAction 3 currently not available")
 
-                              maxApproachSwitches -= 1
+                          freeEliSearchApproachP.synchronized {
 
-                              val newApproach = freeEliSearchApproachP.getAllAlternativeValues((freeEliSearchApproachP.getAllAlternativeValues.indexOf(freeEliSearchApproach) + 1) % freeEliSearchApproachP.getAllAlternativeValues.length)
+                            maxApproachSwitches -= 1
 
-                              if (verbose && showProgressStats)
-                                println("\n>> >> >> Switching solver thread $" + threadNo + " to decision heuristics " + newApproach + "... (after " + trials + " trials)")
+                            val newApproach = freeEliSearchApproachP.getAllAlternativeValues((freeEliSearchApproachP.getAllAlternativeValues.indexOf(freeEliSearchApproach) + 1) % freeEliSearchApproachP.getAllAlternativeValues.length)
 
-                              freeEliSearchApproach = newApproach
+                            if (verbose && showProgressStats)
+                              println("\n>> >> >> Switching solver thread $" + threadNo + " to decision heuristics " + newApproach + "... (after " + trials + " trials)")
 
-                              threadConfs(threadNo - 1).freeEliSearchApproach = newApproach
+                            freeEliSearchApproach = newApproach
 
-                              setThreadParams()
+                            threadConfs(threadNo - 1).freeEliSearchApproach = newApproach
 
-                            }
+                            //setThreadParams()
 
                           }
 
@@ -1779,13 +2009,17 @@ class SolverMulti(prep: Preparation) {
 
                       }
 
-                      printSingleLineProgress(trials, noOfRemovedNogoods = -1)
-
                     }
+
+                    printSingleLineProgress(trials, noOfRemovedNogoods = -1)
 
                   }
 
+                  //}
+
                 }
+
+              }
 
             }
 
@@ -1796,6 +2030,8 @@ class SolverMulti(prep: Preparation) {
         stopSolverThreads.synchronized {
 
           if (!stopSolverThreads) {
+
+            //stopSingleSolverThreads()  // we don't call this here as we couldn't bounce back an invalid answer set then
 
             if (debug) println("\n\nModel candidate found. SolverTimer: " + timerToElapsedMs(solverTimer) + " ms\nReporting thread: $" + threadNo + "\n")
 
@@ -2019,9 +2255,11 @@ class SolverMulti(prep: Preparation) {
 
               assert(checkResult._2.isEmpty)
 
-              stopSolverThreads = true
+              //stopSolverThreads = true
+              stopSingleSolverThreads()
 
-              def threadSanityChecks: Unit = { // we perform a few simple tests with the discovered model. Not a correctness proof - for debugging purposes only.
+              def threadSanityChecks: Unit = { // we perform a few simple tests with the discovered model (which must already be established as a valid answer set in ASP mode at this point).
+                // These tests are not correctness proofs, they are just for debugging purposes.
 
                 // TODO: due to incomplete locking on stopSolverThreads, we occasionally end up here >= twice
 
@@ -2377,7 +2615,7 @@ class SolverMulti(prep: Preparation) {
                   val newLoopNogoodReducible = generateNogoodReducibleFromNogoodClarkOrSpecial(
                     nogoodAddr = newLoopNogoodUnsafe.getAddr,
                     nogoodSize = newLoopNogoodUnsafe.sizev,
-                    beforeSolvingstarted = false)
+                    beforeSolvingStarted = false)
 
                   addLearnedNogoodReducibleToReducibleLists(newLoopNogoodReducible, 0l)
 
@@ -2569,7 +2807,13 @@ class SolverMulti(prep: Preparation) {
               absEliScoringApproach = absEliScoringApproachP.getThreadOrDefaultValue(threadNo),
               nogoodRemovalThreshInit = nogoodRemovalThreshInitP.getThreadOrDefaultValue(threadNo),
               noisePhaseMemoR = noisePhaseMemoP.getThreadOrDefaultValue(threadNo),
-              localRestarts = localRestartsP.getThreadOrDefaultValue(threadNo)
+              localRestarts = localRestartsP.getThreadOrDefaultValue(threadNo),
+              scoringForRemovalOfLearnedNogoodsR = scoringForRemovalOfLearnedNogoodsP.getThreadOrDefaultValue(threadNo),
+              weakRephasingAtRestartEvery = weakRephasingAtRestartEveryP.getThreadOrDefaultValue(threadNo),
+              rephasePhaseMemo = rephasePhaseMemoP.getThreadOrDefaultValue(threadNo),
+              nogoodBCPtraversalDirection = nogoodBCPtraversalDirectionP.getThreadOrDefaultValue(threadNo),
+              singleSolverThreadDataOpt = None,
+              absEliScoringApproach15NoOfBins = absEliScoringApproach15NoOfBinsP.getThreadOrDefaultValue(threadNo)
             )
 
           })
@@ -2621,6 +2865,8 @@ class SolverMulti(prep: Preparation) {
       if (writeRuntimeStatsToFile)
         writeSettingsToStatsFile(runThreadNos, threadInfos)
 
+      sharedAmongSingleSolverThreads.threadConfsOpt = Some(threadConfs)
+
       val callables: Seq[Runnable] = runThreadNos.map(threadNo => new Runnable {
 
         override def run(): Unit = {
@@ -2634,19 +2880,25 @@ class SolverMulti(prep: Preparation) {
 
           val reentry = reentrySingleSolverThreadDataOpt.isDefined
 
+          singleSolverConf.singleSolverThreadDataOpt = Some(singleSolverThreadData) // just another reference to singleSolverThreadData so that we can assign it via threadConfs too
+
           val modelOpt: Option[(Array[Eli], IntOpenHashSet)] = sampleSingle(singleSolverConf,
             maxSamplingTimeMs = maxSamplingTimeMs,
             collectOffHeapGarbage = collectOffHeapGarbage,
-            singleSolverThreadData = singleSolverThreadData, reentry = reentry)
+            singleSolverThreadData = singleSolverThreadData,
+            reentry = reentry)
 
           if (modelOpt != null) {
 
             stopSolverThreads.synchronized {
 
-              if (true || !stopSolverThreads) {
+              /*if (true || !stopSolverThreads)*/ {
 
-                if (verbose)
-                  println("\nSuccessful portfolio thread: $" + singleSolverConf.threadNo)
+                //if (verbose)
+                println("\nSuccessful portfolio thread: $" + singleSolverConf.threadNo)
+
+                //if(fileNameOpt.get.contains("uuf250-090"))
+                // println
 
                 if (writeRuntimeStatsToFile)
                   stats.writeEntry(key = "successfulThread", value = singleSolverConf.threadNo, solverThreadNo = 0)

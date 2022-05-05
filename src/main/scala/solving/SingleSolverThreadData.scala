@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018-2020 Matthias Nickles
+  * Copyright (c) 2018-2022 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -13,18 +13,18 @@ package solving
 
 import java.lang.management.ManagementFactory
 import java.util.Map
-
 import input.UNSAFEhelper.{UNSAFE, addAllocOffHeapMemToGarbage, allocateOffHeapMem, approxSizeOfCurrentFreeUnsafeMemory, freeOffHeapMem}
 import input.UNSAFEhelper
 import input.diffSAT._
-
 import it.unimi.dsi.fastutil.ints._
 import it.unimi.dsi.fastutil.longs.{Long2IntOpenHashMap, Long2IntRBTreeMap, LongArrayList}
 import it.unimi.dsi.fastutil.objects.{ObjectArrayList, ObjectBidirectionalIterator}
-
-import sharedDefs._
+import sharedDefs.{rndmBranchProbR, _}
 import utils._
 import utils.Various._
+/*import vmm.API
+import vmm.algs.{LZ78Predictor, PPMCPredictor}
+import vmm.pred.VMMPredictor*/
 
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Seq, mutable}
@@ -86,7 +86,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
   val restartsFactModifier: Float = restartFrequencyModifierFactorR
 
   val useSLSinPhaseMemoRephasing = useSLSinPhaseMemoRephasingR &&
-    noOfAbsElis >= boundsOnNoOfAbsElisForSLSinrephasing._1 && noOfAbsElis <= boundsOnNoOfAbsElisForSLSinrephasing._2
+    noOfAbsElis >= boundsOnNoOfAbsElisForSLSinRephasing._1 && noOfAbsElis <= boundsOnNoOfAbsElisForSLSinRephasing._2
 
   val glucoseRestarts: Boolean = restartsFactModifier < 0f
 
@@ -96,13 +96,14 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   var forceRestart = false
 
-  var enforceLBDemaComputation = (rndmBranchProbR < 0 || absEliScoringApproach == 0 && !evsids || glucoseRestarts) // also see setThreadParams!
+  @inline def useLBDs: Boolean = scoringForRemovalOfLearnedNogoods == 11 || glucoseRestarts || absEliScoringApproach == 0 && !evsids ||
+    scoringForRemovalOfLearnedNogoods == 8 || scoringForRemovalOfLearnedNogoods == 0 || rephasePhaseMemo && bestPhaseCriterion == 0 || /*ßßß*/ rndmBranchProbR < 0
 
-  val scoringForRemovalOfLearnedNogoods: Eli = scoringForRemovalOfLearnedNogoodsR
+  val scoringForRemovalOfLearnedNogoods: Int = scoringForRemovalOfLearnedNogoodsR
 
-  var useLBD /*LBD = "glue degree" of nogoods or clauses*/ : Boolean =
+  /*var useLBD /*LBD = "glue degree" of nogoods or clauses*/ : Boolean =
     enforceLBDemaComputation ||
-      scoringForRemovalOfLearnedNogoods == 0 || scoringForRemovalOfLearnedNogoods == 8 || scoringForRemovalOfLearnedNogoods == 11
+      scoringForRemovalOfLearnedNogoods == 0 || scoringForRemovalOfLearnedNogoods == 8 || scoringForRemovalOfLearnedNogoods == 11 */
 
   val allowSwitchFreeEliSearchApproach = abandonOrSwitchSlowThreads != 0d && slowThreadAction == 3
 
@@ -149,11 +150,35 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     new IntArrayUnsafeS(maxBCPPush)
   // TODO: rename
 
-  var rmiStorePos: Eli = 0
+  var rmiStorePos: Int = 0
 
-  var rmiStorePosOld: Eli = 0
+  var rmiStorePosOld: Int = 0
 
   var ri = -1
+
+  var (stEprops, etSprops) = (0L,0L)
+
+  var (stEcalls, etScalls) = (0,0)
+
+  /*
+  val vmmPredictorMaxLength/* 0 = off */ = 0 // /*(noOfAbsElis / 100).max(6000) / 2 */8.min(noOfAbsElis)
+
+  val vmmAlphabetSize = /*(noOfAbsElis / 100).max(6000)*/ noOfAbsElis * 2
+
+  val vmmPredictor: /*PPMCPredictor*/LZ78Predictor = API.getNewPredictor(/*vmm.API.VMMType.PPMC*/vmm.API.VMMType.LZ78, vmmAlphabetSize, vmmPredictorMaxLength).
+    asInstanceOf[/*PPMCPredictor*/LZ78Predictor]
+  val vmmTrainingSeqLZ = vmmPredictor.obtainNewTIntArrayList()  //LZ global
+
+  val vmmPredictionSeqLZ = vmmPredictor.obtainNewTIntArrayList()  //LZ global
+
+  /*val vmmPredictor: PPMCPredictor = API.getNewPredictor(vmm.API.VMMType.PPMC, noOfAbsElis * 2, vmmPredictorMaxLength).
+    asInstanceOf[PPMCPredictor]
+  */
+  */
+
+  val violNogoodCountsPerLevel = new IntArrayUnsafeS(noOfAbsElis + 1, initialValue = 0)
+
+  val violMaxNogoodCountsPerLevel = new IntArrayUnsafeS(noOfAbsElis + 1, initialValue = -1)  // NB: these are the _sums_ of _all_ violated nogood counts up to a decision level, whereas violNogoodCountsPerLevel is the violated nogood count _at_ at decision level without the preceeding counts
 
   @deprecated val reasonsForRmiStoreForNoHeap: LongArrayUnsafeS = if (extReducibles == 1 || extReducibles == 5)
     new LongArrayUnsafeS(maxBCPPush) else null.asInstanceOf[LongArrayUnsafeS]
@@ -291,15 +316,22 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
   @inline def getReasonOfEli(eli: Eli): NogoodReducible =
     UNSAFE.getLong(varsSpace + offsetInBytesForReasonInVarSpace + (toAbsEli(eli) << powerOf2ForNoOfBytesPerVarSpace))
 
-  @inline def decisionLevelOfEli(eli: Eli): Eli = // NB: in the way conflict analysis is implemented this value might also be requested for unassigned elis
+  @inline def decisionLevelOfEli(eli: Eli): Int = // NB: in the way conflict analysis is implemented this value might also be requested for unassigned elis
     UNSAFE.getInt(varsSpace + offsetInBytesForDecisionLevelInVarSpace + (toAbsEli(eli) << powerOf2ForNoOfBytesPerVarSpace))
 
-  @inline def updateAbsEliToDl(eli: Eli, dl: Eli): Unit =
+  @inline def updateAbsEliToDl(eli: Eli, dl: Int): Unit =
     UNSAFE.putInt(varsSpace + offsetInBytesForDecisionLevelInVarSpace + (toAbsEli(eli) << powerOf2ForNoOfBytesPerVarSpace), dl)
 
-  @inline def getAbsEliScore(absEli: Eli): Float =
-    UNSAFE.getFloat(varsSpace + offsetInBytesForAbsEliScoreInVarSpace + (absEli << powerOf2ForNoOfBytesPerVarSpace))
+  @inline def getAbsEliScore(absEli: Eli): Float = {
 
+    val r = UNSAFE.getFloat(varsSpace + offsetInBytesForAbsEliScoreInVarSpace + (absEli << powerOf2ForNoOfBytesPerVarSpace))
+
+    //if(r != 0f && threadNo != 8) println(r)
+
+    r
+  }
+
+  /** Don't call this method directly for setting an absEli score, use setAndEnactScoreOfAbsEli() */
   @inline def updateAbsEliScore(absEli: Eli, newScore: Double): Unit = {
 
     UNSAFE.putFloat(varsSpace + offsetInBytesForAbsEliScoreInVarSpace + (absEli << powerOf2ForNoOfBytesPerVarSpace), newScore.toFloat)
@@ -307,7 +339,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     // Remark: in many other code locations, absEli scores are still represented as Double values - doesn't really matter, we
     // use Float only to squeeze more absEli metadata into a 32 byte slot, not because of performance.
 
-    // Remark: the actual range of these scores depends mainly from absEliScoringApproach. E.g.,
+    // Remark: the actual range and semantics of these scores depends mainly from absEliScoringApproach. E.g.,
     // with approach 2, the scores are Q-values.
 
   }
@@ -348,7 +380,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     UNSAFE.getAndAddInt(null, varsSpace + offsetInBytesForAbsEliScoreUpdatesInVarSpace + (absEli << powerOf2ForNoOfBytesPerVarSpace), 1)
 
   }
-
 
   @inline def updateDecisionAbsEliSeqForRTR(decLevel: Int, newValue: Eli): Unit = {
 
@@ -483,8 +514,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     // Instead of maintaining a single queue ordered by absEli scores, we keep a number of unordered "bins". Each (unassigned) eli
     // is placed in one of these bins, the bin determined by a rounded absEli score. Essentially a form of radix sort.
 
-    val noOfBins = 25 // should be between (about) 25 and 100. See getBinFromScoreForFreeEliSearchApproach15() for
-    // the mapping from absEli scores to bin indices.
+    val noOfBins = absEliScoringApproach15NoOfBins
 
     val r = Array.ofDim[DualIndexedIntSet](noOfBins)
 
@@ -501,6 +531,14 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     r
 
   } else null.asInstanceOf[Array[DualIndexedIntSet]]
+
+  var (minAbsEliScore, maxAbsEliScore) = (0d, 1000d)
+
+  var absEliScoresMean = 0.5d
+
+  var absEliScoresMedian = 0.5d
+
+  var absEliScoresStdDev = 0d
 
   val absElisSeqArranged: IntArrayUnsafeS = new IntArrayUnsafeS({
 
@@ -542,7 +580,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       absEliSeq.sortBy(absEli => {
 
-        val l = eliToNogisClark(eliToJavaArrayIndex(absEli)).length + eliToNogisClark(eliToJavaArrayIndex(negatePosEli(absEli))).length
+        //val l = eliToNogisClark(eliToJavaArrayIndex(absEli)).length + eliToNogisClark(eliToJavaArrayIndex(negatePosEli(absEli))).length
+        //val l = eliToNogisClark(eliToJavaArrayIndex((absEli))).length + (eliToNogisClark(eliToJavaArrayIndex(negatePosEli(absEli))).length )
+        val l = eliToNogisClark(eliToJavaArrayIndex((absEli))).length.toFloat + (eliToNogisClark(eliToJavaArrayIndex(negatePosEli(absEli))).length )
 
         // println("absEli: " + absEli + ", l = " + l)
 
@@ -624,6 +664,10 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   var violatedNogoodReducible: NogoodReducible = 0l // (not to be confused with the conflict nogood which is the learned nogood after a conflict)
 
+  //var noViolNogoodsRecentBCP: Int = 0  //:::
+
+  //var countViolNgs = false //:::
+
   var timeAtLastProgressPrintedNs: NogoodReducible = -1l
 
   var noOfPropagationsSinceLastProgressPrinted: Int = 0
@@ -649,7 +693,13 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   var lbdEmaFast: Double = 0d
 
+  //var conflEmaSlow: Double = 0d
+
+  //var conflEmaFast: Double = 0d
+
   var noOfProgressChecks = 0
+
+  var lastProgressCheckAtTrial = 0
 
   var noOfRephasings: Int = 0
 
@@ -661,7 +711,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   var noOfRestarts: Int = 0
 
-  var scheduleRescaleAbsElis = false
+  var scheduleRescaleAbsElis: Float = 1f  // if != 1f, a rescaling of absEli scores happens during jumpBack(). Either a regular
+  // rescaling with localityExt = true or an exceptional rescaling to avoid numerical over/underflow.
 
   var rescalingsAbsEliScores = 0
 
@@ -890,17 +941,16 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   var nii = 0
 
-  @deprecated
+  /*@deprecated
   @inline def setThreadParams(): Unit = { // TODO: remove the need for this:
 
-    var enforeceLearnRateComputation = rndmBranchProbR < 0 || absEliScoringApproach == 0 && !evsids || glucoseRestarts
+    //var enforeceLearnRateComputation = rndmBranchProbR < 0 || absEliScoringApproach == 0 && !evsids || glucoseRestarts
 
     useLBD =
       enforceLBDemaComputation || scoringForRemovalOfLearnedNogoods == 0 || scoringForRemovalOfLearnedNogoods == 8 || scoringForRemovalOfLearnedNogoods == 11
 
-  }
-
-  setThreadParams()
+  }*/
+  //setThreadParams()
 
   @inline def isSetInPass(eli: Eli): Boolean = {
 
@@ -958,7 +1008,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
   @inline def updateLongInReducible(addr: NogoodReducible, intIndex: Int, value: NogoodReducible): Unit =
     UNSAFE.putLong(addr + (intIndex << 2), value)
 
-
   @inline def getFloatFromReducible(addr: NogoodReducible, index: Int): Float =
     UNSAFE.getFloat(addr + (index << 2))
 
@@ -1000,11 +1049,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     // NB: lbd in diff-SAT not computed for non-learned ("clark") nogood!
 
-    val r = getIntFromReducible(addr, offsetIntsOfNogoodInReducible - 1)
-
-    //println("r = " + r)
-
-    r
+    getIntFromReducible(addr, offsetIntsOfNogoodInReducible - 1)
 
   }
 
@@ -1707,9 +1752,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  @inline def computeLBD(nogoodReducible: NogoodReducible /*, upperBound: Int = Int.MaxValue*/): Eli = {
+  @inline def computeLBD(nogoodReducible: NogoodReducible): Int = {
 
-    val lbd = if (getNogoodSizeFromReducible(nogoodReducible) == 2) {
+    if (getNogoodSizeFromReducible(nogoodReducible) == 2) {
 
       2
 
@@ -1723,7 +1768,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       //println("\nnogoodReducible = " + nogoodReducible)
 
-      while (kk < getNogoodSizeFromReducible(nogoodReducible)) {
+      while (kk < getNogoodSizeFromReducible(nogoodReducible) && lbda <= maxLBD) {
 
         // Remark: We and most solvers store decision levels for entire variables. Thus:
 
@@ -1745,30 +1790,26 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-    lbd
-
   }
 
   @inline def lbdNogoodScore(nogoodReducible: NogoodReducible /*, useCache: Boolean = true*/): Double = {
-    // The higher the score the better, i.e., less likely is the learned nogood to be removed (i.e., high score = nogood is "good").
+    // The higher the score returned by this method the better, i.e., less likely is the learned nogood to be removed (i.e., high score = nogood is "good").
     // NB: with reduceLearnedNogoodAtRestartsOnly = true (i.e., if this method is called only directly after restarts), the
     // LBD is always 0.
-    // Remark: LBD is originally defined for clauses, not nogoods.
+    // Remark: LBD was originally defined for clauses, not nogoods.
 
     val r = if (keepGlue >= 0) {
 
-      val lbd: Eli = getLBDFromReducible(nogoodReducible)
+      val lbd: Int = getLBDFromReducible(nogoodReducible)
 
-      //println("lbd: " + lbd)
-
-      if (lbd <= keepGlue)
+      ( if (lbd <= keepGlue)
         1d //Double.MaxValue // nogoods with lbd = 2 should normally never be removed
       else
-        (1d + (-lbd.toDouble / 10d)).max(0d)
-
+        (1d + (-lbd.toDouble / maxLBD.toDouble)) .max(0d)  // assumes that lbd is typically between 0 and maxLBD
+        )
     } else {
 
-      val lbd: Eli = getLBDFromReducible(nogoodReducible)
+      val lbd: Int = getLBDFromReducible(nogoodReducible)
 
       //println("lbdScore = " + lbdScore)
 
@@ -1796,42 +1837,57 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     ngActivityCMAn += 1
 
+    //    if(getLearnedNogoodReducibleActivity(nogoodReducible) != 0f)
+    //    println("\n" + getLearnedNogoodReducibleActivity(nogoodReducible))
+
   }
 
   @inline def bumpNogoodReducibleActivity(nogoodReducible: NogoodReducible): Unit = {
 
-    val oldNogoodActivity = getLearnedNogoodReducibleActivity(nogoodReducible)
+    if(scoringForRemovalOfLearnedNogoods != 4) {
 
-    val newNogoodActivity = oldNogoodActivity + nogoodActivityBump
+      val oldNogoodActivity = getLearnedNogoodReducibleActivity(nogoodReducible)
 
-    setLearnedNogoodReducibleActivity(nogoodReducible, newNogoodActivity)
+      val newNogoodActivity = oldNogoodActivity + nogoodActivityBump
 
-    if (newNogoodActivity > 1e37f) {
+      setLearnedNogoodReducibleActivity(nogoodReducible, newNogoodActivity)
 
-      // There isn't really much we can do here (?) if we store the activities inside the reducibles
+      if (newNogoodActivity > 1e37f) {
 
-      nogoodActivityBump = 1e-37f // well...  //TODO
+        // There isn't really much we can do here (?) if we store the activities inside the reducibles
 
-      nogoodActivityDecay = 1e-20f
+        nogoodActivityBump = 1e-37f // well...  //TODO
+
+        nogoodActivityDecay = 1e-20f
+
+      }
 
     }
 
-    //println("\n" + learnedNogoodReducibleActivity.get(nogoodReducible))
+    //println("\n" + getLearnedNogoodReducibleActivity(nogoodReducible))
 
   }
 
   @inline def getNogoodReducibleScore(nogoodReducible: NogoodReducible, scoringForRemovalOfLearnedNogoods: Int): Double = {
 
-    // Higher=better, that is, a higher result means lower probability of being removed for this nogood. The scores
-    // must only be used to compare them with other using <, >, =, as they aren't normalized.
-    // Don't use them in comparison against some constant value!
+    // Higher means better nogood, that is, a higher result means lower probability of being removed for this nogood.
+    // The scores must only be used to compare them with other using <, >, =, as they aren't normalized.
+    // Don't use them in comparison against any constant value!
 
     {
 
       if (getNogoodSizeFromReducible(nogoodReducible) <= highestScoreForLearnedNogoodUpToSize)
         return Double.MaxValue // (observe that we'll need to add up these values at one point, so there we'll have to skip MaxValue)
 
-      if (scoringForRemovalOfLearnedNogoods == 8) {
+      if (scoringForRemovalOfLearnedNogoods == 11) {
+
+        val r = getLearnedNogoodReducibleActivity(nogoodReducible) * lbdNogoodScore(nogoodReducible)
+
+        // if(noOfNogoodRemovalPhases % 2 == 0) println(r)
+
+        r
+
+      } else if (scoringForRemovalOfLearnedNogoods == 8) {
 
         //  val r = absEliBasedNogoodScore(nogoodReducible) * lbdNogoodScore(nogoodReducible) // seems to be most efficient?
 
@@ -1844,14 +1900,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       } else if (scoringForRemovalOfLearnedNogoods == 1) {
 
         val r = getLearnedNogoodReducibleActivity /*learnedNogoodReducibleActivity.get*/ (nogoodReducible) //* lbdNogoodScore(nogoodReducible)
-
-        r
-
-      } else if (scoringForRemovalOfLearnedNogoods == 11) {
-
-        val r = getLearnedNogoodReducibleActivity(nogoodReducible) * lbdNogoodScore(nogoodReducible)
-
-       // if(noOfNogoodRemovalPhases % 2 == 0) println(r)
 
         r
 
@@ -1955,7 +2003,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-    if (keepNogoodsWeaklySorted) { // not effective?
+    /*if (keepNogoodsWeaklySorted) { // not effective?
 
       var addri = reducible + (offsetIntsOfNogoodInReducible << 2)
 
@@ -1990,7 +2038,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       }
 
-    }
+    }*/
 
   }
 
@@ -2144,9 +2192,51 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     } else {
 
-      @inline def acts(pivotIndex: Eli, possUnitEli: Eli): Eli = { // the most time consuming method in diff-SAT's SAT core
+      @inline def acts(pivotIndex: Int, possUnitEli: Eli): Eli = { // the most time consuming method in diff-SAT's SAT solving core
 
-        if (isNegSetInPass(possUnitEli)) { // nogood cannot be true => nothing to do
+        if (isNegSetInPass(possUnitEli)) { // nogood cannot be true => nothing to do (but we can change the pivot watch)
+
+
+
+          if(false) {  // TODO: unclear is true or false is better (and when)
+            var addri = addr + (offsetIntsOfNogoodInReducible << 2) + 8l // = address of literal_2 in nogood (literals _0 and _1 are the watches)
+
+            val endAddr = addri + ((nogoodSize - 2) << 2)
+
+            while (isSetInPass(UNSAFE.getInt(addri))) { // to make this loop terminate, there must be an end marker "literal"
+              // 0 after the last literal for which isSetInPass returns false (which requires that vPass(0) != 0).
+
+              addri += 4l
+
+            }
+
+            if (addri < endAddr) {
+
+              val u = UNSAFE.getInt(addri)
+
+              {
+
+                pivotEliToReducibles.removeByAddrUS(pivotIndexInReduciblesSeqAddr)
+
+                updateEliInNogoodInReducible(addr, pivotIndex, u)
+
+                UNSAFE.putInt(addri, item)
+
+                eliWatchedToReducibles(eliToJavaArrayIndex(u)).addReducibleUS(addr)
+
+                return Int.MaxValue - 1
+
+              }
+
+              if (debug2) println("  action 2: moved reducible to list of eli " + u)
+
+            }
+
+          }
+
+
+
+
 
           Int.MaxValue
 
@@ -2351,7 +2441,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         noOfReducibleSpaceRequests += 1
 
-        // println("\nfmStackThreadLocal.size = " + fmStackThreadLocal.size)
+        //  println("\nfmStackThreadLocal.size = " + fmStackThreadLocal.size)
 
         var i = 0
 
@@ -2360,6 +2450,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
           val fmStackEntry = fmStackThreadLocal.get(i)
 
           val availableSpaceInInts = getIntFromReducible(fmStackEntry, offsetIntsOfNogoodInReducible - 3)
+
+          //println(availableSpaceInInts)
 
           if (availableSpaceInInts >= minimumRequiredReducibleSpaceSizeInNoOfInts) {
 
@@ -2506,14 +2598,12 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
   }
 
   @inline def generateNogoodReducibleFromNogoodClarkOrSpecial(nogoodAddr: NogoodReducible, nogoodSize: Eli,
-                                                              beforeSolvingstarted: Boolean): NogoodReducible = {
+                                                              beforeSolvingStarted: Boolean): NogoodReducible = {
 
     // Mainly for setting up the meta information (but NOT the watches) of clark nogoods, and for some minor tasks (e.g., setting up transfer nogoods).
-    // This method is NOT used to set up regular learned nogood reducibles, as these use a more efficient setup
-    // in conflictAnalysis().
-    // Also,
 
-    //assert(atReducibleAddress == -1l || beforeSolvingstarted)
+    // !!! This method is NOT used to set up regular learned nogood reducibles, as these setup the learned
+    // reducibles in conflictAnalysis() !!!
 
     assert(nogoodSize > 0)
 
@@ -2547,22 +2637,31 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     updateIntInReducible(newReducible, offsetIntsOfNogoodInReducible - 1, -1) // actually the LBD slot for learned nogoods. For
     //"Clark" nogoods, we set this to -1 to distinguish "Clark" from learned nogoods.
 
+    updateFloatInReducible(newReducible, intIndex = offsetIntsOfNogoodInReducible - 4, 0f)  // (not relevant for Clark reducibles but
+    // helps when debugging nogood scoring as this way we don't see any random nogood scores)
+
+    // ^^^^^^^^^^ after any changes to reducible setup, check if those changes may need to be done at the end of conflictAnalysis() also
+
     newReducible
 
   }
 
   @inline def getBinFromScoreForFreeEliSearchApproach15(score: Double): Int = {
 
+    // Must always give the same value for the same argument! Changes to parameters like absEliScoresStdDev only possible
+    // via possiblyRescaleAllAbsElis() !!!
+
     assert(freeEliSearchApproach == 15)
 
     @inline def gbin(x: Double): Int = {
 
-      val r = if (absEliScoringApproach == 0) {
+      val r = if (absEliScoringApproach == 0) { // TODO: find better (faster but accurate) gbin function
 
+        /*
         // A skewed and shifted approximated Gaussian error function.
         // Purely heuristically assuming that scores have the highest density around 300, that is,
         // we allocate more bins to that range.
-        // Upper bound for x~1000 (also see rescheduling threshold in setScoreOfAbsEli!)
+        // Upper bound for x ca. binRangeMax (also see rescheduling threshold in setScoreOfAbsEli!)
 
         @inline def g0(x: Float): Float =
           1f - 1f / Math.pow(1 + 0.278393 * x + 0.230389 * x * x + 0.000972 * x * x * x + 0.078108 * x * x * x * x, 4).toFloat
@@ -2576,16 +2675,52 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         }
 
-        g1((Math.pow(x, 1.2f).toFloat - 1000f + 0f) * 0.0005f) *
+        val rr = g1((Math.pow(x, 1.2f).toFloat - binRangeMax) * 0.0005f) *
           (unassignedAbsEliBinSet.length.toFloat - 15f) + (unassignedAbsEliBinSet.length.toFloat / 2f)
 
-        // Try also:
-        // java.lang.Math.log(x * 10000)
-        // java.lang.Math.getExponent(x) * 37
+        // Significantly less accurate but faster to compute:
+        //java.lang.Math.log(x * 10000)
+        //or this: java.lang.Math.getExponent(x) * 37
 
-      } else {
+        */
 
-        x * unassignedAbsEliBinSet.length // here we assume that the scores are already normalized to [0,1]
+        // Use of brackets instead of median: val rr = ((score - minAbsEliScore)/(maxAbsEliScore-minAbsEliScore) * ((unassignedAbsEliBinSet.length - 1) - 0) + 0)
+
+        val slope = 1000d / absEliScoresStdDev  //500000 //50000  // TODO: more experiments
+
+        val rr = 0 + ((1 - 0)/((1 + (1) * Math.exp(-slope*((score + (0.5 - absEliScoresMedian/*absEliScoresMean*/)) * 2 - 1))))) * (unassignedAbsEliBinSet.length - 1)
+
+        //println("score:" + score + ", median:" + median + ", rr:" + rr + ", absEliScoresMean = " + absEliScoresMean + ", stddev=" + absEliScoresStdDev + ", slope:" + slope)
+
+        rr
+
+      } else { // here we assume that the scores are already normalized to [0,1]
+
+        val rr = x * unassignedAbsEliBinSet.length
+
+        /*
+        // For the following, need to activate absEliScoresMedian etc updating for absEliScoringApproach != 0 in possiblyRescaleAllAbsElis():
+
+        // We could also use https://en.wikipedia.org/wiki/Generalised_logistic_function if we know there is a "peak" in the score distribution,
+        // but in preliminary experiments this didn't show benefits (but different situation for absEliScoringApproach == 0!):
+
+        val slope = 1000d / absEliScoresStdDev  //500000 //50000  // TODO: more experiments
+
+        val rr = 0 + ((1 - 0)/((1 + (1) * Math.exp(-slope*((score + (0.5 - absEliScoresMedian/*absEliScoresMean*/)) * 2 - 1))))) * (unassignedAbsEliBinSet.length - 1)
+        //Plot[0 + ((1 - 0)/(1 + (1)*Exp[-50*((x + (0.5 - 0.6))*2 - 1)]))*20, {x, 0, 1}]
+        */
+
+        /* Or we could map the score more or less uniformly to fixed random values (doesn't work well at all):
+
+        val bits = java.lang.Double.doubleToLongBits(score)
+
+        val mantissa: Long =  (bits & 0x000fffffffffffffL) | 0x0010000000000000L
+
+        val rr = mantissa.toString.takeRight(2).toInt
+
+        */
+
+        rr
 
       }
 
@@ -2594,6 +2729,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     }
 
     val bin = gbin(score)
+
+    //if(bin != 7) println(bin)
 
     bin
 
@@ -2621,26 +2758,32 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  @inline def setScoreOfAbsEli(absEli: Eli, newScoreR: Float, updateInHeap: Boolean = true /*, ign: Boolean = true*/): Unit = {
+  @inline def setAndEnactScoreOfAbsEli(absEli: Eli, newScoreR: Float, updateInHeap: Boolean = true): Unit = {
+
+    //         val l = eliToNogisClark(eliToJavaArrayIndex((absEli))).length + (eliToNogisClark(eliToJavaArrayIndex(negatePosEli(absEli))).length )
+
+    //val newScoreR = newScoreRR + (eliToNogisClark(eliToJavaArrayIndex((absEli))).length + (eliToNogisClark(eliToJavaArrayIndex(negatePosEli(absEli))).length )).toFloat
+
+    //println(newScoreR)
 
     val newScore = if (newScoreR == 1.0f / 0.0f /*.isInfinite*/ ) { // .isInfinite is more costly (boxing)
 
-      scheduleRescaleAbsElis = true
+      scheduleRescaleAbsElis = 1e-35f
 
       Float.MaxValue
 
-    } else if (newScoreR > (if (freeEliSearchApproach == 15) 1000f else 1e30f) /*1e30d*/ ) {
-      // see getBinFromScoreForFreeEliSearchApproach15 for motivation of 1000f
+    } else if (newScoreR > (if (false && freeEliSearchApproach == 15) binRangeMax/*1000f*/ else 1e30f)) {
+      // binRangeMax only enforced if used in getBinFromScoreForFreeEliSearchApproach15
 
-      // TODO: the upper bound 1000 for freeEliSearchApproach == 15 doesn't work well with useScoresInSLS
-
-      scheduleRescaleAbsElis = true
+      scheduleRescaleAbsElis = 1e-35f
 
       newScoreR
 
-    } else if (newScoreR.isNaN)
+    } else if (newScoreR.isNaN) {
+
       0f
-    else
+
+    } else
       newScoreR
 
     if (!updateInHeap)
@@ -2686,23 +2829,24 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  @inline def bumpUpEVSIDSscoreOfAbsEli(absEli: Eli, absEliScoreBumpAmount: Float): Unit = { // for absEliScoringApproach = 0
+  /*@inline def bumpUpEVSIDSscoreOfAbsEli(absEli: Eli, absEliScoreBumpAmount: Float): Unit = { // for absEliScoringApproach = 0
+    // Don't call directly, call via scoreUpdateOfEli or updScoreInNogoodElis
 
     setScoreOfAbsEli(absEli, getAbsEliScore(absEli) + absEliScoreBumpAmount)
 
-  }
+  }*/
 
-  @inline def bumpUpEVSIDSscoreOfAbsEliMinimally(absEli: Eli): Unit = { // for absEliScoringApproach = 0
+  /*@inline def bumpUpEVSIDSscoreOfAbsEliMinimally(absEli: Eli): Unit = { // for absEliScoringApproach = 0
 
-    val oldScore = getAbsEliScore(absEli)
+    //val oldScore = getAbsEliScore(absEli)
 
     val r = Math.nextUp(getAbsEliScore(absEli))
 
     setScoreOfAbsEli(absEli, r)
 
-  }
+  }*/
 
-  @inline def updScoreInNgElis(involvedNogoodAddr: NogoodReducible, length: Eli): Float = {
+  @inline def bumpUpScoresInAllNogoodElis(involvedNogoodAddr: NogoodReducible, length: Int): Float = {
 
     var ii = 0
 
@@ -2757,9 +2901,11 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       while (ii < length) {
 
+        //bumpUpEVSIDSscoreOfAbsEli(toAbsEli(UNSAFE.getInt(involvedNogoodAddr + (ii << 2))), bump)
+
         val absEli = toAbsEli(UNSAFE.getInt(involvedNogoodAddr + (ii << 2)))
 
-        bumpUpEVSIDSscoreOfAbsEli(absEli, bump)
+        setAndEnactScoreOfAbsEli(absEli, getAbsEliScore(absEli) + bump)
 
         ii += 1
 
@@ -2821,7 +2967,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       val reducible: NogoodReducible = generateNogoodReducibleFromNogoodClarkOrSpecial(
         nogoodAddr = clarkNogoodsFinal(nii).getAddr, nogoodSize = clarkNogoodsFinal(nii).sizev,
-        beforeSolvingstarted = true)
+        beforeSolvingStarted = true)
 
       if (debug2)
         printInfoAboutReducible(reducible)
@@ -2912,8 +3058,10 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  @inline def initializePhaseMemo(inverse: Boolean) = { // 0x00: literal absEli is true, !=0x00: literal -absEli is true
+  @inline def initializePhaseMemo(inverse: Boolean): Unit = { // 0x00: literal absEli is true, !=0x00: literal -absEli is true
     // The initial phasePrevious values can make a huge difference, but hard to predict which value is best
+
+    val iSt = System.nanoTime()
 
     lazy val rndPhInit = if (rngLocal.nextBoolean()) 0x01.toByte else 0x00.toByte
 
@@ -2921,7 +3069,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     while (absEli <= noOfAbsElis) {
 
-      val initPhase = if (initialPhaseMemo == 4) { // Jeroslow-Wang (approximation) (TODO: optimize implementation)
+      val initPhase = if (initialPhaseMemo == 4) { // Jeroslow-Wang (approximation)
 
         val posOccReducibles: NogoodReduciblesSequenceUnsafe = if (allowEliToClarkReduciblesLookup) eliToReduciblesClark(eliToJavaArrayIndex(absEli)) else eliWatchedToReducibles(eliToJavaArrayIndex(absEli))
 
@@ -2935,9 +3083,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           var k = 1
 
-          while (k <= 16 /*256*/ ) { // TODO: optimize:
+          while (k <= 256) {
 
-            val noOfKNogoodsInReducibles = reducibles.filterByReducibleUS((reducible: NogoodReducible) => getNogoodSizeFromReducible(reducible) == k).size
+            val noOfKNogoodsInReducibles = reducibles.countByReducibleUS((reducible: NogoodReducible) => getNogoodSizeFromReducible(reducible) == k)
 
             s += noOfKNogoodsInReducibles.toFloat / Math.pow(2, k).toFloat
 
@@ -2949,7 +3097,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         }
 
-        val r = w(posOccReducibles) >= /*<*/ w(negOccReducibles) // TODO: check; we are working with nogoods, not clauses
+        val r = w(posOccReducibles) < /*>=*/ w(negOccReducibles) // wrt. < vs. >=, keep in mind that we are dealing with nogoods, not clauses.
 
         //println(r)
 
@@ -2994,6 +3142,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       absEli += 1
 
     }
+
+    //if(debug) println("initializePhaseMemo: " + timerToElapsedMs(iSt) + " ms")
 
   }
 
@@ -3045,9 +3195,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     while (absEli <= noOfAbsElis) {
 
-      val orderOfAbsEli = absElisSeqArranged.get(absEli - 1)
+      val orderOfAbsEli = absElisSeqArranged.get(absEli - 1)  // i.e., we essentially get the initial order from the approach specified with initAbsElisArrangement
 
-      setScoreOfAbsEli(absEli, absElisScoringPreservationFactorFromInit / orderOfAbsEli.toFloat, updateInHeap = false) // i.e., we use 1/position (scaled) in the
+      setAndEnactScoreOfAbsEli(absEli, absElisScoringPreservationFactorFromInit / orderOfAbsEli.toFloat, updateInHeap = false) // i.e., we use 1/position (scaled) in the
       // initial arrangement (see initAbsElisArrangement) as initial score (will be overridden of course,
       // but can have a significant - yet normally unpredictable - impact).
 
@@ -3084,14 +3234,170 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
   if (freeEliSearchApproach11or14or15)
     initializeUnassignedScoredAbsElisSetOrPriorityQueue(beforeSolving = true) // TODO: move before method decls
 
-  @inline def possiblyRescaleAllAbsElis: Unit = {
+  @inline def possiblyRescaleAllAbsElis(): Unit = {
 
-    if (!neverRescaleAbsEliScores && (scheduleRescaleAbsElis || noOfConflictsTotal % enforceRescalingOfAbsEliScoresEvery == 0)) {
+    // println(noOfConflictsTotal + "? " + (noOfConflictsTotal % 500))
+
+    if(freeEliSearchApproach == 15 && absEliScoringApproach == 0 && (noOfConflictsTotal == 1 || noOfConflictsTotal % 10000 == 0)) {
+
+      {  // We update the parameters of the bin determination procedure getBinFromScoreForFreeEliSearchApproach15()
+
+        // println("\nUpdating bin brackets or media... ")
+
+        val updateBrackets = false
+
+        var mean = 0.5d
+
+        var counter = 0
+
+        var minimum = Double.MaxValue
+        var maximum = Double.MinValue
+
+        var m2 = 0d
+
+        if(updateBrackets) {
+
+          absEli = 1
+
+          while (absEli <= noOfAbsElis) { // need a separate phase to compute CMA etc
+
+            val score = getAbsEliScore(absEli)
+
+            // println(score)
+
+            if (score < minimum)
+              minimum = score
+            else if (score > maximum)
+              maximum = score
+
+            counter += 1
+
+            if (counter > 0) {
+
+              val delta = score - mean
+
+              mean += delta / counter
+
+              val delta2 = score - mean
+
+              m2 += delta * delta2
+
+            }
+
+            absEli += 1
+
+          }
+
+          val absEliScoreVariance = m2 / counter.toDouble
+
+          absEliScoresStdDev = Math.sqrt(absEliScoreVariance)
+
+          //  println("\nMean = " + absEliScoresCMA + ", Variance = " + absEliScoreVariance + ", stdDev = " + stdDev)
+
+          absEliScoresMean = mean
+
+          minAbsEliScore = minimum.max(mean - absEliScoresStdDev)
+
+          maxAbsEliScore = maximum.min((mean + absEliScoresStdDev).min(2 * mean))
+
+          //println("\nNew score brackets: " + minAbsEliScore + ", " + maxAbsEliScore)
+
+          //println
+
+        } else {  // we update the median instead
+
+          val scores = Array.ofDim[Double](noOfAbsElis)
+
+          absEli = 1
+
+          while (absEli <= noOfAbsElis) {
+
+            val score = getAbsEliScore(absEli)
+
+            scores(absEli - 1) = score
+
+            counter += 1
+
+            if (counter > 0) {
+
+              val delta = score - mean
+
+              mean += delta / counter
+
+              val delta2 = score - mean
+
+              m2 += delta * delta2
+
+            }
+
+            absEli += 1
+
+          }
+
+          val absEliScoreVariance = m2 / counter.toDouble
+
+          absEliScoresStdDev = Math.sqrt(absEliScoreVariance)
+
+          absEliScoresMean = mean
+
+          scores.sortInPlace()
+
+          val mid = scores.length / 2
+
+          absEliScoresMedian = if(scores.length >= 2 && scores.length % 2 == 0) (scores(mid) + scores(mid + 1)) / 2 else scores(mid)
+
+          absEliScoresMean = mean
+
+          // println(absEliScoresMedia)
+
+        }
+
+        // we need to update all bins as the old bin contents isn't valid anymore
+
+        var i = 0
+
+        while (i < unassignedAbsEliBinSet.length) {
+
+          unassignedAbsEliBinSet(i).clear()
+
+          i += 1
+
+        }
+
+
+        absEli = 1
+
+        while (absEli <= noOfAbsElis) {
+
+          if (isNotAbsSetInPass(absEli)) {
+
+            {
+
+              val bin = getBinFromScoreForFreeEliSearchApproach15(getAbsEliScore(absEli))
+
+              unassignedAbsEliBinSet(bin).add(absEli)
+
+            }
+
+          }
+
+          absEli += 1
+
+        }
+
+      }
+
+    }
+
+    if (scheduleRescaleAbsElis != 1f && !neverRescaleAbsEliScores) {
+
+      // We rescale all absEli scores. Either because of some overflow or regular rescaling with locality extension = true.
+
+      //println("\nRescaling all absEli scores...")
 
       rescalingsAbsEliScores += 1
 
-      if (scheduleRescaleAbsElis)
-        scheduleRescaleAbsElis = false
+      scheduleRescaleAbsElis = 1f
 
       if (freeEliSearchApproach == 11)
         unassignedScoredAbsElisPriorityQueue.clear()
@@ -3114,9 +3420,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       while (absEli <= noOfAbsElis) {
 
-        val rescaledScore = getAbsEliScore(absEli) / 1e35f // NB: this may change positive scores to 0
+        val rescaledScore = getAbsEliScore(absEli) * scheduleRescaleAbsElis // NB: this may change positive scores to 0
 
-        setScoreOfAbsEli(absEli, rescaledScore)
+        setAndEnactScoreOfAbsEli(absEli, rescaledScore, updateInHeap = scheduleRescaleAbsElis > 1e-10)
 
         if (isNotAbsSetInPass(absEli)) {
 
@@ -3212,9 +3518,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         unassignedAbsEliSet.removeSorted(absEli)
 
-      } else if (freeEliSearchApproach == 11)
-        unassignedScoredAbsElisPriorityQueue.remove(absEli)
-      else if (freeEliSearchApproach == 9)
+      } else if (freeEliSearchApproach == 11) {
+        unassignedScoredAbsElisPriorityQueue.remove(absEli) //sic!
+      } else if (freeEliSearchApproach == 9)
         unassignedScoredAbsEliTreeSet.remove(absEli)
 
       orderNumber += 1
@@ -3223,7 +3529,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  @inline def clearInPass(eli: Eli, calledWhen: Eli = 0 /*0: during conflict jumpback, 1: during restart,
+  @inline def clearInPass(eli: Eli, calledWhen: Int = 0 /*0: during conflict jumpback, 1: during restart,
       2: before solving*/): Unit = { // ====> !! This method must be the only way (after preprocessing/initialization) of assigning False to an eli.
 
     // TODO: optimize further (use info from caller about isPosEli etc)
@@ -3252,7 +3558,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           val newQValue = (1f - alpha) * getAbsEliScore(absEli) + alpha * (reward + rsr)
 
-          setScoreOfAbsEli(absEli, newQValue)
+          setAndEnactScoreOfAbsEli(absEli, newQValue)
 
         }
 
@@ -3387,9 +3693,12 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  @inline def setEliWithNogoodUpdatesNoHeapForExtRed2b(): Unit = { // (typically the most expensive method in the solver)
+  @inline def setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromEndToStart(countViolNgs: Boolean = false): Int = { // (typically the most expensive method in the entire inner SAT solver)
+    // (also see setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromStartToEnd())
 
     assert(extReducibles == 2)
+
+    var violCount = 0
 
     var riAddr = rmiStoreG.getAddr + (rmiStorePosOld << 2)
 
@@ -3405,11 +3714,16 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         val redList: NogoodReduciblesSequenceUnsafe = eliWatchedToReducibles(eliToJavaArrayIndex(eli))
 
+        redList.setTraversalDirection(direction = false)
+
         var rjAddr = redList.getAddrOfItem(redList.size - 1) // redList.getAddr
 
         while (rjAddr >= redList.getAddr) {
 
           val red: NogoodReducible = UNSAFE.getLong(rjAddr)
+
+          //if(violatedNogoodReducible != 0L) //+++
+          // updScoreInNogoodElis(getAddrOfNogoodInReducible(red), getNogoodSizeFromReducible(red))
 
           /*blocker eli (see NogoodReduciblesSequenceUnsafe): if(!isNegSetInPass(UNSAFE.getInt(addrOfItemInRedList + 8l))) {*/
 
@@ -3417,6 +3731,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           if (rmi == 0) { // conflict
 
+            //if(violatedNogoodReducible == 0L)
             violatedNogoodReducible = red
 
             if (debug2) println("    conflict from setItemIndicExt2: " + red)
@@ -3437,7 +3752,17 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
             rmiStorePos = ((endRiAddr - rmiStoreG.getAddr) >> 2).toInt
 
-            return
+            if(countViolNgs) {
+
+              violCount += 1
+
+              //bumpNogoodReducibleActivity(red)
+              //updScoreInNogoodElis(getAddrOfNogoodInReducible(red), getNogoodSizeFromReducible(red))
+
+            } else
+              return 1
+
+            //updScoreInNogoodElis(getAddrOfNogoodInReducible(red), getNogoodSizeFromReducible(red))
 
           } else if (rmi < Int.MaxValue - 1) { // unit resulting nogood:
 
@@ -3483,6 +3808,132 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     rmiStorePos = ((endRiAddr - rmiStoreG.getAddr) >> 2).toInt
 
     rmiStorePosOld = rmiStorePos
+
+    violCount
+
+  }
+
+  @inline def setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromStartToEnd(countViolNgs: Boolean = false): Int = { // (typically the most expensive method in the solver)
+    // (also see setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromEndToStart())
+
+    assert(extReducibles == 2)
+
+    var violCount = 0
+
+    var riAddr = rmiStoreG.getAddr + (rmiStorePosOld << 2)
+
+    var endRiAddr = rmiStoreG.getAddr + (rmiStorePos << 2)
+
+    while (riAddr < endRiAddr) {
+
+      val eli = UNSAFE.getInt(riAddr)
+
+      { // observe that setInPassIfUnassigned also modified rmiStoreG
+
+        if (debug2) println("going through reducibles with eli " + eli + "...")
+
+        val redList: NogoodReduciblesSequenceUnsafe = eliWatchedToReducibles(eliToJavaArrayIndex(eli))
+
+        redList.setTraversalDirection(direction = true)
+
+        var rjAddr = redList.getAddr //redList.getAddrOfItem(redList.size - 1) // redList.getAddr
+
+        while (rjAddr <= redList.getAddrOfItem(redList.size - 1)) {
+
+          val red: NogoodReducible = UNSAFE.getLong(rjAddr)
+
+          //if(violatedNogoodReducible != 0L) //+++
+          // updScoreInNogoodElis(getAddrOfNogoodInReducible(red), getNogoodSizeFromReducible(red))
+
+          /*blocker eli (see NogoodReduciblesSequenceUnsafe): if(!isNegSetInPass(UNSAFE.getInt(addrOfItemInRedList + 8l))) {*/
+
+          val rmi = setItemIndicExt2(red, eli, redList, rjAddr)
+
+          if (rmi == 0) { // conflict
+
+            //if(violatedNogoodReducible == 0L)
+            violatedNogoodReducible = red
+
+            if (debug2) println("    conflict from setItemIndicExt2: " + red)
+
+            /*  Doesn't work anymore since traversing from start:
+            // Optional: We move the violated nogood closer to the end of the list in the hope that
+            // this will lead to an earlier conflict detection the next time this list is traversed:
+
+            val swapPos = redList.size - swapOffset // (observe that redList.size might decrease also)
+
+            if (rj < swapPos) {
+
+              redList.swap(rj, swapPos, red)
+
+             // swapOffset += 1
+
+            }*/
+
+            rmiStorePos = ((endRiAddr - rmiStoreG.getAddr) >> 2).toInt
+
+            if(countViolNgs) {
+
+              violCount += 1
+
+              //println("violCount = " + violCount)
+
+            } else
+              return 1
+
+            //updScoreInNogoodElis(getAddrOfNogoodInReducible(red), getNogoodSizeFromReducible(red))
+
+          } else if (rmi < Int.MaxValue - 1) { // unit resulting nogood:
+
+            if (rmiStorePos >= maxBCPPush)
+              stomp(-5013, "Memory overflow, please increase maxBCPPushInit")
+
+            UNSAFE.putInt(endRiAddr, negateEli(rmi))
+
+            updateReasonOfEli(toAbsEli(rmi), red)
+
+            setInPassEntry(negateEli(rmi))
+
+            endRiAddr += 4l
+
+            /* Doesn't work anymore since traversing from start:
+            // Optional: We move the unit resulting nogood closer to the end of the list in the hope that
+            // this will lead to an earlier conflict detection the next time this list is traversed:
+
+            val swapPos = redList.size - swapOffset // (observe that redList.size might decrease also)
+
+            if (rj < swapPos) {
+
+              redList.swap(rj, swapPos, red)
+
+              swapOffset += 1
+
+            }*/
+
+            //rjAddr += redList.getBytesPerElement //rj += 1
+
+
+            rjAddr += redList.getBytesPerElement
+
+          } else if (rmi == Int.MaxValue)
+            rjAddr += redList.getBytesPerElement
+
+          // Note: we could likewise traverse redList from the end to the start, but then rjAddr -= redList.getBytesPerElement would need to be executed in
+          // every case, including case rmi == Int.MaxValue - 1 (the difference is due to the way we delete items in redList witin setItemIndicExt2)
+
+        }
+
+      }
+
+      riAddr += 4l
+
+    }
+
+    rmiStorePos = ((endRiAddr - rmiStoreG.getAddr) >> 2).toInt
+
+    rmiStorePosOld = rmiStorePos
+
+    violCount
 
   }
 
@@ -3605,7 +4056,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
   }
 
   @inline def setEliWithNogoodUpdatesNoHeap(eli: Eli /*either a decision eli or a neg(sigmaEli)*/ ,
-                                            reason: NogoodReducible /*must be 0l if branching eli*/): Unit = {
+                                            reason: NogoodReducible /*must be 0l if branching eli*/ ,
+                                            countViolNgs: Boolean = false): Int = {
 
     rmiStorePos = orderNumber
 
@@ -3626,7 +4078,49 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       setInPassEntry(eli)
 
-      setEliWithNogoodUpdatesNoHeapForExtRed2b()
+      /*  if(nogoodBCPtraversalDirection == 0)
+          setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromStartToEnd(countViolNgs = countViolNgs)
+        else
+          setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromEndToStart(countViolNgs = countViolNgs)*/
+
+      val direction: Boolean = if(nogoodBCPtraversalDirection == -1)
+        rngLocal.nextBoolean()
+      else (nogoodBCPtraversalDirection == 0) /*if(rngLocal.nextFloat() <= 0.1f || stEcalls == 0 || etScalls == 0) {
+
+        rngLocal.nextBoolean()
+
+      } else {
+
+        stEprops / stEcalls > etSprops / etScalls
+
+      }*/
+
+      //val nsA = System.nanoTime()
+
+      if(direction) {
+
+        val r = setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromStartToEnd(countViolNgs = countViolNgs)
+
+        /*stEprops += System.nanoTime() - nsA //rmiStorePos - rmiStorePosOld
+
+        stEcalls += 1*/
+
+        r
+
+      } else {
+
+        val r = setEliWithNogoodUpdatesNoHeapForExtRed2b_withTraversalFromEndToStart(countViolNgs = countViolNgs)
+
+        /*etSprops += System.nanoTime() - nsA //rmiStorePos - rmiStorePosOld
+
+        //println(etSprops)
+
+        etScalls += 1                */
+
+        r
+
+      }
+
 
     } else {
 
@@ -3644,6 +4138,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       */
       else
         stomp(-5009, "extReducibles=" + extReducibles + " is not a valid option")
+
+      1  //ßßß
 
     }
 
@@ -3890,7 +4386,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   } */
 
-  @inline def scoreUpd(eli: Eli, bump: Float): Unit = {
+  @inline def bumpUpScoreOfEli(eli: Eli, bump: Float): Unit = {
 
     // assert(isSetInPass(eli) || isSetInPass(negateEli(eli)))
 
@@ -3899,28 +4395,26 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     else if (absEliScoringApproach == 1)
       updateLastConflictOfAbsEli(toAbsEli(eli), getNoOfConflictsForERWA)
     else if (absEliScoringApproach == 0)
-      bumpUpEVSIDSscoreOfAbsEli(toAbsEli(eli), bump)
+      setAndEnactScoreOfAbsEli(toAbsEli(eli), getAbsEliScore(toAbsEli(eli)) + bump)  //bumpUpEVSIDSscoreOfAbsEli(toAbsEli(eli), bump)
 
   }
 
   var conflictAnalysisResult_newDecisionLevel = 0
+
   var conflictAnalysisResult_sigmaEli = 0
-  var conflictAnalysisResult_conflictNogoodReducible = 0l
+
+  var conflictAnalysisResult_conflictNogoodReducible = 0L
 
   /** Follows largely Minisat 1/2 (Minisat 2 without putting highest decision level literals in nogood position 0 and 1) but
     * using nogoods instead of clauses (so in some places we need to apply/omit negateEli())
     *
     */
   def conflictAnalysis(violatedNogoodReducible: NogoodReducible,
-                       outSpaceInitial: NogoodReducible): Unit
-  = {
+                       outSpaceInitial: NogoodReducible): Unit = {
 
-    val startDEB = false && noOfConflictsTotal > 314 // && debug2
+    //println("\nConflict analysis... conflicting nogood (reducible " + violatedNogoodReducible + "); #conflicts: " + noOfConflictsTotal)
 
-    if (startDEB)
-      println("\nConflict analysis... conflicting nogood (reducible " + violatedNogoodReducible + "); #conflicts: " + noOfConflictsTotal)
-
-    val absEliBump = updScoreInNgElis(getAddrOfNogoodInReducible(violatedNogoodReducible), getNogoodSizeFromReducible(violatedNogoodReducible))
+    val absEliBump = bumpUpScoresInAllNogoodElis(getAddrOfNogoodInReducible(violatedNogoodReducible), getNogoodSizeFromReducible(violatedNogoodReducible))
 
     val newReducibleInitialSpaceSlotSize: Int /*<-- slot size including space for offset and metadata. i.e., not just space for elis*/ =
       getIntFromReducible(outSpaceInitial, index = offsetIntsOfNogoodInReducible - 3)
@@ -3953,7 +4447,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       if (confl == 0l) // important consistency check
         stomp(-10000, "confl == 0l")
 
-      if (!isClarkReducible(confl /*violatedNogoodReducible*/) && (scoringForRemovalOfLearnedNogoods == 1 || scoringForRemovalOfLearnedNogoods == 10 || scoringForRemovalOfLearnedNogoods == 11))
+      //println("\n" + getLearnedNogoodReducibleActivity(confl))
+
+      if (!isClarkReducible(confl) && (scoringForRemovalOfLearnedNogoods == 11 || scoringForRemovalOfLearnedNogoods == 1 || scoringForRemovalOfLearnedNogoods == 10))
         bumpNogoodReducibleActivity(confl)
 
       var j = 0
@@ -3969,7 +4465,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
             updateInSeen(toAbsEli(q), 0x01.toByte)
 
             if (conflictAnalysisResult_sigmaEli /*<--sic!*/ != 0)
-              scoreUpd(q, absEliBump)
+              bumpUpScoreOfEli(q, absEliBump)
 
             if (decisionLevelOfEli(toAbsEli(q)) == dl) {
 
@@ -4038,7 +4534,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     updateEliInNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, 0, conflictAnalysisResult_sigmaEli)
 
-    scoreUpd(conflictAnalysisResult_sigmaEli, absEliBump)
+    bumpUpScoreOfEli(conflictAnalysisResult_sigmaEli, absEliBump)
 
     /*if (outSize > 1) {  // not needed in diff-SAT: (but see below for optional similar procedure)
 
@@ -4171,12 +4667,12 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-    if (moveElisWithHighDecisionLevelToFront) { //doesn't seem to be useful:
+    if (moveElisWithHighDecisionLevelToFront) { //doesn't seem to be useful?
 
       if (false) {
-        // optional - we move the eli eith the highest decision level into the second watch position (nogood[1]):
+        // optional - we move the eli with the highest or lowest (see code) decision level into the second watch position (nogood[1]):
 
-        if (true) {
+        {
 
           if (conflictNogoodSelfSubsumption) {
 
@@ -4186,7 +4682,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
             while (i < outSizeForElis) {
 
-              if (getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, i) > getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, indexOfHighestDl))
+              if (/*sic!*/(getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, i)) > /* also try < */
+                (getEliFromNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible, indexOfHighestDl)))
                 indexOfHighestDl = i
 
               i += 1
@@ -4205,29 +4702,22 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           }
 
-        } else {
-          /*
-                    IntArrayUnsafeS.sortByAtAddr(UNSAFE, getAddrOfNogoodInReducible(outSpace),
-                      eliInNogood => {
-
-                        //decisionLevelOfEli(toAbsEli(eliInNogood)).toFloat
-
-                        //-getAbsEliScore(toAbsEli(eliInNogood))
-
-                        if(getFromPhasePreviousForAbsElis(toAbsEli(eliInNogood)) == 0x00.toByte) 1f else 0f
-                        // TODO: unclear amortized beneficiality. Beneficial for 4pipe_k, not for, e.g., aes_24_4_keyfind_2-sc2013
-
-                      }, outSize)
-
-          */
         }
 
-      } else { // alternatively, we can sort the entire nogood:
+      } else { // alternatively, we "simply"" sort the entire nogood:
 
         IntArrayUnsafeS.sortByInplace(UNSAFE, getAddrOfNogoodInReducible(conflictAnalysisResult_conflictNogoodReducible),
           eliInNogood => {
 
             val r = -decisionLevelOfEli(toAbsEli(eliInNogood)).toFloat
+            //val r = -getAbsEliScore(toAbsEli(eliInNogood)).toFloat
+
+            /*val rs = getReasonOfEli((eliInNogood))
+            val r = if(rs != 0L)
+               -getNogoodReducibleScore(rs, scoringForRemovalOfLearnedNogoods).toFloat
+            else 0*/
+
+            //val r = -getFromPhasePreviousForAbsElis(toAbsEli(eliInNogood)).toFloat
 
             r
 
@@ -4272,21 +4762,21 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     //updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, index = offsetIntsOfNogoodInReducible - 3, newReducibleSpaceSlotSize, safe = true)
 
-    if (useLBD) {
-
-      val lbd = computeLBD(conflictAnalysisResult_conflictNogoodReducible)
-
-      setLBDInReducible(conflictAnalysisResult_conflictNogoodReducible, lbd)
-
-    } else
+    if (useLBDs)
+      setLBDInReducible(conflictAnalysisResult_conflictNogoodReducible, computeLBD(conflictAnalysisResult_conflictNogoodReducible))
+    else
       updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, offsetIntsOfNogoodInReducible - 1, 0) // even if no LBDs are used, we must set
     // this to a value >= 0, because this entry is also used to distinguish clark from learned nogoods.
 
     updateIntInReducible(conflictAnalysisResult_conflictNogoodReducible, index = offsetIntsOfNogoodInReducible - 2, 1 /*<-to avoid NaN*/)
 
+    //updateFloatInReducible(conflictAnalysisResult_conflictNogoodReducible, intIndex = offsetIntsOfNogoodInReducible - 4, 0f)
+
     setLearnedNogoodReducibleActivity(conflictAnalysisResult_conflictNogoodReducible, 0f)
 
-    if (!isClarkReducible(conflictAnalysisResult_conflictNogoodReducible) && scoringForRemovalOfLearnedNogoods == 1 || scoringForRemovalOfLearnedNogoods == 10 || scoringForRemovalOfLearnedNogoods == 11)
+    // ^^^^^^^^^^ after any changes to reducible setup,  check if those changes may need to be done in generateNogoodReducibleFromNogoodClarkOrSpecial() also
+
+    if ((scoringForRemovalOfLearnedNogoods == 11 || scoringForRemovalOfLearnedNogoods == 1 || scoringForRemovalOfLearnedNogoods == 10))
       bumpNogoodReducibleActivity(conflictAnalysisResult_conflictNogoodReducible) // (observe that the nogood activity bump increases over time)
 
     //val ns = getNogoodSizeFromReducible(conflictAnalysisResult_conflictNogoodReducible)
@@ -4313,35 +4803,31 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   var lubyV = 1
 
-  var noOfNogoodRemovalPhases: Eli = 0
+  var noOfNogoodRemovalPhases: Int = 0
 
   var nogoodRemovalAdjustNoOfConflicts: Float = nogoodRemovalAdjustStartNoOfConflicts
 
-  var nogoodRemovalThreshAdjustConflictCount: Eli = nogoodRemovalAdjustNoOfConflicts.toInt
+  var nogoodRemovalThreshAdjustConflictCount: Int = nogoodRemovalAdjustNoOfConflicts.toInt
 
-  val reduceScoreOfPassiveAbsElisEvery = next2Pow(8) // determines the downscaling frequency for absEli scores
-  // (higher = scale down less often but with larger scaling amount at each scaling event. NB: resacling is very costly,
-  // in particular with freeEliSearchApproach == 14)
-
-  val scaleFromUpdSc: Float = Math.pow(updSc, reduceScoreOfPassiveAbsElisEvery.toDouble).toFloat
+  val scaleFromUpdSc: Float = Math.pow(updSc, reduceScoreOfPassiveAbsElisWithLocalityExtEvery.toDouble).toFloat
 
   var deficientReduciblesForEli: NogoodReduciblesSequenceUnsafe = null.asInstanceOf[NogoodReduciblesSequenceUnsafe]
 
-  @inline def jumpBack(newLevel: Eli /*-1: restart from scratch*/ , trials: Eli): Unit = {
+  @inline def jumpBack(newLevel: Int /*-1: restart from scratch*/ , trials: Int): Unit = {
 
-    assert(newLevel < dl)
+    assert(newLevel < dl)  // there is no inherent reason why we couldn't jump forward (if the assignment covers the new level), but with the current design it would be due to a bug somewhere else
 
     if (debug2)
       println("\n\n*** Jumping back to decision level " + newLevel + " from current level " + dl + "...\n")
 
-    possiblyRescaleAllAbsElis // to avoid overflows
+    //possiblyRescaleAllAbsElis // to avoid overflows
 
     // We remove everything with a decision level > newLevel. NB: Level newLevel itself won't be cleared, new elis are assigned
     // in additions to any which are on level newLevel already.
 
     violatedNogoodReducible = 0l
 
-    val XXX = false
+    val test = false
 
     @inline def clearForExt01(eli: Eli): Unit = { // also see clearForExt2345!
 
@@ -4367,7 +4853,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       } else if (extReducibles == 0) {
 
-        if (!XXX) {
+        if (!test) {
 
           clearInPass(eli, calledWhen = if (newLevel == -1) 1 else 0)
 
@@ -4393,12 +4879,13 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
+    /*
     /*for useRmiStoreForBacktracking only:*/ val firstOrderNoToClear = -1 // dlToFirstOrder can be Int.MinValue for dlOi=0 (because it's unsure that level 0 contains
-    // any elis)
+    // any elis) */
 
     if (extReducibles == 2 || extReducibles == 5 || extReducibles == 4 || extReducibles == 3) {
 
-      @inline def clearForExt2345(eli: Eli) = {
+      @inline def clearForExt2345(eli: Eli): Unit = {
 
         //assert(isSetInPass(eli))
 
@@ -4460,7 +4947,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       if (debug2) println("in clear, orderNumber = " + orderNumber)
 
-      orderNumber = orderNumber
+      /*var lzMx = vmmPredictorMaxLength
+
+      val lzSyms = if(vmmPredictorMaxLength > 0) Array.ofDim[Int](vmmPredictorMaxLength) else null */
 
       var i = orderNumber - 1
 
@@ -4469,13 +4958,23 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         val eliToClear = rmiStoreG.get(i)
 
-        var dlCleared = decisionLevelOfEli(eliToClear)
+        val dlCleared = decisionLevelOfEli(eliToClear)
 
         if (dlCleared > newLevel) {
 
           //  println("Eli " + eliToClear + " at rmiStore index " + i)
 
           assert(isSetInPass(eliToClear))
+
+          /*if(lzMx > 0) {
+
+            //vmmPredictor.addTrainingSym(vmmTrainingSeqLZ, /*rngLocal.nextInt(vmmAlphabetSize)*/vmmEliToSym(eliToClear))
+
+            lzMx -= 1
+
+            lzSyms.update(lzMx, vmmEliToSym(eliToClear))
+
+          } */
 
           clearForExt2345(eliToClear)
 
@@ -4486,6 +4985,60 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       }
 
+      /*
+      if(vmmPredictorMaxLength > 0)
+        vmmPredictor.addTrainingSyms(vmmTrainingSeqLZ, lzSyms, lzMx, vmmPredictorMaxLength - lzMx)
+
+      if(false &&   /*vmmPredictorTrainingCount < 2000*/noOfConflictsTotal % 1 == 0 && vmmPredictorMaxLength > 0) {
+
+       // vmmPredictorTrainingCount += 1
+
+       // println(vmmPredictorTrainingCount)
+
+     //   if(orderNumber > 0)
+       //   println("\n" + orderNumber)
+
+
+        //vmmPredictor.clearContext() //PPMC
+        //val vmmTrainingSeqLZ = vmmPredictor.obtainNewTIntArrayList()  //LZ local
+
+        //println(noOfAbsElis)
+
+
+
+       // vmmTrainingSeqLZ.clear()
+
+
+        i = /*rngLocal.nextInt(orderNumber)*/ (orderNumber - vmmPredictorMaxLength).max(1)
+
+        val end = /*(i + vmmPredictorMaxLength).min(orderNumber)*/ orderNumber //(i + vmmPredictorMaxLength).min(orderNumber)
+
+        while (i < end) {
+
+          val eliToLearn = rmiStoreG.get(i)
+
+          //vmmPredictor.useSym(eliToJavaArrayIndex(eliToLearn)) //PPMC
+          vmmPredictor.addTrainingSym(vmmTrainingSeqLZ, /*rngLocal.nextInt(vmmAlphabetSize)*/vmmEliToSym(eliToLearn))  //LZ
+
+          i += 1
+
+        }
+
+        //vmmPredictor.learn(vmmTrainingSeqLZ)  //LZ local only!
+
+        vmmPredictor.addTrainingSym(vmmTrainingSeqLZ, 0)  //LZ global
+       /* vmmPredictor.addTrainingSym(vmmTrainingSeqLZ, 0)
+        vmmPredictor.addTrainingSym(vmmTrainingSeqLZ, 0)
+        vmmPredictor.addTrainingSym(vmmTrainingSeqLZ, 0)
+*/
+        //println(orderNumber)
+
+
+       // vmmPredictor.learn(vmmTrainingSeqLZ) //LZ only!
+
+      }
+      */
+
     } else { // for extReducibles 0 and 1
 
       var i = orderNumber - 1
@@ -4495,7 +5048,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         val eliToClear = rmiStoreG.get(i)
 
-        var dlCleared = decisionLevelOfEli(eliToClear)
+        val dlCleared = decisionLevelOfEli(eliToClear)
 
         if (dlCleared > newLevel) {
 
@@ -4514,9 +5067,12 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     }
 
-    if (localityExt && (absEliScoringApproach == 2 || absEliScoringApproach == 1) &&
-      fastModByPow2(noOfConflictsTotal, reduceScoreOfPassiveAbsElisEvery) == 0) {
+    if (localityExt && scheduleRescaleAbsElis == 1f && (absEliScoringApproach == 2 || absEliScoringApproach == 1) &&
+      fastModByPow2(noOfConflictsTotal, reduceScoreOfPassiveAbsElisWithLocalityExtEvery) == 0) {
 
+      scheduleRescaleAbsElis = scaleFromUpdSc
+
+      /*
       if (freeEliSearchApproach == 11) {
 
         val heap = unassignedScoredAbsElisPriorityQueue.getHeap
@@ -4569,12 +5125,13 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         }
 
-
       }
+
+      */
 
     }
 
-    //var oldDl = dl
+    possiblyRescaleAllAbsElis() // to avoid overflows and to execute the rescaling from localityExt
 
     if (newLevel == -1) { // we restarted from scratch, i.e., including removal of level 0 assignments
 
@@ -4606,14 +5163,27 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  def possibleRephasing(trials: Eli): Boolean /*true: SAT assignment found by SLS (e.g., WalkSAT). Observe that
+  def stopSingleSolverThreads(): Unit = {
+
+    stopSolverThreads = true
+
+    if(rephaseLock != null) rephaseLock.synchronized {
+
+      if (rephaseLock.isLocked)
+        rephaseLock.unlock()
+
+    }
+
+  }
+
+  def possibleRephasing(trials: Int): (Boolean, Int/*new decision level or -1 (no change)*/) /*true: SAT assignment found by SLS (e.g., WalkSAT). Observe that
       SLS currently cannot do any cost minimization, so this is only useful for rephasing or when diff-SAT is used as a plain SAT solver*/ = {
 
-    // Uses ideas from RSAT and CaDiCaL
+    // Uses some ideas from RSAT and CaDiCaL
 
-    if (noOfConflictsAfterLastRephasing >= noOfConflictsBeforeNextRephasing /*&& noOfConflictsTotal > 500*/ ) {
+    if (noOfConflictsAfterLastRephasing >= noOfConflictsBeforeNextRephasing && !stopSolverThreads) {
 
-      if (rephaseLock != null)
+      if (useSLSinPhaseMemoRephasing && rephaseLock != null)
         rephaseLock.lock() // observe that the SLS assignment (phasePreviousForAbsElis) is also mutated elsewhere in threads, so blocking just here doesn't synchronize on it everywhere
 
       noOfRephasings += 1
@@ -4630,7 +5200,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       // that we also rephase by using pos/neg polarity ratio (initialPhase >= 2) and that cadical uses a different Stochastic
       // Local Search solver (probSAT/YalSAT) and rephases at different occasions.
 
-      if ((((sw == 1 || sw == 4 || sw == 7 || sw == 10 || (!useSLSinPhaseMemoRephasing && (sw == 2 || sw == 5 || sw == 8 || sw == 11))))) && !bestPhasesQueue.isEmpty) {
+      if (( ((sw == 1 || sw == 4 || sw == 7 || sw == 10 || (!useSLSinPhaseMemoRephasing && (sw == 2 || sw == 5 || sw == 8 || sw == 11))))) && !bestPhasesQueue.isEmpty) {
+
+        var newDl = 0
 
         var absEli = 1
 
@@ -4638,13 +5210,21 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         while (absEli <= noOfAbsElis) {
 
-          updateInPhasePreviousForAbsElis(absEli, targetPhase.get(absEli))
+          if(targetPhase.get(absEli) != 0x02.toByte) {
+
+            updateInPhasePreviousForAbsElis(absEli, targetPhase.get(absEli))
+
+            newDl = newDl.max(decisionLevelOfEli(absEli))
+
+          }
 
           absEli += 1
 
         }
 
         if (debug2) println("\nRephased to greedy-best")
+
+        return(false,/* newDl*/-1)
 
       } else if (sw == 6) {
 
@@ -4686,14 +5266,15 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         if (debug2) println("\nRephased by reset to initial phase")
 
-      } else if (useSLSinPhaseMemoRephasing && (sw == 2 || sw == 5 || sw == 8 || sw == 11)) {
+      } else if (useSLSinPhaseMemoRephasing && ((sw == 1 && minNoConflictsBeforeFirstRephasing == 0/*enforces SLS*/ && bestPhasesQueue.isEmpty) || sw == 2 || sw == 5 || sw == 8 || sw == 11)) {
 
         if (debug2) println("\nRephasing by Stochastic Local Search (SLS)...")
 
         val remainingViolatedNogoodsAfterSLS = StochasticLocalSearch.stochasticLocalSearch(singleSolverThreadData = this,
           solverThreadSpecificSettings = singleSolverConf,
           sharedAmongSingleSolverThreads = sharedAmongSingleSolverThreads,
-          preparation = prep)
+          preparation = prep,
+          threadConfsOpt = sharedAmongSingleSolverThreads.threadConfsOpt)
 
         if (debug2) println("Rephasing by Stochastic Local Search done. remainingViolatedNogoodsAfterSLS = " + remainingViolatedNogoodsAfterSLS)
 
@@ -4731,10 +5312,10 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           }
 
-          if (rephaseLock != null)
+          if (useSLSinPhaseMemoRephasing && rephaseLock != null)
             rephaseLock.unlock()
 
-          return true
+          return (true, -1)
 
         }
 
@@ -4743,12 +5324,12 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       if (debug && useSLSinPhaseMemoRephasing)
         printStatusLine(" ") // just to clear any SLS progress line
 
-      if (rephaseLock != null)
+      if (useSLSinPhaseMemoRephasing && rephaseLock != null)
         rephaseLock.unlock()
 
     }
 
-    false
+    (false, -1)
 
   }
 
@@ -4864,7 +5445,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
-  def possiblyRemoveLearnedNogoods(trials: Eli, all: Boolean = false): Unit = {
+  def possiblyRemoveLearnedNogoods(trials: Int, all: Boolean = false): Unit = {
 
     @inline def findRedundantNogoodsWrt(reducibleA: NogoodReducible): NogoodReduciblesSequenceUnsafe = {
 
@@ -4940,7 +5521,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
         noOfNogoodRemovalPhases % nogoodRemovalUsingRecyclingFromTotalHistoryEvery == 0)
 
       if (recycleFromTotalList) { // Instead of removing a percentage x of the current set of learned nogoods,
-        // we make the (1-x) percent highest scored learned nogoods from all times(*) the current set. // TNT
+        // we make the (1-x) percent highest scored learned nogoods from all times(*) the current set.
         // (*) requires that !freeOrReassignDeletedNogoodMemory, otherwise we might recycle "old" nogoods
         // which in fact have been already replaced with newer nogoods.
 
@@ -4949,9 +5530,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         oldNoOfLearnedNogoods = noOfCurrentlyKeptLearnedNogoods
 
-        var actuallyRemoved = 0
-
-        val oss = learnedNogoodReduciblesListCurrent.size
+        var actuallyRemoved = 0  // we skip over clark nogoods, it's not guaranteed that any nogoods are actually removed
 
         var i = learnedNogoodReduciblesListCurrent.size - 1 // must traverse from last to first
 
@@ -5084,6 +5663,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           }
 
+          //println(actuallyRemoved)
+
         }
 
       }
@@ -5132,7 +5713,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
         if (!removedIndicesInLearnedNogoodReduciblesList.isEmpty)
           removedIndicesInLearnedNogoodReduciblesList.sorted.reverse.foreach(index => learnedNogoodReduciblesListCurrent.removeByIndex(index))
 
-        if (debug && removedBySubsumption > 0)
+        if (false && debug && removedBySubsumption > 0)
           println("\nremovedBySubsumption = " + removedBySubsumption)
 
       }
@@ -5186,6 +5767,8 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
     fetchSharedLearnedNogoodsFromOtherThreads // was previously in restart but position doesn't seem to make a difference (?)
 
+    fetchScoresFromSLS
+
   }
 
   intersect.addToGarbage()
@@ -5217,12 +5800,48 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         while (absEli <= noOfAbsElis) {
 
-          if (rngLocal.nextFloat() > 0.01f)
-            updateInPhasePreviousForAbsElis(absEli, bp.get(absEli).toByte)
+          val r = rngLocal.nextFloat()
+
+          if (r > weakRephasingThreshForBestPhase)
+            updateInPhasePreviousForAbsElis(absEli, bp.get(absEli))
+          else if (r > weakRephasingThreshForRandomPhase)
+            updateInPhasePreviousForAbsElis(absEli, if(rngLocal.nextBoolean()) 0x00.toByte else 0x01.toByte)
 
           absEli += 1
 
         }
+
+      }
+
+    }
+
+  }
+
+  @inline def possiblyAdaptNoisePhaseMemo(): Unit = {
+
+    if (adaptNoisePhaseMemo != 0 && noisePhaseMemo > 0d && noOfConflictsTotal > 1) {
+
+      if (adaptNoisePhaseMemo == 1)
+        noisePhaseMemo = noisePhaseMemoR / Math.log(noOfConflictsTotal).toFloat
+      else if (adaptNoisePhaseMemo == 2) {
+
+        /*val sqrtc = math.sqrt(noOfConflictsTotal)
+
+        noisePhaseMemo = noisePhaseMemoR * ((math.sin(sqrtc / 10d) + 1d) / sqrtc * 100d).toFloat */
+
+        val sqrtc = math.sqrt(noOfConflictsTotal)
+
+        noisePhaseMemo = noisePhaseMemoR * ((math.sin(sqrtc / adaptNoisePhaseMemo2Frequency) + adaptNoisePhaseMemo2Amplitude) / sqrtc * 100d).toFloat
+
+      } else if (adaptNoisePhaseMemo == 3) {
+
+        val sqrtt = math.sqrt(noOfRestarts * 100)
+
+        noisePhaseMemo = noisePhaseMemoR * ((math.sin(sqrtt / 10d) + 1d) / sqrtt * 100d).toFloat
+
+      } else if(adaptNoisePhaseMemo == 4) {
+
+        noisePhaseMemo = (noisePhaseMemoR * 3f).max(0.2f) - 0.2f/(1f + math.exp(-2d * noOfConflictsTotal * 0.000002).toFloat)
 
       }
 
@@ -5240,25 +5859,18 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       rngLocal.setSeed(seed)
     //(NB: even setting the same seed at each restart (which also resets the PRNG), we would normally not replay the same decisions, as learned nogoods and various other accumulated things will be different)
 
-    if (adaptNoisePhaseMemo != 0 && noisePhaseMemo > 0d && noOfConflictsTotal > 1) {
+    possiblyAdaptNoisePhaseMemo()
 
-      if (adaptNoisePhaseMemo == 1)
-        noisePhaseMemo = noisePhaseMemoR / Math.log(noOfConflictsTotal).toFloat
-      else if (adaptNoisePhaseMemo == 2) {
+    /*
 
-        val sqrtc = math.sqrt(noOfConflictsTotal)
+    if(vmmPredictorMaxLength > 0) {
 
-        noisePhaseMemo = noisePhaseMemoR * ((math.sin(sqrtc / 10d) + 1d) / sqrtc * 100d).toFloat
+      vmmPredictor.learn(vmmTrainingSeqLZ) //LZ only!
 
-      } else if (adaptNoisePhaseMemo == 3) {
+      //if(noOfRestarts % 2 == 0)
+        vmmTrainingSeqLZ.clear()
 
-        val sqrtt = math.sqrt(noOfRestarts * 100)
-
-        noisePhaseMemo = noisePhaseMemoR * ((math.sin(sqrtt / 10d) + 1d) / sqrtt * 100d).toFloat
-
-      }
-
-    }
+    } */
 
     val restartToLevel = if (reusedTrailRestarts && !temporaryDisableReusedTrailRestarts) { // based on van der Tak et al '11
 
@@ -5533,14 +6145,38 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   }
 
+  @inline def fetchScoresFromSLS: Unit = {
+
+    if (shareScoresFromSLSWithOtherThreads && !useSLSinPhaseMemoRephasing && maxCompetingSolverThreads > 1 && !stopSolverThreads) {  // TODO: doesn't seem to be useful? More tests required
+
+      import scala.collection.JavaConverters._
+
+      sharedAmongSingleSolverThreads.scoresFromSLS.entrySet().asScala.foreach((value: Map.Entry[Eli, Float]) => {
+
+        if(value.getValue > getAbsEliScore(value.getKey) * 1.5f) {
+
+          // println(value.getValue)
+
+          setAndEnactScoreOfAbsEli(value.getKey, value.getValue)
+
+        }
+
+        sharedAmongSingleSolverThreads.scoresFromSLS.remove(value.getKey)
+
+      })
+
+    }
+
+  }
+
   @inline def fetchSharedLearnedNogoodsFromOtherThreads: Unit = {
 
-    if (nogoodShareNumberMax != 0f && maxCompetingSolverThreads > 1 && !stopSolverThreads) {
+    if ((nogoodShareNumberMax != 0f || shareNogoodsFromSLSWithOtherThreads) && maxCompetingSolverThreads > 1 && !stopSolverThreads) {
 
       import scala.collection.JavaConverters._
 
       val moveoverNogoods: mutable.Set[Map.Entry[NogoodReducible, Eli]] = sharedAmongSingleSolverThreads.nogoodReducibleExchangePool.entrySet().asScala.
-        filter((value: Map.Entry[NogoodReducible, Eli]) => {
+        filter((value: Map.Entry[NogoodReducible, Int]) => {
 
           //println("\n" + getNogoodReducibleScore(value.getKey, scoringForRemovalOfLearnedNogoods = scoringForRemovalOfLearnedNogoods))
 
@@ -5558,7 +6194,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
         if (moveoverNogoods.size > 0) {
 
-          val t = ((getApproxNoOfLearnedNogoods.toFloat * nogoodShareNumberMax).toInt).min(moveoverNogoods.size)
+          val t = (if(shareNogoodsFromSLSWithOtherThreads) (moveoverNogoods.size.toFloat * 0.001f).toInt else ((getApproxNoOfLearnedNogoods.toFloat * nogoodShareNumberMax).toInt)).min(moveoverNogoods.size)
 
           noOfSharedNogoods += t
 
@@ -5580,7 +6216,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
                                     getNogoodSizeFromReducible(red/*value.getKey*/),
                                   beforeSolvingstarted = false) // we can't use the shared reducible directly because of its thread-specific meta-data
               */
-              //println("thread $" + threadNo + ", took over nogood reducible: " + reducible)
+              // println("thread $" + threadNo + ", took over nogood reducible: " + red)
 
               addLearnedNogoodReducibleToReducibleLists(red, violatedNogoodReducible = 0l)
 
@@ -5609,7 +6245,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     val factNogood = new IntArrayUnsafeS(Array(negateEli(tempFactEli)))
 
     val newFactNogoodReducible = generateNogoodReducibleFromNogoodClarkOrSpecial(nogoodAddr = factNogood.getAddr,
-      nogoodSize = factNogood.sizev /*, flags = 1*/ , beforeSolvingstarted = false)
+      nogoodSize = factNogood.sizev /*, flags = 1*/ , beforeSolvingStarted = false)
 
     addLearnedNogoodReducibleToReducibleLists(newFactNogoodReducible, 0l)
     // TODO: sicherstellen dass diese Fact-nogoods nicht später gelöscht werden!!!
@@ -5617,23 +6253,150 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
   })
 
-  @inline def phasedEli(absEli: Eli): Eli = {
+  /*
+  @inline def vmmEliToSym(eli: Eli): Int = {
+
+    eliToJavaArrayIndex(eli) % vmmAlphabetSize
+
+  }
+
+  @inline def vmmPredictPhase(absEli: Eli): Double = {
+
+    vmmPredictor.getTreeLZ().resetLZPrediction()
+
+    var i = (orderNumber - vmmPredictorMaxLength).max(0)
+
+    val end = orderNumber
+
+    while (i < end) {
+
+      val eliToLearn = rmiStoreG.get(i)
+
+      //vmmPredictor.useSym(eliToJavaArrayIndex(eliToLearn)) //PPMC
+      vmmPredictor.getTreeLZ().addSymToPredictedSequenceLZ(vmmEliToSym(eliToLearn))  //LZ
+
+      i += 1
+
+    }
+
+    //val contextPredictionLZ = vmmPredictor.getTreeLZ().getProbOfPredictedSequenceLZ()
+
+    vmmPredictor.getTreeLZ().addSymToPredictedSequenceLZ(vmmEliToSym(absEli))
+
+    val contextWithPosSymPredictionLZ = vmmPredictor.getTreeLZ().getProbOfPredictedSequenceLZ()
+
+    vmmPredictor.getTreeLZ().popLastSymFromPredictedSequenceLZ()
+
+    vmmPredictor.getTreeLZ().addSymToPredictedSequenceLZ(vmmEliToSym(negatePosEli(absEli)))
+
+    val contextWithNegSymPredictionLZ = vmmPredictor.getTreeLZ().getProbOfPredictedSequenceLZ()
+
+    vmmPredictor.getTreeLZ().popLastSymFromPredictedSequenceLZ()
+
+    // negativeInverseOfLg
+
+    // println(contextPredictionLZ + ", " + contextPredictionLZ)
+
+    /*val posProb =  Math.pow(2.0d, -(contextWithPosSymPredictionLZ * vmmPredictor.getTreeLZ().getNegativeInverseOfLg() -
+      contextPredictionLZ * vmmPredictor.getTreeLZ().getNegativeInverseOfLg()))
+
+    val negProb =  Math.pow(2.0d, -(contextWithNegSymPredictionLZ * vmmPredictor.getTreeLZ().getNegativeInverseOfLg() -
+      contextPredictionLZ * vmmPredictor.getTreeLZ().getNegativeInverseOfLg()))
+*/
+
+    val r = contextWithPosSymPredictionLZ - contextWithNegSymPredictionLZ //posProb - negProb
+
+   /* if(r != 0d) {
+      println(contextWithPosSymPredictionLZ, contextWithNegSymPredictionLZ)
+    } */
+
+    r
+
+  } */
+
+  @inline def phasedAbsEli(absEli: Eli): Eli = {
 
     if (noisePhaseMemo >= 0f) {
 
-      if (noisePhaseMemo == 0f || rngLocal.nextFloat() >= noisePhaseMemo) {
+      /*if(rngLocal.nextFloat() < 0.01f) {  // lookahead (ultra slow. Remove code!?)
 
-        if (getFromPhasePreviousForAbsElis(absEli) != 0x00.toByte) // don't check using "== 0x01.toByte" (isn't what it seems to be, see byte code)
-          absEli
+        val decEli1 = absEli
+
+        setDecisionLevelTo(dl + 1) // the next eli needs to be set on the new decision level
+
+        val vngc1 = setEliWithNogoodUpdatesNoHeap(decEli1, reason = 0l, countViolNgs = true)
+
+        jumpBack((dl - 1), 0)
+
+        violatedNogoodReducible = 0L
+
+        val decEli2 = negateEli(decEli1)
+
+        val vngc2 = setEliWithNogoodUpdatesNoHeap(decEli2, reason = 0l, countViolNgs = true)
+
+        jumpBack((dl - 1), 0)
+
+        violatedNogoodReducible = 0L
+
+        if (vngc1 > vngc2)
+          decEli1
         else
-          negatePosEli(absEli)
+          decEli2
 
-      } else {
+      } else*/ {
 
-        if (getFromPhasePreviousForAbsElis(absEli) == 0x00.toByte) // don't check using "== 0x01.toByte" (isn't what it seems to be)
-          absEli
-        else
-          negatePosEli(absEli)
+
+        //€€€
+        {
+
+          if (/*vmmPredictor.getLzms() != null ||*/ noisePhaseMemo == 0f || rngLocal.nextFloat() >= noisePhaseMemo) {
+
+            /*if(vmmPredictorMaxLength == 0 || vmmPredictor.getLzms() == null)*/ {
+
+              if (getFromPhasePreviousForAbsElis(absEli) != 0x00.toByte) // don't check using "== 0x01.toByte" (isn't what it seems to be, see byte code)
+                absEli
+              else
+                negatePosEli(absEli)
+
+            } /*else {
+
+              val diffPred = if(vmmPredictorMaxLength > 0) vmmPredictPhase(absEli) else 0d
+
+              if (diffPred == 0d) {
+
+                if (getFromPhasePreviousForAbsElis(absEli) != 0x00.toByte) // don't check using "== 0x01.toByte" (isn't what it seems to be, see byte code)
+                  absEli
+                else
+                  negatePosEli(absEli)
+
+              } else if (diffPred > 0d) {
+
+                if (true || rngLocal.nextFloat() > 0d)
+                  absEli
+                else
+                  negatePosEli(absEli)
+
+              } else {
+
+                if (true || rngLocal.nextFloat() > 0d)
+                  negatePosEli(absEli)
+                else
+                  absEli
+
+              }
+
+            }*/
+
+          } else {
+
+            if (getFromPhasePreviousForAbsElis(absEli) == 0x00.toByte) // don't check using "== 0x01.toByte" (isn't what it seems to be)
+              absEli
+            else
+              negatePosEli(absEli)
+
+          }
+
+        }
 
       }
 
@@ -5674,7 +6437,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           uncertainEliSearchStart = if (i + 1 >= deficitOrderedUncertainLiteralsHalf) 0 else i + 1
 
-          return /*literally*/ (uncertainEli)
+          return uncertainEli
 
         }
 
@@ -5711,7 +6474,6 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
             }
 
-
             i += 1
 
           }
@@ -5731,7 +6493,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
           if (isNotAbsSetInPass(absEli) && getAbsEliScore(absEli) > freeVarActiv) {
 
             if (ignoreAbsEliScoresInLinearSearch)
-              return phasedEli(absEli)
+              return phasedAbsEli(absEli)
 
             freeVarActiv = getAbsEliScore(absEli)
 
@@ -5754,22 +6516,45 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
     if (((orderNumber > 1 /*<- i.e., not directly after restarts or in trial 1*/ || !diversifyLight) && !diversify &&
       (rndmBranchProb == 0 || rngLocal.nextFloat() > rndmBranchProb))) {
 
+      val testLZIn15 = false /*&& vmmPredictor.getTreeLZ() != null && vmmPredictorMaxLength > 0 */
+
       if (freeEliSearchApproach == 15) {
 
         var bin = unassignedAbsEliBinSet.length - 1
+
+        /*if(testLZIn15) {
+
+          vmmPredictor.getTreeLZ().resetLZPrediction()
+
+          var i = (orderNumber - vmmPredictorMaxLength).max(0)
+
+          val end = orderNumber
+
+          while (i < end) {
+
+            val eliToLearn = rmiStoreG.get(i)
+
+            //vmmPredictor.useSym(eliToJavaArrayIndex(eliToLearn)) //PPMC
+            vmmPredictor.getTreeLZ().addSymToPredictedSequenceLZ(vmmEliToSym(eliToLearn))  //LZ
+
+            i += 1
+
+          }
+
+        } */
 
         while (bin >= 0) {
 
           if (!unassignedAbsEliBinSet(bin).isEmpty) {
 
-            val freeAbsEli = if (absEliScoringApproach != 0 /*<- because of less accurate bin mapping with approach 0*/ ||
+            val freeAbsEli = if (  (!testLZIn15 &&  absEliScoringApproach != 0 /*<- because of less accurate bin mapping with approach 0*/) ||
               unassignedAbsEliBinSet(bin).size == 1) {
 
               unassignedAbsEliBinSet(bin).getLast()
 
             } else { // optional: linear search within the bin
 
-              var maxAbsEliScore = Float.MinValue
+              var maxScore = Float.MinValue
 
               var maxAbsEli = -1
 
@@ -5779,9 +6564,34 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
                 val absEli = unassignedAbsEliBinSet(bin).get(i)
 
-                if (getAbsEliScore(absEli) > maxAbsEliScore) {
+                val score: Double = /*if(testLZIn15) {
 
-                  maxAbsEliScore = getAbsEliScore(absEli)
+                  val contextPredictionLZ = vmmPredictor.getTreeLZ().getProbOfPredictedSequenceLZ()
+
+                  vmmPredictor.getTreeLZ().addSymToPredictedSequenceLZ(vmmEliToSym(absEli))
+
+                  val contextWithSymPredictionLZ = vmmPredictor.getTreeLZ().getProbOfPredictedSequenceLZ()
+
+                  vmmPredictor.getTreeLZ().popLastSymFromPredictedSequenceLZ()
+
+                  // negativeInverseOfLg
+
+                 // println(contextPredictionLZ + ", " + contextPredictionLZ)
+
+                 val rr =  Math.pow(2.0d, -(contextWithSymPredictionLZ * vmmPredictor.getTreeLZ().getNegativeInverseOfLg() -
+                   contextPredictionLZ * vmmPredictor.getTreeLZ().getNegativeInverseOfLg()))
+
+                  val r = rr  // getAbsEliScore(absEli)
+
+                 //if(!r.isNaN) println(r)
+
+                 r
+
+                } else*/ getAbsEliScore(absEli)
+
+                if (score/*getAbsEliScore(absEli)*/ > maxScore) {
+
+                  maxScore = getAbsEliScore(absEli)
 
                   maxAbsEli = absEli
 
@@ -5791,13 +6601,16 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
               }
 
-              maxAbsEli
+              if(isNotAbsSetInPass(maxAbsEli))  // TODO: check why this check is necessary (e.g., aes_24_4_keyfind_2-sc2013). Bug?
+                maxAbsEli
+              else
+                unassignedAbsEliBinSet(bin).getLast()
 
             }
 
             assert(isNotAbsSetInPass(freeAbsEli))
 
-            return phasedEli(freeAbsEli)
+            return phasedAbsEli(freeAbsEli)
 
           }
 
@@ -5835,7 +6648,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
             assert(isNotAbsSetInPass(unassignedAbsEliSet.get(dtaIndexOfMaxScoredInUnassignedAbsEliSet)))
 
-            return phasedEli(unassignedAbsEliSet.get(dtaIndexOfMaxScoredInUnassignedAbsEliSet))
+            return phasedAbsEli(unassignedAbsEliSet.get(dtaIndexOfMaxScoredInUnassignedAbsEliSet))
 
           }
 
@@ -5845,7 +6658,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
           assert(isNotAbsSetInPass(freeAbsEli))
 
-          return phasedEli(freeAbsEli)
+          return phasedAbsEli(freeAbsEli)
 
         }
 
@@ -5878,7 +6691,7 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
             //println(getAbsEliScore(absEli))
 
             if (isNotAbsSetInPass(absEli))
-              return phasedEli(absEli)
+              return phasedAbsEli(absEli)
 
           }
 
@@ -5921,53 +6734,86 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
         usedUpInLevel.update(dl, uu) // carrying over uu to the next level
 
         if (pivotEli_ != 0)
-          return phasedEli((pivotEli_))
+          return phasedAbsEli((pivotEli_))
 
       } else if (freeEliSearchApproach == 13) {
+        /*
+                var pivotEli_ = 0
 
+                var uu = if (dl == 0) {
+                  0
+                } else {
+                  usedUpInLevel.get(dl - 1)
+                }
+
+                var maxScore = Double.MinValue
+
+                while (uu < noOfAbsElis) {
+
+                  val candAbsEli = absElisSeqArranged.get(uu)
+
+                  if (isNotAbsSetInPass(candAbsEli) && getAbsEliScore(candAbsEli) > maxScore) { // NB: the elis in elisArranged are not necessarily abs/pos
+
+                    maxScore = getAbsEliScore(candAbsEli)
+
+                    pivotEli_ = candAbsEli
+
+                    uu += 1
+
+                    usedUpInLevel.update(dl, uu)
+
+                  } else
+                    uu += 1
+
+                }
+
+                if (pivotEli_ == 0) {
+
+                  uu = 0
+
+                  usedUpInLevel.update(dl, uu) // carrying over uu to the next level
+
+                }
+
+                if (pivotEli_ != 0)
+                  return phasedAbsEli(pivotEli_)
+
+         */
         var pivotEli_ = 0
 
         var uu = if (dl == 0) {
-
           0
-
         } else {
-
           usedUpInLevel.get(dl - 1)
-
         }
 
-        var maxAbsEliScore = Double.MinValue
+        var maxScore = Double.MinValue
 
         while (uu < noOfAbsElis) {
 
           val candAbsEli = absElisSeqArranged.get(uu)
 
-          if (isNotAbsSetInPass(candAbsEli) && getAbsEliScore(candAbsEli) > maxAbsEliScore) { // NB: the elis in elisArranged are not necessarily abs/pos
+          if (isNotAbsSetInPass(candAbsEli) && getAbsEliScore(candAbsEli) > maxScore) { // NB: the elis in elisArranged are not necessarily abs/pos
 
-            maxAbsEliScore = getAbsEliScore(candAbsEli)
+            maxScore = getAbsEliScore(candAbsEli)
 
             pivotEli_ = candAbsEli
 
-            uu += 1
+            // uu += 1
 
-            usedUpInLevel.update(dl, uu)
+            // usedUpInLevel.update(dl, uu)
 
-          } else
-            uu += 1
+          } //else
 
-        }
-
-        if (pivotEli_ == 0) {
-
-          uu = 0
-
-          usedUpInLevel.update(dl, uu) // carrying over uu to the next level
+          uu += 1
 
         }
+
+        usedUpInLevel.update(dl, uu) // carrying over uu to the next level
 
         if (pivotEli_ != 0)
-          return phasedEli(pivotEli_)
+          return phasedAbsEli((pivotEli_))
+
 
       }
 
@@ -5988,7 +6834,9 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
       } else
         stomp(-1, "Nonexistent free literal search heuristics: " + freeEliSearchApproach)
 
-    } else { // random selection (enforced by --solverarg diversify true)
+    }
+
+    { // random selection (enforced by --solverarg diversify true). We end up here either because of rndmBranchProbR or in the rare case that one of the previous heuristics didn't result in a usable branching literal
 
       assert(noOfAllElis > 0)
 
@@ -6000,23 +6848,11 @@ class SingleSolverThreadData(prep: Preparation, singleSolverConf: SolverThreadSp
 
       } while (isPosOrNegSetInPass(freeEliCand) || freeEliCand == 0)
 
-      return freeEliCand
+      freeEliCand //if(ignoreParamVariables && !diversify && !diversifyLight) phasedEli(toAbsEli(freeEliCand)) else freeEliCand
+      // Important: even if there are no paramater variables, we need to return freeEliCand instead of phased(...) _at least with diversify_,
+      // as otherwise sampling with pure SAT/ASP input wouldn't work properly anymore.
 
     }
-
-    // If the prev approach didn't succeed, we end up here:
-
-    do {
-
-      val freeEliCand = rngLocal.nextInt(noOfAbsElis) + 1
-
-      if (isNotAbsSetInPass(freeEliCand))
-        return phasedEli(freeEliCand) // the difference to a purely random decision is that the polarity is
-      // taken from phasePreviousForAbsElis
-
-    } while (true)
-
-    0
 
   }
 

@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018-2020 Matthias Nickles
+  * Copyright (c) 2018-2022 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -30,7 +30,8 @@ object StochasticLocalSearch {
   def stochasticLocalSearch(singleSolverThreadData: SingleSolverThreadData,
                             solverThreadSpecificSettings: SolverThreadSpecificSettings,
                             sharedAmongSingleSolverThreads: SharedAmongSingleSolverThreads,
-                            preparation: Preparation): Int = { // optionally called as a helper method during rephasing (not as our overall solving algo)
+                            preparation: Preparation,
+                            threadConfsOpt: Option[Array[SolverThreadSpecificSettings]]): Int = { // optionally called as a helper method during rephasing (not as our overall solving algo)
     // TODO: implement further SLS variants, such as probSAT / YalSAT
 
     import preparation._
@@ -46,9 +47,9 @@ object StochasticLocalSearch {
 
     if (debug2) println("\nmaxInnerSLSTrials:  " + maxInnerSLSTrials)
 
-    val minimumNoInnerItsBeforeNextRestartInSLS = (resetInnerSLSAfterPercentMaxInnerTrials * maxInnerSLSTrials).toInt
+    val minimumNoInnerItsBeforeNextRestartInSLS: Long = (resetInnerSLSAfterPercentMaxInnerTrials * maxInnerSLSTrials).toLong
 
-    var minimumNoInnerItsBeforeNextRestartCounterInSLS = minimumNoInnerItsBeforeNextRestartInSLS
+    var minimumNoInnerItsBeforeNextRestartCounterInSLS: Long = minimumNoInnerItsBeforeNextRestartInSLS
 
     @inline def copySLSPhasesFromBestPhases: Unit = {
 
@@ -109,7 +110,7 @@ object StochasticLocalSearch {
     if (copyPhasesFromAssignmentInSLS) {
 
       if (copyPhasesFromBestPhasesInSLS)
-        stomp(-5006)
+        stomp(-5014)
 
       var absEli = 1
 
@@ -473,14 +474,52 @@ object StochasticLocalSearch {
 
     var mostRecentlyFlippedAbsEliWhenLearning = 0
 
+    @inline def shareScoreFromSLS(absEli: Eli): Unit = {  // TODO: doesn't seem to be useful? More tests required
+
+      if(shareScoresFromSLSWithOtherThreads) {
+
+        /* we could in principle change the scores in other threads directly, like this. But doesn't work properly (synchronization problems)
+
+        val xxx = threadConfsOpt.get.apply(1/*thread $1*/).singleSolverThreadDataOpt.get
+
+        xxx.updateAbsEliScore(absEli, xxx.getAbsEliScore(absEli) * 2) */
+
+        sharedAmongSingleSolverThreads.scoresFromSLS.put(absEli, getParticipatedAbsEli(absEli) /*getAbsEliScore(absEli)*/)
+
+      }
+
+    }
+
+    @inline def shareNogoodFromSLSWithOtherThreads(nogoodReducible: NogoodReducible): Unit = { // TODO: doesn't seem to be useful? More tests required
+
+      if(shareNogoodsFromSLSWithOtherThreads) {
+
+        sharedAmongSingleSolverThreads.nogoodReducibleExchangePool.put(nogoodReducible, threadNo)
+
+      }
+
+    }
+
     @inline def flipInSLS(absEli: Eli): Unit = {
 
       //println("Flip: " + absEli)
 
       //println(getAbsEliScore(absEli))
 
-      if (useScoresInSLS > 0f)
-        bumpUpEVSIDSscoreOfAbsEliMinimally(absEli)
+      if (shareScoresFromSLSWithOtherThreads || useScoresInSLS > 0f) {
+
+        //bumpUpEVSIDSscoreOfAbsEliMinimally(absEli)
+        bumpUpScoreOfEli(absEli, bump = 0.001f)
+
+        if(violatedNogoodsInSLS.size < 1000 /*&& getAbsEliScore(absEli) > 0.1f*/) {
+
+          //println("!" + getAbsEliScore(absEli) )
+          shareScoreFromSLS(absEli)
+
+        }
+
+
+      }
 
       val affectedReduciblesPosEli: NogoodReduciblesSequenceUnsafe = eliToReduciblesClark(eliToJavaArrayIndex(absEli))
 
@@ -560,13 +599,12 @@ object StochasticLocalSearch {
 
       initializeViolatedNogoodsInSLS()
 
-      var noOfInnerSLSTrials = 0
+      var noOfInnerSLSTrials: Long = 0L
 
       var flipsInSASAT = 0
 
       val bestStateInSLS: Array[Byte] =
         if (!resetSLStoStoredBestState) null.asInstanceOf[Array[Byte]] else Array.ofDim[Byte](noOfAbsElis + 1)
-
 
       @inline def initTempInSLS: Unit = {
 
@@ -580,8 +618,13 @@ object StochasticLocalSearch {
 
         if (c == 0) {
 
-          if (verbose)
+          if (verbose) {
+
             println("\n*** Stochastic Local Search (" + (if (useSASATinSLS) "SASAT" else "WalkSAT") + ") has found a satisfying assignment! ***\n")
+
+            println("noOfInnerSLSTrials: " + noOfInnerSLSTrials)
+
+          }
 
           if (debug) println("countViolatedNogoods counted from scratch = " + countViolatedNogoodsFromScratchInSLS)
 
@@ -616,23 +659,23 @@ object StochasticLocalSearch {
 
         }
 
-        if (showSLSprogress && noOfInnerSLSTrials % (if (useSASATinSLS) 100 else 10000) == 0) {
+        if (showSLSprogress && noOfInnerSLSTrials % (if (useSASATinSLS) 1000 else 500000) == 0) {
 
-          val pStr = "\r@ " + timerToElapsedMs(solverTimer) / 1000 + "sec: " + (if (useSASATinSLS)
-            ("Stochastic Local Search (SASAT) thread $" + threadNo + " (#rephs: " + noOfRephasings + "): #viol nogoods = " + c + " @ sasaOuterI: " + sasaOuterI + "/" + sasatOuterMaxInSLS + ", noOfInnerSLSTrials: " + noOfInnerSLSTrials + "/" + maxInnerSLSTrials +
-              ", temp = " + round(temperatureInSLS, 3) + ", decayRateTmp = " + round(decayRateForTempInSLS, 12) + ", flip rate: " +
+          val pStr = "\r@" + timerToElapsedMs(solverTimer) / 1000 + "sec:" + (if (useSASATinSLS)
+            ("SASAT$" + threadNo + ":#violNg:" + toKorM(c) + " @sasaOuterI:" + toKorM(sasaOuterI) + "/" + toKorM(sasatOuterMaxInSLS) + ",innerTr:" + toKorM(noOfInnerSLSTrials) + "/" + maxInnerSLSTrials +
+              ",tmp:" + round(temperatureInSLS, 3) + ",decayTmp:" + round(decayRateForTempInSLS, 12) + ",flipRt:" +
               (flipsInSASAT.toDouble / noOfAbsElis.toDouble / noOfInnerSLSTrials.toDouble) +
-              ", sasatRandomWalkProb = " + randomWalkProbInSASAT + ", minViolatedNogoodsInSLS = " + minViolatedNogoodsInSLS)
+              ",rndmWlkPr:" + randomWalkProbInSASAT + ",minViolNg:" + toKorM(minViolatedNogoodsInSLS))
           else if (walkSATwithTempDecl)
-            ("Stochastic Local Search (WalkSAT+temp decline) thread $" + threadNo + " (#reps: " + noOfRephasings + "): #viol nogoods = " + c + " @noOfInnerSLSTrials " + noOfInnerSLSTrials + "/" + maxInnerSLSTrials +
-              ", temp = " + round(temperatureInSLS, 3) + ", decayRateTmp = " + round(decayRateForTempInSLS, 12) +
-              ", minViolatedNogoodsInSLS = " + minViolatedNogoodsInSLS)
+            ("WalkSAT+tmpDecl$" + threadNo + ":#violNg:" + toKorM(c) + "@innerTr:" + toKorM(noOfInnerSLSTrials) + "/" + toKorM(maxInnerSLSTrials) +
+              ",tmp:" + round(temperatureInSLS, 3) + ",decayTmp:" + round(decayRateForTempInSLS, 12) +
+              ",minViolNg:" + toKorM(minViolatedNogoodsInSLS))
           else
-            ("Stochastic Local Search (WalkSAT) thread $" + threadNo + " (#reps: " + noOfRephasings + "): #viol nogoods = " + c +
-              " @noOfInnerSLSTrials " + noOfInnerSLSTrials + "/" + maxInnerSLSTrials + ", minViolatedNogoodsInSLS = " + minViolatedNogoodsInSLS)
+            ("WalkSAT$" + threadNo +":#violNg:" + toKorM(c) +
+              "@ninnerTr:" + toKorM(noOfInnerSLSTrials) + "/" + toKorM(maxInnerSLSTrials) + ",minViolNg:" + toKorM(minViolatedNogoodsInSLS))
             )
 
-          printStatusLine(pStr, cutOffAt = 256)
+          printStatusLine(pStr/*, cutOffAt = 256*/)
 
         }
 
@@ -756,7 +799,6 @@ object StochasticLocalSearch {
 
               }
 
-
               initializeViolatedNogoodsInSLS
 
               initTempInSLS
@@ -797,7 +839,7 @@ object StochasticLocalSearch {
 
             }
 
-            @inline def findHighestScoredOrRandomEliInNogood(nogoodReducible: NogoodReducible, sizeOfNogood: Eli) = {
+            @inline def findHighestScoredOrRandomEliInNogood(nogoodReducible: NogoodReducible, sizeOfNogood: Int): Eli = {
 
               if (useScoresInSLS > 0f && rngLocal.nextFloat() < useScoresInSLS) {
 
@@ -841,9 +883,14 @@ object StochasticLocalSearch {
 
             val randomNogoodReducibleSize = getNogoodSizeFromReducible(randomNogoodReducible)
 
-            if (useScoresInSLS > 0f)
+            if (useScoresInSLS > 0f) {
+
               bumpNogoodReducibleActivity(randomNogoodReducible) // observe we do this also for clark nogoods here, since purpose here isn't just scoring for learned nogood removal
 
+            }
+
+            if(shareNogoodsFromSLSWithOtherThreads && violatedNogoodsInSLS.size < 10)
+              shareNogoodFromSLSWithOtherThreads(randomNogoodReducible)
 
             if (!semiLocalSearchInSLS && rngLocal.nextFloat() <= pr /*||
               semiLocalSearchInSLS && rngLocal.nextFloat() <= 0.3f*/ ) {
@@ -861,7 +908,7 @@ object StochasticLocalSearch {
 
                 var minViolationsAbsEli = 0
 
-                var minViolations = Int.MaxValue
+                var minViolationsRelative = Int.MaxValue
 
                 var i = 0
 
@@ -869,13 +916,13 @@ object StochasticLocalSearch {
 
                   val testAbsEli = toAbsEli(getEliFromNogoodInReducible(randomNogoodReducible, i))
 
-                  val testNoViolations = flipTentativeInSLS(testAbsEli)
+                  val testNoViolationsRelative = flipTentativeInSLS(testAbsEli)  // (not the absolute number of violations but an offset, e.g., can be < 0)
 
-                  if (testNoViolations < minViolations) {
+                  if (testNoViolationsRelative < minViolationsRelative) {
 
                     if (true) {
 
-                      minViolations = testNoViolations
+                      minViolationsRelative = testNoViolationsRelative
 
                       minViolationsAbsEli = testAbsEli
 
@@ -1011,6 +1058,9 @@ object StochasticLocalSearch {
         //println ("noOfInnerSLSTrials = " + noOfInnerSLSTrials)
 
       }
+
+      //if(debug)
+        //println("noOfInnerSLSTrials: " + noOfInnerSLSTrials)
 
       sasaOuterI += 1
 

@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018,2020 Matthias Nickles
+  * Copyright (c) 2018,2022 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -166,9 +166,9 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
   symbolsWithoutTranslation = symbols
 
-  val preProcesssVariableElimConfig: (Boolean, Double, Double, Float, Boolean) = if(!preProcesssVariableElimConfigR._1 || satMode && (parameterAtomsElis == null || parameterAtomsElis.length == 0) && (costsOpt.isEmpty || costsOpt.get.innerCostExpressionInstances.isEmpty) ) preProcesssVariableElimConfigR else {
+  val preProcesssVariableElimConfig: (Boolean, Double, Double, Float, Boolean) = if (!preProcesssVariableElimConfigR._1 || satMode && (parameterAtomsElis == null || parameterAtomsElis.length == 0) && (costsOpt.isEmpty || costsOpt.get.innerCostExpressionInstances.isEmpty)) preProcesssVariableElimConfigR else {
 
-    if(!satMode)
+    if (!satMode)
       stomp(-5014, "preProcesssVariableElimConfig cannot be used in ASP mode - setting ignored")
     else
       stomp(-5014, "preProcesssVariableElimConfig cannot be used in probabilistic settings - setting ignored") // as it may create a bias in the sample
@@ -184,7 +184,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
       //if (preProcesssVariableElimConfig._1 && !satMode) // TODO: make preprocessing work again in ASP mode, at least for tight progs. Should be easy (it already worked at some time)
       //stomp(-5009, "preProcesssVariableElimConfig cannot be used in ASP mode")
 
-     // if (preProcesssVariableElimConfig._1 && parameterAtomsElis != null && parameterAtomsElis.length > 0)
+      // if (preProcesssVariableElimConfig._1 && parameterAtomsElis != null && parameterAtomsElis.length > 0)
       //  stomp(-5009, "preProcesssVariableElimConfig cannot be used in probabilistic settings") // as it may create a bias in the sample
 
       (clarkNogoods1, None, None)
@@ -194,6 +194,8 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
       val cns1: ObjectArrayList[IntArrayUnsafeS] = new ObjectArrayList[IntArrayUnsafeS](clarkNogoods1.length + 1000) // clarkNogoods1.to[ArrayBuffer]
 
       cns1.addElements(0, clarkNogoods1)
+
+      val preliminaryResolvents = new ObjectArrayList[IntArrayUnsafeS](100)
 
       var lorgno = 0
 
@@ -213,7 +215,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
         println("K-original (nogoods): " + cns1.size) // number corresponds to original #clauses
 
-        println("L-original (literals in nogoods): " + lorgno) // original #literals (toAbsEli.e. elis in our case)
+        println("L-original (literals in nogoods): " + lorgno) // original #literals (i.e., elis in our case)
 
         println("N-original (variables): " + oldN) // original #symbols (variables)
 
@@ -240,9 +242,9 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
         val productPosNegLitsOrigCap = (Math.sqrt(cns1.size.toDouble) * preProcesssVariableElimConfig._4).toInt
 
-        @deprecated val noOfResolventsOverheadCap = (cns1.size.toDouble * preProcesssVariableElimConfig._2).toInt
+        //@deprecated val noOfResolventsOverheadCap = (cns1.size.toDouble * preProcesssVariableElimConfig._2).toInt
 
-        @deprecated val noOfOriginalLitsOverheadCap = (noOfAllElis.toDouble * preProcesssVariableElimConfig._3).toInt
+        //@deprecated val noOfOriginalLitsOverheadCap = (noOfAllElis.toDouble * preProcesssVariableElimConfig._3).toInt
 
         val eliToNogisTemp: Array[IntOpenHashSet] = Array.fill[IntOpenHashSet](noOfAllElis + 1)(new IntOpenHashSet())
 
@@ -250,7 +252,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
         var noOfStrengthenedNogoods = 0
 
-        def existsSubsumed(nogoodCand: IntArrayUnsafeS /*<- the possibly including/larger nogood*/): Boolean = {
+        def existsForeignSubsumed(nogoodCand: IntArrayUnsafeS /*<- the possibly including/larger nogood*/): Boolean = {
 
           // Subsumption check; checks if there is another clause \subsetof nogoodCand (so we can we ignore nogoodCand)
           // (Remark: we use "subsumes" in the sense of "includes as superset (of literals)", which appears to be different from the terminology used in Een, Biere)
@@ -331,17 +333,17 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
         val elimPosAtomsOrdered = ArrayBuffer[Eli]() // besides looking up eliminated variables, we also need to keep track of their
         // order of elimination.
 
-        //var pnNogood = Array.ofDim[Eli](8192)
-
         val removedNogoodsPerAtom = mutable.TreeMap[Eli /*pos atom eli*/ , /*ArrayBuffer*/ mutable.HashSet[IntArrayUnsafeS]]()
 
-        val resolventsPoolMemSize = 0 //cns1.length * 10 // NB: this pool exists because Java unsafe memory allocation is quite slow. However,
+        /*
+        val resolventsPoolMemSize = 0 //cns1.size * 10 // NB: this pool exists because Java unsafe memory allocation is quite slow. However,
         // this pool will be used up quickly even for medium-sized problems. We could prevent this by freeing memory from the pool, but
         // we would then end up with writing our own sort-of GC...
 
         var resolventsPoolMemUsed = 0
 
         val resolventsPoolMem: Long = if (resolventsPoolMemSize > 0) unsafe.allocateMemory(resolventsPoolMemSize) else -1l
+        */
 
         do {
 
@@ -349,8 +351,11 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
           var posEli = 1
 
-
           while (posEli <= noOfPosAtomElis) { // i.e. we don't consider ASP-mode blit-"atoms" here
+
+
+            var noOfLiteralsInPreliminaryResolvents = 0
+
 
             if (!elimPosAtoms.contains(posEli)) {
 
@@ -366,39 +371,44 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
               var eliminatePosEli = false
 
+              preliminaryResolvents.clear()
+
+              @inline def addResolventPreliminarily(resolvent: IntArrayUnsafeS): Unit = {
+
+                preliminaryResolvents.add(resolvent)
+
+                noOfLiteralsInPreliminaryResolvents += resolvent.size()
+
+              }
+
               def addResolvent(resolventA: IntArrayUnsafeS): Unit = {
+
                 var k = 0
 
-                val addResolventA = if (resolventOnlySubmsumptionCheckInPreProc)
-                  !existsSubsumed(resolventA)
-                else
-                  true
+                val newNogi = cns1.size
 
-                if (addResolventA) {
+                cns1.add(resolventA)
 
-                  val newNogi = cns1.size
+                k = resolventA.size - 1
 
-                  cns1.add(resolventA)
+                while (k >= 0) {
 
-                  k = resolventA.size - 1
+                  val occurListK: IntOpenHashSet = eliToNogisTemp(eliToJavaArrayIndex(resolventA.get(k)))
 
-                  while (k >= 0) {
+                  occurListK.add(newNogi)
 
-                    val occurListK: IntOpenHashSet = eliToNogisTemp(eliToJavaArrayIndex(resolventA.get(k)))
-
-                    occurListK.add(newNogi)
-
-                    k -= 1
-
-                  }
-
-                  if (debug2)
-                    println("\nAdded nogood (resolvent): " + resolventA.toArray.mkString(" "))
+                  k -= 1
 
                 }
+
+                if (debug2)
+                  println("\nAdded nogood (resolvent): " + resolventA.toArray.mkString(" "))
+
               }
 
               def ccbs(): Unit = {
+
+                var resolventsAddedHere = 0  // maximum p x n, where p (n) is the number of nogoods where variable occurs positively (negatively)
 
                 var pIt = 0
 
@@ -446,7 +456,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
                                 var usedPoolMem = false
 
-                                val resolvent = if (resolventsPoolMemUsed + (rs << 2) < resolventsPoolMemSize) {
+                                val resolvent = /*if (resolventsPoolMemUsed + (rs << 2) < resolventsPoolMemSize) {
 
                                   val r = new IntArrayUnsafeS(sizev = rs, atAddress = resolventsPoolMem + resolventsPoolMemUsed)
 
@@ -454,9 +464,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
                                   r
 
-                                } else {
-
-                                  //assert(false)
+                                } else*/ {
 
                                   new IntArrayUnsafeS(sizev = rs)
 
@@ -512,7 +520,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
                                       } else if (ii >= 1 && resolvent.contains(negateEli(lit), maxIndexExclusive = ii))
                                         isTaut = true // observe that further above we (must!) also check for tautology where the tautology is caused
-                                      // by occurrence of both posEli and negateEli(posEli) _within_ either pNogood or nNogood!
+                                      // by occurrence of both posEli and negateEli(posEli) _within_ either pNogood or nNogood itself!
 
                                       ii -= 1
 
@@ -520,38 +528,37 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
                                   }
 
-                                  if (isTaut) {
-
-                                    //println("isTaut " + resolvent.toString(rs))
-
-                                  } else {
+                                  if (!isTaut) {
 
                                     resolvent.sizev = rs
 
-                                    if (usedPoolMem)
-                                      resolventsPoolMemUsed += rs << 2
+                                    //if (usedPoolMem)
+                                    // resolventsPoolMemUsed += rs << 2
 
                                     //println("\n\nCleaned resolvent (before duplicate check): " + resolvent.toString)
 
-                                    if (chhh) assert(!resolvent /*.toArray*/ .contains(posEli) && !resolvent /*.toArray*/ .contains(negateEli(posEli)))
+                                    if (chhh) assert(!resolvent.contains(posEli) && !resolvent.contains(negateEli(posEli)))
 
                                     resolvent.removeDuplicatesGlob() // important also for correctness, as we'll need to reliably create
                                     // empty resolvents occuring from two singleton nogoods (=>UNSAT)
 
                                     //   println("Cleaned resolvent (after duplicate check): " + resolvent.toString)
 
-                                    val resolventLean = new IntArrayUnsafeS(resolvent.sizev)
-                                    resolvent.cloneTo(resolventLean.getAddr)
-                                    addResolvent(resolventLean)
+                                    resolventsAddedHere += 1
 
+                                    val resolventLean = resolvent //new IntArrayUnsafeS(resolvent.sizev)
 
-                                  }
+                                    // resolvent.cloneTo(resolventLean.getAddr)  // need to do this if resolventsPoolMem is used!
+
+                                    addResolventPreliminarily(resolventLean)
+
+                                  } else
+                                    resolvent.free()
 
                                   if (chhh) assert(nNogood.contains(negateEli(posEli)))
                                   if (chhh) assert(pNogood.contains(posEli))
 
                                 }
-
 
                               }
 
@@ -572,6 +579,13 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
                     pIt += 1
 
                   }
+
+                  /*
+                  println("nogisWithPosEli.length = " + nogisWithPosEli.length)
+                  println("nogisWithNegPosEli.length = " + nogisWithNegPosEli.length)
+                  println("resolventsAddedHere = " + resolventsAddedHere)
+                  println */
+
                 } else pncLits = -1
 
               }
@@ -580,7 +594,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
               @inline def adc1(removedPosEli: Eli): Unit = {
 
-                @inline def rmNogood(nogi: Nogi) = {
+                @inline def rmNogood(nogi: Nogi): Option[mutable.HashSet[IntArrayUnsafeS]] = {
 
                   removedNogis.add(nogi)
 
@@ -592,7 +606,6 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
                   removedNogoodsPerAtom.put(removedPosEli, oldRemovedNogoods /*.distinct*/) // observe that we later after solving have
                   // to restore the eliminated variables (posAtoms) in reverse order, since the removed nogoods for a variable x
                   // might also contain variables which will be removed after x.
-
 
                 }
 
@@ -608,6 +621,16 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
                 })
 
+              }
+
+
+              //  println(noOfLiteralsInPreliminaryResolvents, nogisWithPosEli.length * nogisWithNegPosEli.length)
+
+              if(noOfLiteralsInPreliminaryResolvents >= nogisWithPosEli.length * nogisWithNegPosEli.length)
+                eliminatePosEli = false
+              else {
+
+                preliminaryResolvents.forEach(addResolvent(_))
 
               }
 
@@ -622,6 +645,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
                 elimPosAtomsOrdered.append(posEli)
 
               }
+
             }
 
             if (posEli % 10 == 0 || posEli == noOfPosAtomElis) {
@@ -654,6 +678,9 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
         if (debug) println("\nTime after variable elimination (identification part): " + timerToElapsedMs(startTimeVarElim) + "ms")
 
+        //if(resolventsPoolMemSize > 0)
+        //unsafe.freeMemory(resolventsPoolMem)
+
         val eliToNogisArraysTemp: Array[Array[Int]] = Array.fill[Array[Int]](noOfAllElis + 1)(null.asInstanceOf[Array[Int]])
 
         var ai = 1
@@ -668,7 +695,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
         }
 
-        val finalNogoods = ArrayBuffer[IntArrayUnsafeS]()
+        val nogoodsAfterSubsumptionChecks = ArrayBuffer[IntArrayUnsafeS]()  // original nogoods without those removed in the eliminated variable identification stage above and also without those subsumed by other nogoods
 
         var ni = 0
 
@@ -677,14 +704,13 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
           val nogoodCand: IntArrayUnsafeS = cns1.get(ni)
 
-          var addNogoodCand = !removedNogis.contains(ni) /*removedNogis(ni) == 0*/ &&
-            (resolventOnlySubmsumptionCheckInPreProc || !existsSubsumed(nogoodCand))
+          var addNogoodCand = !removedNogis.contains(ni) && (!foreignNogoodSubsumptionCheck || !existsForeignSubsumed(nogoodCand))
 
           if (addNogoodCand) {
 
             //println("added to finalNogoods: " + nogoodCand)
 
-            finalNogoods.append(nogoodCand)
+            nogoodsAfterSubsumptionChecks.append(nogoodCand)
 
           }
 
@@ -755,7 +781,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
         }
 
-        var strengthen = true
+        var strengthen = strengthenNogoodsDuringPreproc  // using self-subsumption
 
         while (strengthen) {
 
@@ -763,9 +789,9 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
           var i = 0
 
-          while (i < finalNogoods.length) {
+          while (i < nogoodsAfterSubsumptionChecks.length) {
 
-            val nogoodCand = finalNogoods(i)
+            val nogoodCand = nogoodsAfterSubsumptionChecks(i)
 
             if (nogoodCand.sizev > 4) {
 
@@ -787,11 +813,11 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
             i += 1
 
-            if (verbose && (i % 1000 == 0 || i == finalNogoods.length)) {
+            if (verbose && (i % 1000 == 0 || i == nogoodsAfterSubsumptionChecks.length)) {
 
               //print("\r#Nogoods checked for self-subsumption: " + i + "/" + finalNogoods.length + ", strengthened: " + noOfStrengthenedNogoods)
 
-              val statusLine = "#Nogoods checked for self-subsumption: " + i + "/" + finalNogoods.length + ", strengthened: " + noOfStrengthenedNogoods
+              val statusLine = "#Nogoods checked for self-subsumption: " + i + "/" + nogoodsAfterSubsumptionChecks.length + ", strengthened: " + noOfStrengthenedNogoods
 
               printStatusLine(statusLine)
 
@@ -809,11 +835,14 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
         }
 
-        (finalNogoods, Some(removedNogoodsPerAtom), Some(elimPosAtomsOrdered))
+        (nogoodsAfterSubsumptionChecks, Some(removedNogoodsPerAtom), Some(elimPosAtomsOrdered))
 
       }
 
-      val cns3: ArrayBuffer[IntArrayUnsafeS] = if (preProcesssVariableElimConfig._5 && removedNogoodsPerAtomOpt.isDefined) {
+      if (debug) println("\n#cns2: " + cns2.size)
+
+
+      val cns3WitDuplicateNogoods: ArrayBuffer[IntArrayUnsafeS] = if (preProcesssVariableElimConfig._5 && removedNogoodsPerAtomOpt.isDefined) {
 
         // Here, we materially remove the variables in removedNogoodsPerAtomOpt.get.keys. Resulting gaps in the
         // original 1..noOfAbsElis are closed (and need to be restored in any discovered models).
@@ -839,7 +868,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
           // we firstly close the gaps in the sequence of eli numbers created by marking variables as deleted
 
           if (removedPosElis.contains(oldAbsEli) /*isPosEli(oldEli) && removedPosElis.contains(oldEli) || isNegEli(oldEli) && removedPosElis.contains(negateNegEli(oldEli))*/ )
-          offset += 1
+            offset += 1
           else {
 
             val newAbsEli = oldAbsEli - offset
@@ -915,6 +944,19 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
       }
 
+      if (debug) println("\n#cns3WitDuplicateNogoods: " + cns3WitDuplicateNogoods.size)
+
+      val cns3 = cns3WitDuplicateNogoods/*.distinctBy((s: IntArrayUnsafeS) => {  // TODO: bug (crashes sometimes)
+
+        s.sortBy(_.toFloat)  // don't use (current) hashcode implementation for nogood, need precise equality
+
+        s.toString
+
+      })*/
+
+      if (debug) println("\n#cns3: " + cns3.size)
+
+
       if (verbose) {
 
         println("\nTime variable elimination: " + timerToElapsedMs(startTimeVarElim) + "ms")
@@ -948,37 +990,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
   var clarkNogoods3: Array[IntArrayUnsafeS] = if (!initCleanUpArrangeClarkNogoods && !preProcesssVariableElimConfig._1) clarkNogoods2 else {
 
-    /* observe that we currently don't remove duplicate nogoods. To do this, reactivate the following:
-
-    val ab = new mutable.ArrayBuilder.ofRef[IntArrayUnsafeS]
-
-    val seen = new mutable.HashSet[IntArrayUnsafeS]()
-
-    var isDifferent = false
-
-    clarkNogoods2.foreach( // TODO: optimize
-
-    ng => {
-
-    ng.distinctSorted()
-
-    ng.isSorted = true
-
-    if (seen.add(ng))
-    ab += ng
-    else
-    isDifferent = true
-
-    })
-
-    if (isDifferent)
-    ab.result
-    else
-    clarkNogoods2
-
-    */
-
-    if (removeDuplicatesFromClarkNogoods) {
+    if (removeDuplicateLiteralsFromClarkNogoods) {
 
       var i = 0
 
@@ -1141,7 +1153,8 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
   val offsetIntsOfNogoodInReducible = (if (extReducibles == 4) offsetIntsForBitsetWithExtReducibles345 else if (extReducibles == 3 || extReducibles == 5)
     offsetIntsForBitsetWithExtReducibles345 + (spaceInBytesForBitsetWithExtReducibles3 >> 2)
-  else if (extReducibles == 2) 3 /*5*/ else if (extReducibles == 1) 5 else 3) + 4
+  else if (extReducibles == 2) 3 /*5*/
+  else if (extReducibles == 1) 5 else 3) + 4
 
   val closingIntsAfterNogoodInReducible = 2
   // ^ number of Ints added after the nogood literals in the reducible (currently
@@ -1169,10 +1182,11 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
   // Also see generateNogoodReducible(), conflictAnalysis() and printInfoAboutReducible()
   //sharedDefs.offsetIntsOfNogoodInReducible = offsetIntsOfNogoodInReducible
 
-  val alignmentForClarkNogoodReducibles = 0 // in bytes. > 0 had no visible effect on my machine except using up more memory.
+  //val alignmentForClarkNogoodReducibles = 0 // in bytes. > 0 had no visible effect on my machine except using up more memory.
 
   val ensuredMaxNoElisInNogoodForProductRepresentationWithExt5 = (Math.log(Long.MaxValue) / Math.log(noOfAbsElis)).toInt
 
+  /*
   var requiredSpaceForClarkReducibles: Long = 0l // we need this for initializing nogiClarkToNogoodReducible in SolverMulti
 
   var nogi: Nogi = 0
@@ -1183,7 +1197,7 @@ class Preparation(val aspifOrDIMACSParserResult: input.AspifOrDIMACSPlainParserR
 
     nogi += 1
 
-  }
+  }*/
 
   if (debug2) {
 
@@ -1570,10 +1584,12 @@ in aspifParse() */)(null.asInstanceOf[DifferentialFunction[DoubleReal]])
   if (showIntermediateTimers)
     println("\npreptimer 6: " + timerToElapsedMs(timerPrepNs) + " ms\n")
 
-  @deprecated val eliToNogisClark: Array[ArrayValExtensibleIntUnsafe] = if (initAbsElisArrangementP.alternatives.contains(9) || initAbsElisArrangementP.alternatives.contains(10) || clusterAbsElis && noOfPosAtomElis <= clusterAbsElisIfVarsMax) {
+  // ! Not to be confused with eliToReduciblesClark which is similar (TODO: unify?)
+  val eliToNogisClark: Array[ArrayValExtensibleIntUnsafe] = if (initAbsElisArrangementP.alternatives.values.toSeq.contains(9) || initAbsElisArrangementP.alternatives.values.toSeq.contains(10) ||
+    clusterAbsElis && noOfPosAtomElis <= clusterAbsElisIfVarsMax) {
 
     val eliToNogisClark = Array.ofDim[ArrayValExtensibleIntUnsafe](noOfAllElis + 1) // per each eli, all nogis which contain that eli
-    //NB: in the context of both SAT and ASP, "nogisClark" refers to the nogoods from the input (but perhaps cleaned/simplified), without any learned nogoods (loop nogoods or other learned nogoods)
+    //NB: in the context of both SAT and ASP, "nogisClark" refers to the nogoods from the input CNF/Aspif (but perhaps cleaned/simplified), without any learned nogoods (loop nogoods or other learned nogoods)
 
     var ei = 1
 
@@ -1733,9 +1749,9 @@ KMeansPlusPlusClusterer.EmptyClusterStrategy.LARGEST_VARIANCE*/)
   import scala.collection.JavaConverters._
 
   val absEliClustered: Array[Array[Eli]] = if (absEliClusters != null) // TODO: keep?
-  absEliClusters.asScala.toArray.distinct.map((cluster: CentroidCluster[AbsEliClusterable]) =>
-    cluster.getPoints.asScala.toArray.map(point => point.absEli))
-    else
+    absEliClusters.asScala.toArray.distinct.map((cluster: CentroidCluster[AbsEliClusterable]) =>
+      cluster.getPoints.asScala.toArray.map(point => point.absEli))
+  else
     null.asInstanceOf[Array[Array[Eli]]]
 
   if (debug2 && absEliClustered != null) println("absEliClustered:\n" + absEliClustered.map(_.mkString("; ")).mkString("\n"))
@@ -1911,7 +1927,8 @@ KMeansPlusPlusClusterer.EmptyClusterStrategy.LARGEST_VARIANCE*/)
         // (Deprecated: ^ all positive and negative literals except blits. Note that negative head lits should not (yet) occur in ASP mode, these
         //   are only generated if there are pseudo-rules active (also currently not) in SAT-mode. )
 
-        (if (eliListsAll.size > thresholdForSymbolsPar) eliListsAll /*.par*/ else eliListsAll).flatMap { atomEli_p => {
+        (if (eliListsAll.size > thresholdForSymbolsPar) eliListsAll /*.par*/
+        else eliListsAll).flatMap { atomEli_p => {
           // TODO: .par doesn't work with Scala 2.13.1 (also see import scala.collection.parallel.CollectionConverters._ )
 
           // TODO: We should optionally treat #external atoms here specially, even if they don't occur in any rules, in which case nogoods are generated for them to ensure they are never true.
@@ -2126,8 +2143,8 @@ KMeansPlusPlusClusterer.EmptyClusterStrategy.LARGEST_VARIANCE*/)
             val r = modelCandidate._2.contains(x)
 
             if (r) // i.e., (not (not F)^X) = Top, i.e., we omit this body literal from the rule's body
-            None
-              else
+              None
+            else
               Some(posEliInBody)
 
           } else

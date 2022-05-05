@@ -31,11 +31,16 @@ class NogoodReduciblesSequenceUnsafe(initialCapacity: Int) {
 
   private[this] var noOfAvailableSlotsForItems = initialCapacity
 
-  private[this] var a = allocateOffHeapMem(allocatedBytes(noOfAvailableSlotsForItems)) //new LongArrayUnsafeS(sizev = initialCapacity)
+  private[this] var a: Long = allocateOffHeapMem(allocatedBytes(noOfAvailableSlotsForItems)) //new LongArrayUnsafeS(sizev = initialCapacity)
 
   private[this] var sizev = 0
 
   private[this] var cachedHashSet: LongOpenHashSet = null.asInstanceOf[LongOpenHashSet]
+
+  //private[this] var sortings = 0
+  private[this] var traversalDirectionUpwards = true
+
+  @inline  def setTraversalDirection(direction: Boolean) = traversalDirectionUpwards = direction
 
   @inline def allocatedBytes(allocatedItems: Int = noOfAvailableSlotsForItems): Int =
     allocatedItems * bytesPerElement
@@ -46,23 +51,15 @@ class NogoodReduciblesSequenceUnsafe(initialCapacity: Int) {
 
   }
 
-  @inline def clearUS(): Unit = {
+  @inline def clearUS(): Unit = sizev = 0
 
-    sizev = 0
-
-  }
-
-  @inline def cutoffUS(whereExclusive: Int): Unit = {
-
-    sizev = whereExclusive
-
-  }
+  @inline def cutoffUS(whereExclusive: Int): Unit = sizev = whereExclusive
 
   @inline def getAddr: Long = a
 
   @inline def getBytesPerElement: Int = bytesPerElement
 
-  @inline def getAddrOfItem(index: Int) = a + index * bytesPerElement // TODO: make shiftable?
+  @inline def getAddrOfItem(index: Int): Long = a + index * bytesPerElement // TODO: make shiftable?
 
   @inline def getReducibleUS(index: Int): NogoodReducible = UNSAFE.getLong(getAddrOfItem(index))
 
@@ -104,7 +101,51 @@ class NogoodReduciblesSequenceUnsafe(initialCapacity: Int) {
 
     sizev += 1
 
+    if(keepNogoodsWeaklySorted && sizev % 32 == 0) {
+
+      if(traversalDirectionUpwards)
+        sortByInplace(red => -UNSAFE.getInt(red)/*=size of nogood*//*-UNSAFE.getFloat(red + ((3 + 4 - 4) << 2))*/, sizev)
+      else
+        sortByInplace(red => UNSAFE.getInt(red)/*UNSAFE.getFloat(red + ((3 + 4 - 4) << 2))*/, sizev)
+
+    }
+
   }
+
+  def sortByInplace(by: NogoodReducible => Float, until: Int): Unit = {
+
+    // insertion sort - use only if array is very small (but then it's fast):
+
+    var j = 1
+
+    var key = -1l
+
+    var i = -1
+
+    while (j < until) {
+
+      key = getReducibleUS(j)
+
+      i = j - 1
+
+      //println(by(key))
+
+      while (i > -1 && by(getReducibleUS(i)) > by(key)) {
+
+        updateItemUS(i + 1, getReducibleUS(i))
+
+        i -= 1
+
+      }
+
+      updateItemUS(i + 1, key)
+
+      j += 1
+
+    }
+
+  }
+
 
   @inline def updateItemUS(index: Int, reducible: NogoodReducible) = {
 
@@ -209,6 +250,25 @@ class NogoodReduciblesSequenceUnsafe(initialCapacity: Int) {
     }
 
     ns
+
+  }
+
+  @inline def countByReducibleUS(keepBy: NogoodReducible => Boolean): Int = {
+
+    var c = 0
+
+    var k = 0
+
+    while (k < sizev) {
+
+      if (keepBy(getReducibleUS(k)))
+        c += 1
+
+      k += 1
+
+    }
+
+    c
 
   }
 
