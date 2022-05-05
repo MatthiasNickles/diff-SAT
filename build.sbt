@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018,2020 Matthias Nickles
+  * Copyright (c) 2018-2022 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -11,9 +11,9 @@
 
 name := "diffSAT"
 
-version := "0.5.2"
+version := "0.5.3"
 
-scalaVersion := "2.13.3" // (probably still also works with 2.12 with minor modifications)
+scalaVersion := "2.13.3" // (would probably still work with 2.12 with minor modifications)
 
 //scalacOptions ++= Seq("-opt:l:method", "-opt:l:inline",
  // "-opt-inline-from:solving.SingleSolverThreadData.**;sharedDefs.**;solving.Preparation.**;utils.**")
@@ -23,6 +23,8 @@ scalacOptions ++= Seq("-Xdisable-assertions")  // comment out this statement for
 mainClass in (Compile, run) := Some("userAPItests.diffSAT")
 
 mainClass in (Compile, packageBin) := Some("userAPItests.diffSAT")
+
+//unmanagedJars in Compile += file("C:\\Users\\Me\\Projects\\VMMPredictor\\vmms\\vmm\\out\\artifacts\\VMMPredictor1_jar\\VMMPredictor1.jar") // experimental, currently not used
 
 // NB: If the "fat jar" isn't built with sbt-assembly, remember to also update artifact modules/versions in IntelliJ
 // with all of the following libs by letting "Artifacts" unpack(!) them into the .jar:
