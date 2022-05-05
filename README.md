@@ -1,8 +1,6 @@
 
 ![#f03c15](https://via.placeholder.com/15/f03c15/000000?text=+) 
-Workaround for 'Error [-100]: Invalid input data:"' (without qualifier): This message likely indicates an unsupported character encoding. 
-Open the input file with some text editor which supports switching between different character encodings (such as Notepad++ or vim) and 
-change the encoding to ***UTF-8*** (without BOM). The next version of diff-SAT will support a wider range of character encodings. ![#f03c15](https://via.placeholder.com/15/f03c15/000000?text=+) 
+In case you see a ![#f03c15](https://via.placeholder.com/15/f03c15/000000?text=+) 
 
 ### Latest versions ###
 
@@ -626,7 +624,7 @@ Feedback and bug reports are welcome!
 
 #### diff-SAT Copyright & License ####
 
-Copyright (c) 2018-2021 by Matthias Nickles
+Copyright (c) 2018-2022 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/diff-SAT/blob/master/LICENSE)
 
