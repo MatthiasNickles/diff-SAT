@@ -169,11 +169,25 @@ object Various {
 
   @inline def powInt(a: Double, b: Int): Double = org.apache.commons.math3.util.FastMath.pow(a, b)
 
+  @inline def toK(n: Long): String = n / 1000L + "K"
+
+  @inline def toM(n: Long): String = round(n.toDouble / 1000000d, 1) + "M"
+
+  @inline def toB(n: Long): String = (n / 1000000000) + "B"
+
+  @inline def toKorM(n: Long): String = if (n < 1000) n.toString else if (n < 1000000) toK(n) else if(n < 1000000000) toM(n) else toB(n)
+
   @inline def printStatusLine(pStrR: String, cutOffAt: Int = 0) = {
 
+   /* println("sharedDefs.maxAssumedConsoleWidth = " + sharedDefs.maxAssumedConsoleWidth)
+
+    println("diffSAT.osWin = " + diffSAT.osWin)
+
+    println("changeConsoleWidthUnderWin = " + changeConsoleWidthUnderWin)
+*/
     val pStr = if(sharedDefs.debug) pStrR else pStrR.take(sharedDefs.maxAssumedConsoleWidth.max(cutOffAt))+(" " * (sharedDefs.maxAssumedConsoleWidth.max(cutOffAt) - pStrR.length).max(0))  // progress line scrolls if larger than console width. No reliable way to determine console width in Java
 
-    if(diffSAT.osWin && changeConsoleWidthUnderWin) {  // for older versions of Windows (pre Win 10 built xxxx?)
+    if(diffSAT.osWin /*&& changeConsoleWidthUnderWin*/) {  // unclear if this needs to be done by all versions of Windows and all builds of Windows 10:
 
       // System.out.write(pStr.getBytes()) // if more than 4 lines, IntelliJ console flickers
 

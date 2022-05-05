@@ -32,7 +32,7 @@ import scala.annotation.tailrec
   * Not thread-safe. Not suitable for cryptographically secure randomness.
   *
   */
-final class DualIndexedIntSet(sizeDta: Int /*Important: array data must cover the largest item as it is used directly as an index into data!*/ ,
+final class DualIndexedIntSet(sizeDta: Int /*Important: array data must cover the largest item as it is used directly as an index into data */ ,
                               rnd: RandomGenSuperclass,
                               sortedMode: Boolean = false,
                               getAbsEliScore: Eli => Double = null,

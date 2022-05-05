@@ -233,6 +233,20 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   @inline def setAddr(newAddr: Long): Unit = addr = newAddr
 
+  @inline def setAllTo(value: Int): Unit = {
+
+    var i = 0
+
+    while (i < sizev) {
+
+      update(i, value)
+
+      i += 1
+
+    }
+
+  }
+
   @inline def this(values: Array[Int]) {
 
     this(values.length)
@@ -261,15 +275,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
     this(sizev)
 
-    var i = 0
-
-    while (i < sizev) {
-
-      update(i, initialValue)
-
-      i += 1
-
-    }
+    setAllTo(initialValue)
 
   }
 
@@ -291,7 +297,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
   @inline def size(): Int = sizev
 
-  override def hashCode: Int = {
+  /*override def hashCode: Int = {  // don't use for checking nogood identity!
 
     var hashVal: Int = 1
 
@@ -307,7 +313,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
 
     hashVal
 
-  }
+  }*/
 
   override def equals(obj: Any): Boolean = {
 
@@ -837,7 +843,7 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
   def removeDuplicatesGlob(): Unit = { // not thread-safe
 
     hashForDuplRemGlob.clear()
-
+/*
     var src = 0
 
     var dest = 0
@@ -847,6 +853,27 @@ class IntArrayUnsafeS(var sizev: Int, atAddress: Long = -1) extends IntOrLongArr
       if(!hashForDuplRemGlob.contains(get(src))) {
 
         hashForDuplRemGlob.add(get(src))
+
+        if(dest != src)
+          update(dest, get(src))
+
+        dest += 1
+
+      }
+
+      src += 1
+
+    }
+
+    sizev = dest */
+
+    var src = 0
+
+    var dest = 0
+
+    while(src < sizev) {
+
+      if(hashForDuplRemGlob.add(get(src))) {
 
         if(dest != src)
           update(dest, get(src))
