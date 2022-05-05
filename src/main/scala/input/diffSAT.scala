@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018,2020 Matthias Nickles
+  * Copyright (c) 2018-2021 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
@@ -14,7 +14,7 @@ package input
 import java.io._
 import java.util.concurrent.locks.ReentrantLock
 
-import com.sun.management.OperatingSystemMXBean
+import com.sun.management.OperatingSystemMXBean // can be safely omitted if delayed start feature not needed (see further below)
 
 import aspIOutils._
 import userAPItests.APITests
@@ -43,9 +43,9 @@ object diffSAT extends APITests {
 
   */
 
-  val version = "0.5.2"
+  val version = "0.5.3"
 
-  val copyright = "Copyright (c) 2018-2020 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/diff-SAT/blob/master/LICENSE"
+  val copyright = "Copyright (c) 2018-2022 Matthias Nickles\nLicense: https://github.com/MatthiasNickles/diff-SAT/blob/master/LICENSE"
 
   val copyrightAndVersionText = "diff-SAT " + version + "\n" + copyright
 
@@ -226,7 +226,7 @@ object diffSAT extends APITests {
 
   @inline def osWin: Boolean = System.getProperty("os.name").toLowerCase().contains("win")
 
-  @inline def changeConsoleWidthUnderWin = false
+  @inline def changeConsoleWidthUnderWin = true
 
   // ==================================================================================================================
 
@@ -419,8 +419,30 @@ object diffSAT extends APITests {
         import java.nio.file.{Files, Paths}
 
         try {
+/*
+          val checkUTF16Buffer: Array[Byte] = new Array[Byte](2)
 
-          new String(Files.readAllBytes(Paths.get(fileName)), StandardCharsets.UTF_8)
+          val checkIS = new java.io.RandomAccessFile(Paths.get(fileName).toAbsolutePath.toString, "r")
+
+          checkIS.readFully(checkUTF16Buffer)
+
+          val probablyUtf16 = checkUTF16Buffer(0) <= 0.toByte && checkUTF16Buffer(1) <= 0.toByte
+
+          new String(Files.readAllBytes(Paths.get(fileName)), if(probablyUtf16) StandardCharsets.UTF_16 else StandardCharsets.UTF_8) */
+
+          val checkUTF16OrBOM_Buffer: Array[Byte] = new Array[Byte](3)
+
+          val checkIS = new java.io.RandomAccessFile(Paths.get(fileName).toAbsolutePath.toString, "r")
+
+          checkIS.readFully(checkUTF16OrBOM_Buffer)
+
+          val hasBOM = checkUTF16OrBOM_Buffer(0) == 0xEF.toByte && checkUTF16OrBOM_Buffer(1) == 0xBB.toByte && checkUTF16OrBOM_Buffer(2) == 0xBF.toByte
+
+          val probablyUtf16 = !hasBOM && checkUTF16OrBOM_Buffer(0) <= 0.toByte && checkUTF16OrBOM_Buffer(1) <= 0.toByte
+
+          val contentBytes = Files.readAllBytes(Paths.get(fileName))
+
+          new String(if(hasBOM) contentBytes.drop(3) else contentBytes, if(probablyUtf16) StandardCharsets.UTF_16 else StandardCharsets.UTF_8)
 
         } catch {
 
@@ -1300,8 +1322,8 @@ object diffSAT extends APITests {
     }
 
     if (!omitSysExit0) // we need exit if jar isn't loaded dynamically into the current JVM. Otherwise, we need return
-    sys.exit(0)
-      else
+      sys.exit(0)
+    else
       return
 
   }
