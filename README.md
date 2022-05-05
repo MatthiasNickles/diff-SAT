@@ -46,7 +46,9 @@ diff-SAT can be used for plain SAT and Answer Set solving too, but has a wider r
   This way, diff-SAT can be used as a "hybrid" inference engine which makes use of probabilistic/subsymbolic constraints (in form of cost functions or weights) as well as symbolic/logical, graph or other relational 
   knowledge.
   
-  In contrast to most existing probabilistic logic approaches, diff-SAT **doesn't require any independence assumptions** or other restrictions for random variables here.
+  The result of a diff-SAT run is a model multi-set (representing a probability distribution over models) or a list of probabilities of user-defined query variables or arithmetic terms over the probabilities of Boolean variables. 
+  
+  Note that in contrast to most existing probabilistic logic approaches, diff-SAT **doesn't require any independence assumptions** or other restrictions for random variables.
 
 - **Probabilistic logic programming** (more precisely: _probabilistic answer set programming_) and **probabilistic satisfiability solving** (weighting Boolean variables, clauses, facts and rules with probabilities).
 
