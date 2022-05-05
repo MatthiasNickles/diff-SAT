@@ -1,7 +1,7 @@
 /**
   * diff-SAT
   *
-  * Copyright (c) 2018-2021 Matthias Nickles
+  * Copyright (c) 2018-2022 Matthias Nickles
   *
   * matthiasDOTnicklesATgmxDOTnet
   *
