@@ -160,7 +160,9 @@ For the meaning of `-mse` see the next section.
 `--solverarg` is used for setting an advanced parameter (here the number of parallel solver threads). Parameters
 such as `maxSolverThreadsR` can have a massive influence on solver performance.
 
-The possible formats of input files is described in the following section. To increase memory available to diff-SAT, use, e.g., `-Xms3g -Xmx8g -Xss10m`   
+The possible formats of input files is described in the following section. 
+
+diff-SAT can be quite memory hungry and insufficient memory can lead to program crashes. To increase memory available to diff-SAT, use, e.g., `-Xms3g -Xmx12g -Xss20m`   
 
 #### Usage ####
 
