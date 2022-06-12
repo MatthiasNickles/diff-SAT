@@ -43,7 +43,7 @@ diff-SAT can be used for plain SAT and Answer Set solving too, but has a wider r
 
 - Associating **probabilities** (weights) and **differentiable cost functions** with logical rules, clauses and individual Boolean variables.
   
-  This way, diff-SAT can be used as a "hybrid" inference engine which makes use of probabilistic/subsymbolic constraints (in form of cost functions or weights) as well as symbolic/logical, graph or other relational 
+  This way, diff-SAT can be used as a Weighted SAT solver and "hybrid" inference engine which makes use of probabilistic/subsymbolic constraints (in form of cost functions or weights) as well as symbolic/logical, graph or other relational 
   knowledge.
   
   The result of a diff-SAT run is a model multi-set (representing a probability distribution over models) or a list of probabilities of user-defined query variables or arithmetic terms over the probabilities of Boolean variables. 
