@@ -110,7 +110,7 @@ To cite diff-SAT, please use
     @inproceedings{DBLP:conf/ilp/Nickles18a,
       author    = {Matthias Nickles},
       editor    = {Elena Bellodi and Tom Schrijvers},
-      title     = {Differentiable {SAT/ASP}},
+      title     = {Differentiable SAT/ASP},
       booktitle = {Proceedings of the 5th International Workshop on Probabilistic Logic Programming, {PLP} 2018},
       publisher = {CEUR-WS.org},
       year      = {2018},
