@@ -30,7 +30,7 @@ See [CHANGELOG.md](CHANGELOG.md)
 
 #### Synopsis ####
 
-diff-SAT is an Answer Set and SAT solver targeted at _multi-models_ (worldview) optimization, probabilistic reasoning and model sampling.
+diff-SAT is a probabilistic Answer Set and SAT solver targeted at _multi-models_ (worldview) optimization, probabilistic reasoning and model sampling.
 
 diff-SAT uses an approach called _Differentiable Satisfiability_ respectively _Differentiable Answer Set Programming_ (&#8706;SAT/ASP). Basically, this
 means SAT or ASP solving using automatic differentiation and a form of gradient descent to find an optimal multiset of models (interpretations), given a 
