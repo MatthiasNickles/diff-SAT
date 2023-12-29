@@ -30,7 +30,7 @@ See [CHANGELOG.md](CHANGELOG.md)
 
 #### Synopsis ####
 
-diff-SAT is a probabilistic Answer Set program and probabilistic SAT solver, targeted at _multi-models_ (worldview) optimization, probabilistic reasoning and model sampling.
+diff-SAT is a probabilistic Answer Set program and probabilistic SAT solver, targeted at _multi-models_ (worldview) optimization, probabilistic reasoning and model sampling. 
 
 diff-SAT uses an approach called _Differentiable Satisfiability_ respectively _Differentiable Answer Set Programming_ (&#8706;SAT/ASP). Basically, this
 means SAT or ASP solving using automatic differentiation and a form of gradient descent to find an optimal multiset of models (interpretations), given a 
@@ -635,6 +635,8 @@ Feedback and bug reports are welcome!
 Copyright (c) 2018-2022 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/diff-SAT/blob/master/LICENSE)
+
+diff-SAT is open source research software.
 
 #### Dependencies ####
 
