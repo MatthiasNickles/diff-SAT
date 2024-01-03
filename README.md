@@ -636,7 +636,7 @@ Copyright (c) 2018-2022 by Matthias Nickles
 
 License: [MIT license](https://github.com/MatthiasNickles/diff-SAT/blob/master/LICENSE)
 
-diff-SAT is open source research software.
+diff-SAT is free open source research software.
 
 #### Dependencies ####
 
