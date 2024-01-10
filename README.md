@@ -1,4 +1,4 @@
-# diff-SAT: Probabilistic Answer Set Programming and Probabilistic Satifiability Solving
+# diff-SAT: Probabilistic Answer Set Programming and Probabilistic SAT Solving
 
 <!---
 ![#f03c15](https://via.placeholder.com/15/f03c15/000000?text=+) 
