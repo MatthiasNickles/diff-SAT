@@ -506,10 +506,9 @@ Remark: diff-SAT doesn't solve the PSAT problem (as it doesn't check whether or 
 it can be used to generate PSAT solutions _if they exist_. The formula which diff-SAT actually checks for SAT/UNSAT is the plain Boolean formula where all weighted clauses
 are subsituted by unweighted clauses which define the parameter variables which are equivalent to the respective weighted clauses without their weights.
 
-##### Performing ad hoc queries #####
+##### Performing queries #####
 
-diff-SAT is just a solver and sampler, and as such it doesn't contain a real query tool (a tool which computes from the sample the probabilities of user-specified query formulas). However, there are several ways built into diff-SAT for 
-performing simple types of queries.   
+diff-SAT is mainly a solver and sampler. However, it also allows for certain types of _queries_ to obtain the probabilities of logical formulas such as facts and rules, and conditional or unconditional probabilities.   
 
 Most simply, with switch `--solverarg showProbsOfSymbols true` diff-SAT prints the probabilities of all symbols (ground atoms) in the program,
 by summing up the probabilities (frequencies) of those models in the sample which contain the respective atom.  
