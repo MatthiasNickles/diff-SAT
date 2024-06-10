@@ -144,23 +144,23 @@ or like this:
 
     java -jar diffSAT.jar myProbabilisticTask.opt -t 0.005 -mse 
 
-A very simple example:
+##### A very simple first example #####
 
 Save the following _probabilistic logic program_ (_probabilistic answer set program_) as file "test.lp":
 
 	coin(1).
 	coin(2).
 	
-	_pr_(heads(C), 5000) :- coin(C).   % 5000 specifies probability 0.5
+	_pr_(heads(C), 5000) :- coin(C).   % specifies probability 0.5 (encoded as 5000) for heads(1) and probability 0.5 for heads(2)
 	
 	win :- heads(1), heads(2).
 	1{heads(C);tails(C)}1 :- coin(C).
 
-Translate it into aspif-format using
+Translate it into aspif-format using [Clingo](https://github.com/potassco/clingo/releases/tag/v5.4.0):
 
 	./clingo test.lp --trans-ext=all --pre=aspif > test.aspif
 
-Sample and compute the probabilities of _heads(1)_, _heads(2)_ and _win_ using
+Sample and compute approximate probabilities of _heads(1)_, _heads(2)_ and _win_ using
 
 	java -jar ./diffSAT.jar ./test.aspif -t 0.1 -n 100 -mse --solverarg showProbsOfSymbols true
 
@@ -169,6 +169,7 @@ Sample and compute the probabilities of _heads(1)_, _heads(2)_ and _win_ using
 __Remark: If you see error _"Invalid input data"_ when you use the generated aspif-file with diff-SAT, open the aspif-file with 
 some plain text editor (e.g., Notepad++) and change its encoding to UTF-8 (not: UTF-8 BOM). Recent versions of clingo might
 generate aspif-files in encodings not understood by diff-SAT (such as UTF-16 BOM).__
+
 ##### Command line arguments #####
 
 diff-SAT can be configured using command line arguments. Use `--help` to see the list of the most important arguments. Less frequently required settings are 
