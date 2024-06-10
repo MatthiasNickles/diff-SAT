@@ -143,7 +143,32 @@ Run diff-SAT, e.g., like this:
 or like this: 
 
     java -jar diffSAT.jar myProbabilisticTask.opt -t 0.005 -mse 
-    
+
+A very simple example:
+
+Save the following _probabilistic logic program_ (_probabilistic answer set program_) as file "test.lp":
+
+	coin(1).
+	coin(2).
+	
+	_pr_(heads(C), 5000) :- coin(C).   % 5000 specifies probability 0.5
+	
+	win :- heads(1), heads(2).
+	1{heads(C);tails(C)}1 :- coin(C).
+
+Translate it into aspif-format using
+
+	./clingo test.lp --trans-ext=all --pre=aspif > test.aspif
+
+Sample and compute the probabilities of _heads(1)_, _heads(2)_ and _win_ using
+
+	java -jar ./diffSAT.jar ./test.aspif -t 0.1 -n 100 -mse --solverarg showProbsOfSymbols true
+
+(You might need to scroll up a bit to see the queried probabilities, as diff-SAT prints them before the list of sampled answer sets.)    
+
+__Remark: If you see error _"Invalid input data"_ when you use the generated aspif-file with diff-SAT, open the aspif-file with 
+some plain text editor (e.g., Notepad++) and change its encoding to UTF-8 (not: UTF-8 BOM). Recent versions of clingo might
+generate aspif-files in encodings not understood by diff-SAT (such as UTF-16 BOM).__
 ##### Command line arguments #####
 
 diff-SAT can be configured using command line arguments. Use `--help` to see the list of the most important arguments. Less frequently required settings are 
@@ -210,28 +235,6 @@ generate aspif-files in encodings not understood by diff-SAT (such as UTF-16 BOM
 
 It is also possible to translate various other constraint and logic languages into ASPIF format and thus 
 into a form diff-SAT can in principle work with (e.g., MiniZinc/flatzinc constraint satisfaction problem (CSP) or various action languages) - however, we haven't tested this yet. 
-
-A complete example:
-
-Save the following probabilistic logic program as file "test.lp":
-
-	coin(1).
-	coin(2).
-	
-	_pr_(heads(C), 5000) :- coin(C). 
-	
-	win :- heads(1), heads(2).
-	1{heads(C);tails(C)}1 :- coin(C).
-
-Translate it into aspif-format using
-
-	clingo test.lp --trans-ext=all --pre=aspif > test.aspif
-
-Sample and compute the probabilities of _heads(1)_, _heads(2)_ and _win_ using
-
-	java -jar ./diffSAT.jar ./test.aspif -t 0.1 -n 100 -mse --solverarg showProbsOfSymbols true
-
-(You might need to scroll up a bit to see the queried probabilities, as diff-SAT prints them before the list of sampled answer sets.)
 
 ##### Cost functions, parameter atoms and measured atoms #####
 
