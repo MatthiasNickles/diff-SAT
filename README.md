@@ -227,8 +227,10 @@ Logic programs need to be grounded into ASPIF format before sending them to diff
     
     clingo myProbLogicProg.lp --trans-ext=all --pre=aspif > myDiffSATInputFile.aspif
 
+An older but for our purpose sufficient version of Clingo with binaries for MacOS, Linux and Windows is available at [Clingo 5.4.0](https://github.com/potassco/clingo/releases/tag/v5.4.0).
+
 Observe that Clingo is used here only to generate the ASPIF form of the input program, not for solving; diff-SAT itself doesn't require Clingo 
-or any other external Answer set, SAT or SMT solver.  
+or any other external Answer set, SAT or SMT solver. 
 
 __Remark: If you see error _"Invalid input data"_ when you use the generated aspif-file with diff-SAT, open the aspif-file with 
 some plain text editor (e.g., Notepad++) and change its encoding to "UTF-8" (not: UTF-8 BOM). Recent versions of clingo might
